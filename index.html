@@ -221,7 +221,8 @@ function defaultState(){
       clientId:'', clientSecret:'', useMetric:false,
       charts: { activity:true, nutrition:true, projection:true, trend:true }
     },
-    googleHealth: { accessToken:null, refreshToken:null, expiresAt:0 }
+    googleHealth: { accessToken:null, refreshToken:null, expiresAt:0 },
+    errorLog: [] // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
   };
 }
 
@@ -239,6 +240,14 @@ function loadState(){
   }catch(e){ return defaultState(); }
 }
 function saveState(){ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function logError(message){
+  state.errorLog.unshift({ts: Date.now(), message});
+  state.errorLog = state.errorLog.slice(0, 3);
+  saveState();
+}
 
 function isoDate(d){
   const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
@@ -1085,6 +1094,11 @@ function screenSettings(){
       <button class="btn-primary" id="s-fit-connect">${state.googleHealth.refreshToken ? 'Reconnect & sync now' : 'Connect & sync today'}</button>
     </div>
 
+    ${state.errorLog.length ? `<div class="card">
+      <div class="card-head"><h3>Error log</h3><button class="iconbtn" id="s-clear-errors" title="Clear">✕</button></div>
+      ${state.errorLog.map(e=>`<div class="feedback-item"><div class="dot" style="background:var(--critical)"></div><div><span class="muted">${new Date(e.ts).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span><br><span style="font-family:monospace;font-size:12px;word-break:break-word;">${escapeHtml(e.message)}</span></div></div>`).join('')}
+    </div>` : ''}
+
     <div class="card">
       <h3>Data</h3>
       <button class="btn-secondary" id="s-export">Export data (JSON)</button>
@@ -1134,13 +1148,17 @@ async function handleGoogleHealthRedirect(){
     const res = await fetch('https://oauth2.googleapis.com/token', {
       method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body
     });
-    if(!res.ok) throw new Error('HTTP '+res.status);
+    if(!res.ok){
+      const bodyText = await res.text().catch(()=>'');
+      throw new Error(`Token exchange HTTP ${res.status}: ${bodyText.slice(0,300)}`);
+    }
     const data = await res.json();
     state.googleHealth = {accessToken:data.access_token, refreshToken:data.refresh_token, expiresAt: Date.now()+data.expires_in*1000};
     saveState();
     await fetchGoogleHealthToday(false);
   }catch(e){
-    alert('Google Health connection failed. Double check the Client ID/Secret and that this exact URL is registered as a redirect URI on that OAuth client.');
+    logError('Connect failed: '+e.message);
+    alert('Google Health connection failed:\n\n'+e.message+'\n\nDouble check the Client ID/Secret and that this exact URL is registered as a redirect URI on that OAuth client.');
   }
 }
 async function ensureGoogleHealthToken(){
@@ -1212,6 +1230,7 @@ async function fetchGoogleHealthToday(silent){
     if(!silent) alert(`Synced from Google Health: ${Math.round(steps)} steps, ${Math.round(activeMin)} active min.`);
   }catch(e){
     console.error('Google Health sync failed:', e);
+    logError('Sync failed: '+e.message);
     if(!silent) alert('Could not fetch Google Health data:\n\n'+e.message+'\n\nManual entry on the Log tab still works.');
   }
 }
@@ -1356,6 +1375,8 @@ function attachHandlers(){
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = 'health-score-data.json'; a.click();
   });
+  const clearErrorsBtn = document.getElementById('s-clear-errors');
+  if(clearErrorsBtn) clearErrorsBtn.addEventListener('click', ()=>{ state.errorLog = []; saveState(); render(); });
   const resetBtn = document.getElementById('s-reset');
   if(resetBtn) resetBtn.addEventListener('click', ()=>{
     if(confirm('This will erase all Health Score data on this device. Continue?')){
