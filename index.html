@@ -218,9 +218,10 @@ function defaultState(){
     myFoods: [],
     foodMemory: {}, // { foodName: {qty, unitLabel} } — last quantity used, recalled next time
     settings: {
-      googleFitClientId:'', useMetric:false,
+      clientId:'', clientSecret:'', useMetric:false,
       charts: { activity:true, nutrition:true, projection:true, trend:true }
-    }
+    },
+    googleHealth: { accessToken:null, refreshToken:null, expiresAt:0 }
   };
 }
 
@@ -349,7 +350,7 @@ function bmr(p){
   const base = 10*kg + 6.25*cm - 5*p.age;
   return p.sex==='male' ? base+5 : base-161;
 }
-// Rough calorie burn estimate for manually-entered activity (used when no Google Fit kcal is available)
+// Rough calorie burn estimate for manually-entered activity (used when no synced kcal is available)
 function estimateActivityKcal(steps, activeMin){
   return Math.round(steps*0.04 + activeMin*4);
 }
@@ -554,6 +555,11 @@ function renderOnboarding(){
     saveState();
     wrap.remove();
     render();
+    // If Google Health credentials are already on file, connect right away —
+    // no separate trip to Settings needed to start the automatic sync.
+    if(state.settings.clientId && state.settings.clientSecret && !state.googleHealth.refreshToken){
+      startGoogleHealthAuth();
+    }
   });
 }
 
@@ -615,7 +621,7 @@ const INFO_CONTENT = {
   nutrition: ['Nutrition chart', `Compares yesterday and today's calories and protein against your daily targets, which are calculated from your age, height, weight, and weekly goal (Settings). Tap any bar for its exact value.`],
   projection: ['Trend projection', `Averages your daily scores so far this period and projects that same pace forward — it's not a guess, just "if the rest of the period looks like today did." Log more days to sharpen it.`],
   trend: ['7-day score trend', `Your daily Activity and Nutrition scores (0-100) over the last 7 days. Tap a point for its value.`],
-  fitsync: ['Google Fit sync', `Android's Health Connect stores data on-device only — it has no web address a site can read from directly. If your phone or watch also mirrors steps and calories to your Google Fit cloud account, this app can pull that instead. Google has been winding this service down, so treat it as best-effort — manual entry on the Log tab is the reliable fallback. Setup: console.cloud.google.com → new project → Credentials → OAuth client ID (Web application) → add this page's URL as an Authorized JavaScript origin → enable the "Fitness API".`]
+  fitsync: ['Google Health sync', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Setup, one time: console.cloud.google.com → new project → OAuth consent screen → publishing status <strong>"In Production"</strong> (fine for personal use — Google only requires review past 100 users) → Credentials → OAuth client ID → type <strong>Web application</strong> → Authorized redirect URI: <strong>${location.origin}${location.pathname}</strong> → enable the "Google Health API" and add the activity/fitness and health-metrics scopes → paste the resulting Client ID and Client Secret below. After you connect once, it re-syncs automatically in the background — no further action needed.`]
 };
 function wireInfoButtons(root){
   (root||document).querySelectorAll('[data-info]').forEach(b=>{
@@ -756,6 +762,7 @@ function render(){
     return;
   }
   document.getElementById('bottomnav').classList.remove('hidden');
+  autoSyncGoogleHealthIfDue(); // fire-and-forget silent background refresh, throttled
   if(activeTab==='today') app.innerHTML = screenToday();
   else if(activeTab==='log') app.innerHTML = screenLog();
   else if(activeTab==='history') app.innerHTML = screenHistory();
@@ -906,8 +913,10 @@ function screenLog(){
       </div>
       <button class="btn-primary" id="btn-save-activity">Save activity</button>
       <div style="height:10px"></div>
-      <button class="btn-secondary" id="btn-connect-fit">Connect Google Fit (optional)</button>
-      <div class="muted" style="margin-top:8px;">${d.activity.source==='googlefit'?'Synced from Google Fit for today.':'Manual entry — tap ⓘ above for Google Fit sync.'}</div>
+      ${state.googleHealth.refreshToken
+        ? `<div class="row"><span class="muted">Google Health connected — syncs automatically</span><button class="iconbtn" id="btn-connect-fit" title="Sync now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg></button></div>`
+        : `<button class="btn-secondary" id="btn-connect-fit">Connect Google Health (optional)</button>`}
+      <div class="muted" style="margin-top:8px;">${d.activity.source==='googlehealth'?'Synced from Google Health for today.':'Manual entry — tap ⓘ above for Google Health sync.'}</div>
     </div>
   </div>`;
 }
@@ -1067,11 +1076,13 @@ function screenSettings(){
     </div>
 
     <div class="card">
-      <div class="card-head"><h3>Google Fit sync</h3>${infoBtnHtml('fitsync')}</div>
-      <div class="field"><label>Google OAuth Client ID</label><input type="text" id="s-fit-client" placeholder="xxxx.apps.googleusercontent.com" value="${state.settings.googleFitClientId}"></div>
-      <button class="btn-secondary" id="s-fit-save">Save Client ID</button>
+      <div class="card-head"><h3>Google Health sync</h3>${infoBtnHtml('fitsync')}</div>
+      ${state.googleHealth.refreshToken ? `<div class="row" style="margin-bottom:12px;"><span class="badge good">Connected — auto-syncing</span></div>` : ''}
+      <div class="field"><label>Google Client ID</label><input type="text" id="s-fit-client" placeholder="xxxx.apps.googleusercontent.com" value="${state.settings.clientId}"></div>
+      <div class="field"><label>Google Client Secret</label><input type="text" id="s-fit-secret" placeholder="GOCSPX-..." value="${state.settings.clientSecret}"></div>
+      <button class="btn-secondary" id="s-fit-save">Save credentials</button>
       <div style="height:8px"></div>
-      <button class="btn-primary" id="s-fit-connect">Connect & sync today</button>
+      <button class="btn-primary" id="s-fit-connect">${state.googleHealth.refreshToken ? 'Reconnect & sync now' : 'Connect & sync today'}</button>
     </div>
 
     <div class="card">
@@ -1088,68 +1099,124 @@ function dashToggleRow(key, label){
 }
 
 /* =========================================================
-   GOOGLE FIT (optional, best-effort)
+   GOOGLE HEALTH API (health.googleapis.com) — the platform Google
+   moved Fitbit's data onto; the legacy Fitbit Web API is being
+   retired Sept 30, 2026. Standard OAuth2 code flow (access_type=
+   offline gets a refresh token) so sync runs silently forever
+   once connected — no popups, no repeated consent.
    ========================================================= */
-let gisTokenClient = null;
-function ensureGisLoaded(cb){
-  if(window.google && google.accounts && google.accounts.oauth2) return cb();
-  const s = document.createElement('script');
-  s.src = 'https://accounts.google.com/gsi/client';
-  s.onload = cb;
-  s.onerror = ()=>alert('Could not load Google sign-in. Check your connection.');
-  document.head.appendChild(s);
-}
-function connectGoogleFit(){
-  const clientId = state.settings.googleFitClientId;
-  if(!clientId){ alert('Add your Google OAuth Client ID first (see instructions below the button).'); return; }
-  ensureGisLoaded(()=>{
-    gisTokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: 'https://www.googleapis.com/auth/fitness.activity.read',
-      callback: (resp)=>{
-        if(resp.error){ alert('Google Fit connection failed: '+resp.error); return; }
-        fetchGoogleFitToday(resp.access_token);
-      }
-    });
-    gisTokenClient.requestAccessToken();
+const GH_SCOPES = 'https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly '
+  + 'https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly';
+
+function ghRedirectUri(){ return location.origin + location.pathname; }
+
+async function startGoogleHealthAuth(){
+  const {clientId} = state.settings;
+  if(!clientId){ alert('Add your Google Client ID first (see instructions below the button).'); return; }
+  const params = new URLSearchParams({
+    client_id: clientId, response_type:'code', redirect_uri: ghRedirectUri(),
+    scope: GH_SCOPES, access_type:'offline', prompt:'consent', include_granted_scopes:'true'
   });
+  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
 }
-async function fetchGoogleFitToday(accessToken){
+async function handleGoogleHealthRedirect(){
+  const url = new URL(location.href);
+  const code = url.searchParams.get('code');
+  if(!code) return;
+  history.replaceState({}, '', ghRedirectUri()); // strip ?code= before it lingers in the URL/history
+  const {clientId, clientSecret} = state.settings;
+  if(!clientId || !clientSecret) return;
   try{
-    const now = Date.now();
-    const start = new Date(); start.setHours(0,0,0,0);
-    const body = {
-      aggregateBy: [
-        {dataTypeName:'com.google.step_count.delta'},
-        {dataTypeName:'com.google.active_minutes'},
-        {dataTypeName:'com.google.calories.expended'}
-      ],
-      bucketByTime:{durationMillis: now-start.getTime()},
-      startTimeMillis: start.getTime(), endTimeMillis: now
-    };
-    const res = await fetch('https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate', {
-      method:'POST', headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
-      body: JSON.stringify(body)
+    const body = new URLSearchParams({
+      client_id: clientId, client_secret: clientSecret, grant_type:'authorization_code',
+      code, redirect_uri: ghRedirectUri()
+    });
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body
     });
     if(!res.ok) throw new Error('HTTP '+res.status);
     const data = await res.json();
-    let steps=0, activeMin=0, kcal=0;
-    (data.bucket||[]).forEach(b=>(b.dataset||[]).forEach(ds=>{
-      (ds.point||[]).forEach(pt=>{
-        const val = pt.value && pt.value[0];
-        if(!val) return;
-        if(ds.dataSourceId && ds.dataSourceId.includes('step_count')) steps += val.intVal||0;
-        if(ds.dataSourceId && ds.dataSourceId.includes('active_minutes')) activeMin += val.intVal||0;
-        if(ds.dataSourceId && ds.dataSourceId.includes('calories')) kcal += val.fpVal||0;
-      });
-    }));
-    const d = getDay(today());
-    d.activity = {steps: Math.round(steps), activeMin: Math.round(activeMin), kcal: Math.round(kcal), source:'googlefit'};
-    saveState(); render();
-    alert(`Synced: ${Math.round(steps)} steps, ${Math.round(activeMin)} active min.`);
+    state.googleHealth = {accessToken:data.access_token, refreshToken:data.refresh_token, expiresAt: Date.now()+data.expires_in*1000};
+    saveState();
+    await fetchGoogleHealthToday(false);
   }catch(e){
-    alert('Could not fetch Google Fit data. Your Google Fit cloud data may no longer be available, or the API needs to be enabled in your Google Cloud project. Manual entry on the Log tab still works.');
+    alert('Google Health connection failed. Double check the Client ID/Secret and that this exact URL is registered as a redirect URI on that OAuth client.');
   }
+}
+async function ensureGoogleHealthToken(){
+  const gh = state.googleHealth;
+  if(gh.accessToken && Date.now() < gh.expiresAt-60000) return gh.accessToken;
+  if(!gh.refreshToken) return null;
+  const body = new URLSearchParams({
+    client_id: state.settings.clientId, client_secret: state.settings.clientSecret,
+    grant_type:'refresh_token', refresh_token: gh.refreshToken
+  });
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body
+  });
+  if(!res.ok) return null;
+  const data = await res.json();
+  gh.accessToken = data.access_token; gh.expiresAt = Date.now()+data.expires_in*1000;
+  if(data.refresh_token) gh.refreshToken = data.refresh_token; // Google doesn't always reissue one
+  saveState();
+  return gh.accessToken;
+}
+// Response field names beyond `steps` aren't fully documented yet (this API is new in 2026) —
+// this pulls the first plausible numeric field rather than one hardcoded key, so it degrades
+// gracefully instead of silently returning 0 if Google's exact shape differs.
+function extractNumericField(obj, candidates){
+  if(!obj) return null;
+  for(const key of candidates){
+    if(obj[key]!==undefined && obj[key]!==null){ const n=Number(obj[key]); if(!isNaN(n)) return n; }
+  }
+  return null;
+}
+async function fetchGoogleHealthDataType(dataType, filterField, dateIso, token){
+  const start = `${dateIso}T00:00:00`, end = `${dateIso}T23:59:59`;
+  const filter = `${filterField}.interval.civil_start_time >= "${start}" AND ${filterField}.interval.civil_start_time <= "${end}"`;
+  const url = `https://health.googleapis.com/v4/users/me/dataTypes/${dataType}/dataPoints?filter=${encodeURIComponent(filter)}`;
+  const res = await fetch(url, {headers:{'Authorization':'Bearer '+token}});
+  if(!res.ok) throw new Error('HTTP '+res.status+' for '+dataType);
+  const data = await res.json();
+  return data.dataPoints || data.dataPoint || [];
+}
+async function fetchGoogleHealthToday(silent){
+  const token = await ensureGoogleHealthToken();
+  if(!token){ if(!silent) alert('Not connected to Google Health yet — tap "Connect & sync today" first.'); return; }
+  const t = today();
+  try{
+    const [stepPoints, azmPoints, kcalPoints] = await Promise.all([
+      fetchGoogleHealthDataType('steps', 'steps', t, token),
+      fetchGoogleHealthDataType('active-zone-minutes', 'active_zone_minutes', t, token).catch(()=>[]),
+      fetchGoogleHealthDataType('active-energy-burned', 'active_energy_burned', t, token).catch(()=>[])
+    ]);
+    const steps = stepPoints.reduce((sum,dp)=>sum + (extractNumericField(dp.steps||dp, ['count','value'])||0), 0);
+    const activeMin = azmPoints.reduce((sum,dp)=>sum + (extractNumericField(dp['active-zone-minutes']||dp.activeZoneMinutes||dp, ['minutes','count','value'])||0), 0);
+    const kcal = kcalPoints.reduce((sum,dp)=>sum + (extractNumericField(dp['active-energy-burned']||dp.activeEnergyBurned||dp, ['kcal','calories','caloriesKcal','value'])||0), 0);
+    const d = getDay(t);
+    d.activity = {steps: Math.round(steps), activeMin: Math.round(activeMin), kcal: Math.round(kcal), source:'googlehealth'};
+
+    try{
+      const weightPoints = await fetchGoogleHealthDataType('weight', 'weight', t, token);
+      if(weightPoints.length && !d.weightLb){
+        const last = weightPoints[weightPoints.length-1];
+        const kg = extractNumericField(last.weight||last, ['massKilograms','kilograms','valueKilograms','value']);
+        if(kg) d.weightLb = Math.round(kg*2.20462*10)/10;
+      }
+    }catch(e){ /* weight scope/data may not be available yet — activity sync still succeeds */ }
+
+    saveState(); render();
+    if(!silent) alert(`Synced from Google Health: ${Math.round(steps)} steps, ${Math.round(activeMin)} active min.`);
+  }catch(e){
+    if(!silent) alert('Could not fetch Google Health data. Manual entry on the Log tab still works.');
+  }
+}
+let lastGHAutoSync = 0;
+async function autoSyncGoogleHealthIfDue(){
+  if(!state.googleHealth.refreshToken) return;
+  if(Date.now()-lastGHAutoSync < 5*60*1000) return;
+  lastGHAutoSync = Date.now();
+  await fetchGoogleHealthToday(true);
 }
 
 /* =========================================================
@@ -1243,7 +1310,9 @@ function attachHandlers(){
     saveState(); render();
   });
   const connectFit = document.getElementById('btn-connect-fit');
-  if(connectFit) connectFit.addEventListener('click', connectGoogleFit);
+  if(connectFit) connectFit.addEventListener('click', ()=>{
+    state.googleHealth.refreshToken ? fetchGoogleHealthToday(false) : startGoogleHealthAuth();
+  });
 
   // HISTORY tab
   const histSeg = document.getElementById('history-seg');
@@ -1271,11 +1340,12 @@ function attachHandlers(){
   });
   const fitSave = document.getElementById('s-fit-save');
   if(fitSave) fitSave.addEventListener('click', ()=>{
-    state.settings.googleFitClientId = document.getElementById('s-fit-client').value.trim();
-    saveState(); alert('Client ID saved.');
+    state.settings.clientId = document.getElementById('s-fit-client').value.trim();
+    state.settings.clientSecret = document.getElementById('s-fit-secret').value.trim();
+    saveState(); alert('Credentials saved.');
   });
   const fitConnect = document.getElementById('s-fit-connect');
-  if(fitConnect) fitConnect.addEventListener('click', connectGoogleFit);
+  if(fitConnect) fitConnect.addEventListener('click', startGoogleHealthAuth);
   const exportBtn = document.getElementById('s-export');
   if(exportBtn) exportBtn.addEventListener('click', ()=>{
     const blob = new Blob([JSON.stringify(state,null,2)], {type:'application/json'});
@@ -1291,6 +1361,7 @@ function attachHandlers(){
 }
 
 render();
+handleGoogleHealthRedirect();
 </script>
 </body>
 </html>
