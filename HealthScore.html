@@ -628,8 +628,8 @@ function openInfoModal(title, bodyHtml){
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
 const INFO_CONTENT = {
   activity: ['Activity chart', `Compares yesterday and today against your step and active-minute goals. Bars use your goal (Settings) as the dashed reference line. Tap any bar for its exact value.`],
-  nutrition: ['Nutrition chart', `Compares yesterday and today's calories and protein against your daily targets, which are calculated from your age, height, weight, and weekly goal (Settings). Tap any bar for its exact value.`],
-  projection: ['Trend projection', `Averages your daily scores so far this period and projects that same pace forward — it's not a guess, just "if the rest of the period looks like today did." Log more days to sharpen it.`],
+  nutrition: ['Nutrition comparison', `Compares yesterday and today's calories and protein against your daily targets, which are calculated from your age, height, weight, and weekly goal (Settings). Tap any bar for its exact value.`],
+  projection: ['Week Pace / Summary', `Monday through Saturday, this averages your daily scores so far this week and projects that same pace forward — not a guess, just "if the rest of the week looks like today did." On Sunday the week is complete, so this becomes the real final score for the week instead, plus your highlights and one focus area for next week.`],
   trend: ['7-day score trend', `Your daily Activity and Nutrition scores (0-100) over the last 7 days. Tap a point for its value.`],
   fitsync: ['Google Health sync', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Setup, one time: console.cloud.google.com → new project → OAuth consent screen → publishing status <strong>"In Production"</strong> (fine for personal use — Google only requires review past 100 users) → Credentials → OAuth client ID → type <strong>Web application</strong> → Authorized redirect URI: <strong>${location.origin}${location.pathname}</strong> → enable the "Google Health API" and add the activity/fitness and health-metrics scopes → paste the resulting Client ID and Client Secret below. After you connect once, it re-syncs automatically in the background — no further action needed.`]
 };
@@ -801,18 +801,15 @@ function screenToday(){
     if(score>=60) return `Solid progress so far.`;
     return `Every day left is a fresh chance to pick up points.`;
   }
-  let projNum, projSub, projLeft;
-  if(!sunday){
-    const remain = (dayOfWeek(t)===0?0:7-dayOfWeek(t));
-    projNum = weekAvg; projSub = 'week pace'; projLeft = `${remain}d to Sunday`;
-  } else {
+  const weekRemain = (dayOfWeek(t)===0?0:7-dayOfWeek(t));
+  let monthAvg = null, monthRemain = null, weekFeedback = null;
+  if(sunday){
     const {start:ms} = monthRange(t);
-    const monthDates = datesBetween(ms, t);
-    const monthAvg = avgScore(monthDates, dayOverallScore);
-    const d = dateFromIso(t);
-    const daysInMonth = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
-    const remain = daysInMonth - d.getDate();
-    projNum = monthAvg; projSub = 'month pace'; projLeft = `${remain}d left`;
+    monthAvg = avgScore(datesBetween(ms, t), dayOverallScore);
+    const dNow = dateFromIso(t);
+    const daysInMonth = new Date(dNow.getFullYear(), dNow.getMonth()+1, 0).getDate();
+    monthRemain = daysInMonth - dNow.getDate();
+    weekFeedback = buildFeedback(weekDates); // week is complete today, so this is the real score, not a projection
   }
   const chartsOn = state.settings.charts;
   const d = getDay(t);
@@ -833,10 +830,7 @@ function screenToday(){
       <div style="display:flex;gap:10px;">
         <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Steps</div><div class="chart" id="chart-steps"></div></div>
         <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Active min</div><div class="chart" id="chart-activemin"></div></div>
-      </div>
-      <div style="display:flex;gap:10px;margin-top:10px;">
         <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Distance (mi)</div><div class="chart" id="chart-distance"></div></div>
-        <div style="flex:1;"></div>
       </div>
       <div class="legend">
         <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
@@ -844,22 +838,27 @@ function screenToday(){
       </div>
     </div>` : ''}
 
-    ${chartsOn.nutrition ? `<div class="card">
-      <div class="card-head"><h3>Nutrition</h3>${infoBtnHtml('nutrition')}</div>
-      <div style="display:flex;gap:10px;">
-        <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Calories</div><div class="chart" id="chart-calories"></div></div>
-        <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Protein (g)</div><div class="chart" id="chart-protein"></div></div>
-      </div>
-      <div class="legend">
-        <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
-        <div class="legend-item"><span class="swatch" style="background:var(--aqua)"></span>Today</div>
-      </div>
-    </div>` : ''}
-
     ${chartsOn.projection ? `<div class="card">
-      <div class="card-head"><h3>${sunday?'Month pace':'Week pace'}</h3>${infoBtnHtml('projection')}</div>
-      <div class="stat-pair"><span class="big">${projNum===null?'--':projNum}</span><span class="of">/100 · ${projLeft}</span></div>
-      <div class="muted">${projNum===null?'Log today to start the trend.':paceMsg(projNum)}</div>
+      <div class="card-head"><h3>${sunday?'Week Summary':'Week Pace'}</h3>${infoBtnHtml('projection')}</div>
+      ${sunday ? `
+        <div class="stat-pair"><span class="big">${weekAvg===null?'--':weekAvg}</span><span class="of">/100 this week</span></div>
+        ${monthAvg!==null ? `<div class="muted" style="margin-bottom:10px;">Month pace: <strong style="color:var(--text)">${monthAvg}/100</strong>, ${monthRemain}d left.</div>` : ''}
+        ${weekFeedback.positives.length ? weekFeedback.positives.map(p=>`<div class="feedback-item"><div class="dot" style="background:var(--good)"></div><div>${p}</div></div>`).join('') : '<div class="muted">Log a few days to see your highlights here.</div>'}
+        ${weekFeedback.focus ? `<div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${weekFeedback.focus.label}</strong> · ${weekFeedback.focus.tip}</div></div>` : ''}
+      ` : `
+        <div class="stat-pair"><span class="big">${weekAvg===null?'--':weekAvg}</span><span class="of">/100 · ${weekRemain}d to Sunday</span></div>
+        <div class="muted">${weekAvg===null?'Log today to start the trend.':paceMsg(weekAvg)}</div>
+      `}
+      ${chartsOn.nutrition ? `
+        <div style="display:flex;gap:10px;margin-top:14px;">
+          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Calories</div><div class="chart" id="chart-calories"></div></div>
+          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Protein (g)</div><div class="chart" id="chart-protein"></div></div>
+        </div>
+        <div class="legend">
+          <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
+          <div class="legend-item"><span class="swatch" style="background:var(--aqua)"></span>Today</div>
+        </div>
+      ` : ''}
     </div>` : ''}
 
     <div class="card">
@@ -1085,7 +1084,7 @@ function screenSettings(){
     <div class="card">
       <h3>Dashboard</h3>
       ${dashToggleRow('activity','Activity chart')}
-      ${dashToggleRow('nutrition','Nutrition chart')}
+      ${dashToggleRow('nutrition','Nutrition comparison')}
       ${dashToggleRow('projection','Week/month pace')}
       ${dashToggleRow('trend','7-day trend')}
     </div>
