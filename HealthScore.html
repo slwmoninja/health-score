@@ -459,6 +459,28 @@ function fdcNutrient(f, names){
 function normalizeFdcFood(f){
   const kcal = fdcNutrient(f, ['Energy']);
   if(!kcal) return null; // skip entries with no usable calorie data
+  // foodNutrients values are always per 100g/100ml. Branded items also report a real
+  // whole-item serving (servingSize/servingSizeUnit + a household description like
+  // "1 burger (228g)") — when that's present, expose the food's natural unit as that
+  // whole serving instead of the raw 100g basis. Otherwise picking "1" of a piece-based
+  // food (matching "Units/pieces") silently computes 1% of a serving's calories,
+  // since 1 gets divided by a per-100g "per" meant for weight-based amounts.
+  const servingSize = Number(f.servingSize)||0;
+  const servingUnit = (f.servingSizeUnit||'').toLowerCase();
+  if(servingSize>0 && (servingUnit==='g'||servingUnit==='ml')){
+    const ratio = servingSize/100;
+    return {
+      n: f.description,
+      per:1, u: f.householdServingFullText || `serving (${Math.round(servingSize)}${servingUnit})`,
+      k: kcal*ratio,
+      p: fdcNutrient(f, ['Protein'])*ratio,
+      c: fdcNutrient(f, ['Carbohydrate, by difference'])*ratio,
+      f: fdcNutrient(f, ['Total lipid (fat)'])*ratio,
+      ir: fdcNutrient(f, ['Iron, Fe'])*ratio,
+      ca: fdcNutrient(f, ['Calcium, Ca'])*ratio,
+      fdc: true
+    };
+  }
   return {
     n: f.description, per:100, u:'g', k: kcal,
     p: fdcNutrient(f, ['Protein']),
@@ -1354,11 +1376,15 @@ function screenToday(){
 /* ---------- LOG ---------- */
 let logFoodQuery = '';
 let logFocus = null; // 'nutrition' | 'activity' | null (both) — set by which quick-log pill was tapped
-// Amount needs a real persisted value (unlike Calories, which is fine staying
-// DOM-only) because more than one code path re-renders the Log screen while a
-// search is in flight (live FDC results arriving async) — without this, any of
-// those renders would silently wipe whatever the user had already typed.
+// Amount and Calories both need real persisted values (not just left on the DOM
+// node) because more than one code path re-renders the Log screen while a search
+// is in flight (live FDC results arriving async, possibly after a food's already
+// been matched and Calories computed) — without this, any of those renders would
+// silently wipe whatever was there, including a correctly-computed kcal, back to
+// blank. A blank Calories field then reads as 0 and gets logged as 0 kcal instead
+// of an error, since the food is still recognized (matchedFood is still set).
 let foodAmountValue = '';
+let foodKcalValue = '';
 function recentFoods(limit){
   return Object.entries(state.foodMemory)
     .sort((a,b)=>(b[1].ts||0)-(a[1].ts||0))
@@ -1437,7 +1463,7 @@ function screenLog(){
         ${results.map((f,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${f.n}${f.fdc?' <span class="muted" style="font-size:10.5px;">USDA</span>':''}</div><div class="m">${f.k} kcal per ${f.per} ${f.u}</div></div>`).join('')}
       </div>
       ${showWebSearch && !matchedFood ? `<button class="btn-secondary" id="btn-web-search-food" type="button" style="margin-top:2px;">Search the web for "${logFoodQuery}"</button>` : ''}
-      <div class="field" style="margin-top:2px;"><label>Calories</label><input type="number" id="food-kcal" placeholder="0"></div>
+      <div class="field" style="margin-top:2px;"><label>Calories</label><input type="number" id="food-kcal" placeholder="0" value="${foodKcalValue}"></div>
       <button class="btn-primary" id="btn-add-food" style="margin-top:4px;">Add to today</button>
     </div>
 
@@ -1483,10 +1509,9 @@ function selectFoodIntoForm(food){
   const remembered = state.foodMemory[food.n];
   const amt = priorAmount>0 ? priorAmount : (remembered ? remembered.qty : food.per);
   foodAmountValue = String(amt);
+  foodKcalValue = String(Math.round(food.k*(amt/food.per)));
   render();
   const amountEl = document.getElementById('food-amount');
-  const kcalEl = document.getElementById('food-kcal');
-  kcalEl.value = Math.round(food.k*(amt/food.per));
   amountEl.focus();
   amountEl.select();
 }
@@ -1918,9 +1943,12 @@ function attachHandlers(){
     foodAmountValue = amountInputEl.value;
     if(!matchedFood) return;
     const amt = Number(amountInputEl.value)||0;
+    foodKcalValue = String(Math.round(matchedFood.k*(amt/matchedFood.per)));
     const kcalEl = document.getElementById('food-kcal');
-    if(kcalEl) kcalEl.value = Math.round(matchedFood.k*(amt/matchedFood.per));
+    if(kcalEl) kcalEl.value = foodKcalValue;
   });
+  const kcalInputEl = document.getElementById('food-kcal');
+  if(kcalInputEl) kcalInputEl.addEventListener('input', ()=>{ foodKcalValue = kcalInputEl.value; });
   const addFoodBtn = document.getElementById('btn-add-food');
   if(addFoodBtn) addFoodBtn.addEventListener('click', ()=>{
     const name = document.getElementById('food-search').value.trim();
@@ -1948,7 +1976,7 @@ function attachHandlers(){
     }
     getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel, kcal, protein, carbs, fat, iron, calcium});
     state.foodMemory[name] = {qty:amount, ts:Date.now()};
-    logFoodQuery=''; matchedFood=null; foodUnitFilter='any'; foodAmountValue='';
+    logFoodQuery=''; matchedFood=null; foodUnitFilter='any'; foodAmountValue=''; foodKcalValue='';
     saveState(); render();
   });
   const sortBtn = document.getElementById('btn-sort-foods');
