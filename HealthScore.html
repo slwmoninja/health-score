@@ -473,6 +473,15 @@ function estimateCaloriesBurned(p, activeMinutes){
   const MET = 4.0;
   return Math.round((MET*3.5*lbToKg(p.weightLb)/200) * activeMinutes);
 }
+// Canonical "calories burned" for a day — prefers Google Health's own device-reported
+// figure when available (real, source-specific data), falling back to the MET estimate
+// for manually-entered days. Used both for display and for the weight-goal-impact math,
+// so both stay consistent with each other.
+function caloriesBurnedForDay(iso){
+  const d = getDay(iso);
+  if(d.activity.source==='googlehealth' && d.activity.kcal>0) return d.activity.kcal;
+  return estimateCaloriesBurned(state.profile, d.activity.activeMin);
+}
 function weeklyGoalKcalAdjustment(p){
   const sign = p.goalType==='lose' ? -1 : p.goalType==='gain' ? 1 : 0;
   return sign * (p.ratePerWeekLb*3500/7);
@@ -537,6 +546,38 @@ function monthCalorieProgress(iso){
   const consumed = monthDates.reduce((sum,d)=>sum+dayTotals(d).kcal, 0);
   const goal = monthDates.reduce((sum,d)=>sum+dailyTargets(state.profile, getDay(d).activity.kcal).kcal, 0);
   return {consumed, goal};
+}
+// How much of the activity-earned calorie "bonus" (burned calories widen the day's
+// allowed intake) actually became extra progress toward the weight goal vs. being
+// eaten back. bonusDeficit > 0 = bonus went unspent (extra progress); < 0 = ate
+// beyond even the activity-boosted budget despite the calories burned.
+function weightGoalImpact(dates){
+  const p = state.profile;
+  let consumed=0, baseGoal=0, burned=0;
+  dates.forEach(iso=>{
+    consumed += dayTotals(iso).kcal;
+    baseGoal += (p.calorieGoal!=null && p.calorieGoal>0) ? p.calorieGoal : suggestedCalorieGoal(p);
+    burned += caloriesBurnedForDay(iso);
+  });
+  const extraEaten = Math.max(0, consumed-baseGoal);
+  return {consumed, baseGoal, burned, bonusDeficit: burned-extraEaten};
+}
+function weightGoalImpactText(impact, p, periodWord){
+  periodWord = periodWord || 'today';
+  const burned = Math.round(impact.burned);
+  const bonus = Math.round(impact.bonusDeficit);
+  if(burned<30) return null; // not enough tracked activity to say anything meaningful yet
+  const goalWord = p.goalType==='lose' ? 'weight-loss' : p.goalType==='gain' ? 'weight-gain' : 'maintenance';
+  if(Math.abs(bonus)<50){
+    return `Activity earned about ${burned.toLocaleString()} extra calories of budget ${periodWord}, and you used just about all of it — right on pace for your ${goalWord} goal.`;
+  }
+  if(bonus>0){
+    const lb = bonus/3500;
+    const lbText = lb>=0.05 ? ` (~${lb.toFixed(2)} lb)` : '';
+    return `Activity earned about ${burned.toLocaleString()} extra calories of budget ${periodWord}, and ${bonus.toLocaleString()}${lbText} went unused — a bonus push toward your ${goalWord} goal.`;
+  }
+  const possessive = periodWord==='today' ? "today's" : `${periodWord}'s`;
+  return `You ate about ${Math.abs(bonus).toLocaleString()} calories more than even ${possessive} activity-boosted budget — the ${burned.toLocaleString()} calories burned helped, just not quite enough to offset it.`;
 }
 
 function nutritionScore(iso){
@@ -859,24 +900,30 @@ function bigStatRow(value, label, sub){
 }
 function openActivityModal(){
   const t = today(), p = state.profile, d = getDay(t);
+  const burned = caloriesBurnedForDay(t);
+  const impact = weightGoalImpact([t]);
+  const impactText = weightGoalImpactText(impact, p, 'today');
   openInfoModal('Activity', `
     ${bigStatRow(d.activity.steps.toLocaleString(), 'Steps', `/ ${p.stepGoal.toLocaleString()} goal`)}
     ${bigStatRow(d.activity.activeMin, 'Active minutes', `/ ${p.activeMinGoal} goal`)}
     ${bigStatRow((d.activity.distanceMi||0).toFixed(1), 'Miles')}
-    ${bigStatRow(estimateCaloriesBurned(p, d.activity.activeMin).toLocaleString(), 'Est. calories burned')}
-    <div class="muted" style="margin-top:2px;">MET-based estimate from your weight and active minutes — a standard exercise-science method, not a device measurement.</div>
+    ${bigStatRow(burned.toLocaleString(), 'Est. calories burned')}
+    <div class="muted" style="margin-top:2px;">${d.activity.source==='googlehealth'?'From Google Health.':'MET-based estimate from your weight and active minutes — a standard exercise-science method, not a device measurement.'}</div>
+    ${impactText ? `<div class="feedback-item" style="margin-top:10px;"><div class="dot" style="background:var(--good)"></div><div>${impactText}</div></div>` : ''}
   `);
 }
 function openNutritionModal(){
-  const t = today();
-  const totals = dayTotals(t), targets = dailyTargets(state.profile, getDay(t).activity.kcal);
+  const t = today(), p = state.profile;
+  const totals = dayTotals(t), targets = dailyTargets(p, getDay(t).activity.kcal);
   const week = weekCalorieProgress(t);
   const month = monthCalorieProgress(t);
+  const impactText = weightGoalImpactText(weightGoalImpact([t]), p, 'today');
   openInfoModal('Nutrition', `
     ${bigStatRow(Math.round(totals.kcal).toLocaleString(), 'Calories today', `/ ${targets.kcal.toLocaleString()} goal`)}
     ${bigStatRow(Math.round(week.consumed).toLocaleString(), 'Calories this week', `/ ${Math.round(week.goal).toLocaleString()} goal`)}
     ${bigStatRow(Math.round(month.consumed).toLocaleString(), 'Calories this month', `/ ${Math.round(month.goal).toLocaleString()} goal`)}
     ${bigStatRow(Math.round(totals.protein), 'Protein (g)', `/ ${targets.proteinG}g target`)}
+    ${impactText ? `<div class="feedback-item" style="margin-top:10px;"><div class="dot" style="background:var(--good)"></div><div>${impactText}</div></div>` : ''}
   `);
 }
 function showTooltip(x, y, text){
@@ -1071,6 +1118,7 @@ function screenToday(){
   }
   const weekRemain = (dayOfWeek(t)===0?0:7-dayOfWeek(t));
   const weekFeedback = sunday ? buildFeedback(weekDates, 'week') : null; // week is complete today, so this is the real score, not a projection
+  const weekImpactText = weightGoalImpactText(weightGoalImpact(weekDates), p, 'this week');
 
   const {start:ms} = monthRange(t);
   const monthDates = datesBetween(ms, t);
@@ -1080,6 +1128,7 @@ function screenToday(){
   const monthRemain = daysInMonth - dNow.getDate();
   const monthEnd = dNow.getDate()===daysInMonth;
   const monthFeedback = monthEnd ? buildFeedback(monthDates, 'month') : null; // month is complete today, so this is the real score, not a projection
+  const monthImpactText = weightGoalImpactText(weightGoalImpact(monthDates), p, 'this month');
 
   const chartsOn = state.settings.charts;
 
@@ -1113,6 +1162,7 @@ function screenToday(){
       ` : `
         ${weekAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(weekAvg,'week') ? `<div class="muted">${paceMsg(weekAvg,'week')}</div>` : '')}
       `}
+      ${weekImpactText ? `<div class="feedback-item"><div class="dot" style="background:var(--critical)"></div><div>${weekImpactText}</div></div>` : ''}
     </div>` : ''}
 
     ${chartsOn.projection ? `<div class="card">
@@ -1129,6 +1179,7 @@ function screenToday(){
       ` : `
         ${monthAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(monthAvg,'month') ? `<div class="muted">${paceMsg(monthAvg,'month')}</div>` : '')}
       `}
+      ${monthImpactText ? `<div class="feedback-item"><div class="dot" style="background:var(--critical)"></div><div>${monthImpactText}</div></div>` : ''}
     </div>` : ''}
   </div>`;
 }
