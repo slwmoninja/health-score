@@ -279,7 +279,8 @@ function datesBetween(startIso, endIso){
   return out;
 }
 function getDay(iso){
-  if(!state.days[iso]) state.days[iso] = {weightLb:null, foods:[], activity:{steps:0,activeMin:0,kcal:0,source:'manual'}};
+  if(!state.days[iso]) state.days[iso] = {weightLb:null, foods:[], activity:{steps:0,activeMin:0,kcal:0,distanceMi:0,source:'manual'}};
+  if(state.days[iso].activity.distanceMi===undefined) state.days[iso].activity.distanceMi = 0; // upgrade older saved days
   return state.days[iso];
 }
 
@@ -771,7 +772,7 @@ function render(){
     return;
   }
   document.getElementById('bottomnav').classList.remove('hidden');
-  autoSyncGoogleHealthIfDue(); // fire-and-forget silent background refresh, throttled
+  autoSyncGoogleHealthIfDue(); // fire-and-forget — refreshes on every app action, not just a manual button tap
   if(activeTab==='today') app.innerHTML = screenToday();
   else if(activeTab==='log') app.innerHTML = screenLog();
   else if(activeTab==='history') app.innerHTML = screenHistory();
@@ -833,6 +834,10 @@ function screenToday(){
         <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Steps</div><div class="chart" id="chart-steps"></div></div>
         <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Active min</div><div class="chart" id="chart-activemin"></div></div>
       </div>
+      <div style="display:flex;gap:10px;margin-top:10px;">
+        <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Distance (mi)</div><div class="chart" id="chart-distance"></div></div>
+        <div style="flex:1;"></div>
+      </div>
       <div class="legend">
         <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
         <div class="legend-item"><span class="swatch" style="background:var(--blue)"></span>Today</div>
@@ -865,6 +870,7 @@ function screenToday(){
       ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--orange)')}
       ${progRow('Steps', d.activity.steps, p.stepGoal, '', 'var(--blue)')}
       ${progRow('Active min', d.activity.activeMin, p.activeMinGoal, '', 'var(--aqua)')}
+      <div class="row" style="margin-top:8px;"><span class="text2">Distance</span><span>${(d.activity.distanceMi||0).toFixed(1)} mi</span></div>
     </div>
   </div>`;
 }
@@ -920,8 +926,8 @@ function screenLog(){
         <div class="field"><label>Steps</label><input type="number" id="act-steps" value="${d.activity.steps||''}" placeholder="0"></div>
         <div class="field"><label>Active minutes</label><input type="number" id="act-min" value="${d.activity.activeMin||''}" placeholder="0"></div>
       </div>
-      <button class="btn-primary" id="btn-save-activity">Save activity</button>
-      <div style="height:10px"></div>
+      <div class="field"><label>Distance (mi)</label><input type="number" step="0.1" id="act-dist" value="${d.activity.distanceMi||''}" placeholder="0"></div>
+      <div class="muted" style="margin-bottom:10px;">Saves automatically as you type.</div>
       ${state.googleHealth.refreshToken
         ? `<div class="row"><span class="muted">Google Health connected — syncs automatically</span><button class="iconbtn" id="btn-connect-fit" title="Sync now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg></button></div>`
         : `<button class="btn-secondary" id="btn-connect-fit">Connect Google Health (optional)</button>`}
@@ -1179,15 +1185,49 @@ async function ensureGoogleHealthToken(){
   saveState();
   return gh.accessToken;
 }
-// Response field names beyond `steps` aren't fully documented yet (this API is new in 2026) —
-// this pulls the first plausible numeric field rather than one hardcoded key, so it degrades
-// gracefully instead of silently returning 0 if Google's exact shape differs.
 function extractNumericField(obj, candidates){
   if(!obj) return null;
   for(const key of candidates){
     if(obj[key]!==undefined && obj[key]!==null){ const n=Number(obj[key]); if(!isNaN(n)) return n; }
   }
   return null;
+}
+// Finds whichever nested field ends in "_sum" rather than guessing the exact
+// name per data type (steps -> count_sum, distance -> distance_sum, etc. per
+// Google's docs) — resilient to the exact key not being confirmed for every type.
+function extractRollupSum(rollupPoint){
+  if(!rollupPoint) return null;
+  for(const key of Object.keys(rollupPoint)){
+    if(key==='civilStartTime'||key==='civilEndTime') continue;
+    const obj = rollupPoint[key];
+    if(obj && typeof obj==='object'){
+      const sumKey = Object.keys(obj).find(k=>k.endsWith('_sum'));
+      if(sumKey) return Number(obj[sumKey]);
+    }
+  }
+  return null;
+}
+function civilDate(dateIso){
+  const d = dateFromIso(dateIso);
+  return {year:d.getFullYear(), month:d.getMonth()+1, day:d.getDate()};
+}
+// One aggregated total for the whole day, computed server-side — avoids both
+// the civil_start_time filter's comparator restrictions and any risk of
+// under-counting from un-paginated raw data points.
+async function fetchGoogleHealthRollup(dataType, dateIso, token){
+  const url = `https://health.googleapis.com/v4/users/me/dataTypes/${dataType}/dataPoints:dailyRollUp`;
+  const body = JSON.stringify({
+    range: {start: civilDate(dateIso), end: civilDate(addDays(dateIso,1))},
+    windowSizeDays: 1
+  });
+  const res = await fetch(url, {method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'}, body});
+  if(!res.ok){
+    const bodyText = await res.text().catch(()=>'');
+    throw new Error(`HTTP ${res.status} for ${dataType}: ${bodyText.slice(0,300)}`);
+  }
+  const data = await res.json();
+  const points = data.rollupDataPoints || [];
+  return points.reduce((sum,p)=>sum + (extractRollupSum(p)||0), 0);
 }
 async function fetchGoogleHealthDataType(dataType, filterField, dateIso, token){
   // civil_start_time only supports >= and < as comparators (no <=), so the upper
@@ -1208,16 +1248,17 @@ async function fetchGoogleHealthToday(silent){
   if(!token){ if(!silent) alert('Not connected to Google Health yet — tap "Connect & sync today" first.'); return; }
   const t = today();
   try{
-    const [stepPoints, azmPoints, kcalPoints] = await Promise.all([
-      fetchGoogleHealthDataType('steps', 'steps', t, token),
-      fetchGoogleHealthDataType('active-zone-minutes', 'active_zone_minutes', t, token).catch(()=>[]),
-      fetchGoogleHealthDataType('active-energy-burned', 'active_energy_burned', t, token).catch(()=>[])
+    const [steps, activeMin, kcal, distanceM] = await Promise.all([
+      fetchGoogleHealthRollup('steps', t, token),
+      fetchGoogleHealthRollup('active-zone-minutes', t, token).catch(()=>0),
+      fetchGoogleHealthRollup('active-energy-burned', t, token).catch(()=>0),
+      fetchGoogleHealthRollup('distance', t, token).catch(()=>0)
     ]);
-    const steps = stepPoints.reduce((sum,dp)=>sum + (extractNumericField(dp.steps||dp, ['count','value'])||0), 0);
-    const activeMin = azmPoints.reduce((sum,dp)=>sum + (extractNumericField(dp['active-zone-minutes']||dp.activeZoneMinutes||dp, ['minutes','count','value'])||0), 0);
-    const kcal = kcalPoints.reduce((sum,dp)=>sum + (extractNumericField(dp['active-energy-burned']||dp.activeEnergyBurned||dp, ['kcal','calories','caloriesKcal','value'])||0), 0);
     const d = getDay(t);
-    d.activity = {steps: Math.round(steps), activeMin: Math.round(activeMin), kcal: Math.round(kcal), source:'googlehealth'};
+    d.activity = {
+      steps: Math.round(steps), activeMin: Math.round(activeMin), kcal: Math.round(kcal),
+      distanceMi: Math.round((distanceM/1609.34)*10)/10, source:'googlehealth'
+    };
 
     try{
       const weightPoints = await fetchGoogleHealthDataType('weight', 'weight', t, token);
@@ -1237,9 +1278,14 @@ async function fetchGoogleHealthToday(silent){
   }
 }
 let lastGHAutoSync = 0;
+// Deliberately short — this is called from render(), which fires after essentially every
+// app action (tab switch, food add/remove, activity edit, keystroke in search), so the app
+// feels continuously live rather than needing a manual "refresh" tap. The floor only exists
+// to stop rapid-fire renders (e.g. fast typing) from hammering the API.
+const GH_AUTOSYNC_GAP_MS = 8*1000;
 async function autoSyncGoogleHealthIfDue(){
   if(!state.googleHealth.refreshToken) return;
-  if(Date.now()-lastGHAutoSync < 5*60*1000) return;
+  if(Date.now()-lastGHAutoSync < GH_AUTOSYNC_GAP_MS) return;
   lastGHAutoSync = Date.now();
   await fetchGoogleHealthToday(true);
 }
@@ -1261,6 +1307,11 @@ function mountCharts(){
   if(stepsEl){
     const dy = getDay(y).activity, dt = getDay(t).activity;
     stepsEl.appendChild(pairBarChart(dy.steps, dt.steps, p.stepGoal, 'var(--blue)'));
+  }
+  const distanceEl = document.getElementById('chart-distance');
+  if(distanceEl){
+    const dy = getDay(y).activity, dt = getDay(t).activity;
+    distanceEl.appendChild(pairBarChart(dy.distanceMi||0, dt.distanceMi||0, undefined, 'var(--blue)'));
   }
   const activeMinEl = document.getElementById('chart-activemin');
   if(activeMinEl){
@@ -1326,13 +1377,22 @@ function attachHandlers(){
       saveState(); render();
     });
   });
-  const saveAct = document.getElementById('btn-save-activity');
-  if(saveAct) saveAct.addEventListener('click', ()=>{
+  // Activity fields auto-save on change (fires on blur/Enter) so a typed value is never
+  // lost by navigating away before an explicit save — mirrors how food logging already
+  // commits immediately. Note: if Google Health is connected, the next reactive resync
+  // (fires via render() below, same as any other action) will overwrite this with synced
+  // data — manual entry is really the fallback for days/metrics Google Health doesn't cover.
+  const saveActivityFromInputs = ()=>{
     const d = getDay(today());
     const steps = Number(document.getElementById('act-steps').value)||0;
     const min = Number(document.getElementById('act-min').value)||0;
-    d.activity = {steps, activeMin:min, kcal: estimateActivityKcal(steps,min), source:'manual'};
+    const dist = Number(document.getElementById('act-dist').value)||0;
+    d.activity = {steps, activeMin:min, distanceMi:dist, kcal: estimateActivityKcal(steps,min), source:'manual'};
     saveState(); render();
+  };
+  ['act-steps','act-min','act-dist'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('change', saveActivityFromInputs);
   });
   const connectFit = document.getElementById('btn-connect-fit');
   if(connectFit) connectFit.addEventListener('click', ()=>{
