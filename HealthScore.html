@@ -1395,10 +1395,12 @@ async function startGoogleHealthAuth(){
     client_id: clientId, response_type:'code', redirect_uri: ghRedirectUri(),
     scope: GH_SCOPES, access_type:'offline', prompt:'consent', include_granted_scopes:'true'
   });
-  // location.replace (not .href) so this doesn't push a new history entry — otherwise
-  // the back gesture has to step through the Google consent page before reaching
-  // wherever the user actually was before connecting, instead of going back one step.
-  location.replace('https://accounts.google.com/o/oauth2/v2/auth?' + params.toString());
+  // Regular navigation (not location.replace) — replace() turned out to destroy the
+  // app's own history entry too (since Google's return redirect collapses into the
+  // same slot), so back skipped past the app entirely instead of landing on it. A
+  // normal push means back may briefly land on Google's consent page once, which is
+  // a smaller problem than back exiting the app altogether.
+  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
 }
 async function handleGoogleHealthRedirect(){
   const url = new URL(location.href);
@@ -1535,7 +1537,12 @@ async function fetchGoogleHealthToday(silent){
       }
     }catch(e){ /* weight scope/data may not be available yet — activity sync still succeeds */ }
 
-    saveState(); render();
+    saveState();
+    // Skip the re-render if the user is actively typing (e.g. the food search box) —
+    // this silent background sync was replacing that input's DOM node mid-keystroke,
+    // which read as the field "timing out"/losing what was just typed. State is still
+    // saved either way; the UI catches up on the next natural render.
+    if(!isUserTyping()) render();
     checkGoalsAndCelebrate(t);
     // No success alert — the infographics/drill-downs just refresh in place via render().
   }catch(e){
@@ -1543,6 +1550,10 @@ async function fetchGoogleHealthToday(silent){
     logError('Sync failed: '+e.message);
     if(!silent) alert('Could not fetch Google Health data:\n\n'+e.message+'\n\nManual entry on the Log tab still works.');
   }
+}
+function isUserTyping(){
+  const el = document.activeElement;
+  return !!(el && (el.tagName==='INPUT' || el.tagName==='TEXTAREA'));
 }
 let lastGHAutoSync = 0;
 // Deliberately short — this is called from render(), which fires after essentially every
