@@ -470,8 +470,28 @@ function weeklyGoalKcalAdjustment(p){
 // The baseline daily calorie target (BMR at sedentary activity, adjusted for the
 // weekly weight-change goal) — shown as an editable suggestion at onboarding/Settings
 // rather than a silent recalculation, so a saved override always wins over the formula.
+// Floor below which calorie restriction is widely cited as needing medical supervision
+// (commonly 1,200 kcal for women / 1,500 for men) — without this, an aggressive
+// lb/week rate on top of a real BMR can suggest an unsafely low target (e.g. ~2.5
+// lb/week for a typical adult male works out to ~650-700 kcal/day with no floor).
+function calorieSafetyFloor(p){ return p.sex==='male' ? 1500 : 1200; }
 function suggestedCalorieGoal(p){
-  return Math.round(bmr(p)*1.2 + weeklyGoalKcalAdjustment(p));
+  const raw = bmr(p)*1.2 + weeklyGoalKcalAdjustment(p);
+  return Math.round(Math.max(raw, calorieSafetyFloor(p)));
+}
+// Supporting text under the editable daily goal field — the daily number is the
+// single source of truth; weekly/monthly are just that number scaled up so the
+// user can see the bigger picture without needing separate editable fields.
+function calorieGoalBreakdownText(dailyGoal, sexForFloorCheck){
+  const now = new Date();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+  const weekly = Math.round(dailyGoal*7), monthly = Math.round(dailyGoal*daysInMonth);
+  let text = `≈ ${weekly.toLocaleString()}/week · ${monthly.toLocaleString()}/month`;
+  if(sexForFloorCheck){
+    const floor = calorieSafetyFloor({sex:sexForFloorCheck});
+    if(dailyGoal>0 && dailyGoal<floor) text += ` — below the commonly-cited ${floor.toLocaleString()} kcal safety floor; consider a less aggressive weekly rate.`;
+  }
+  return text;
 }
 function dailyTargets(p, activityKcal){
   const base = (p.calorieGoal!=null && p.calorieGoal>0) ? p.calorieGoal : suggestedCalorieGoal(p);
@@ -654,7 +674,7 @@ function renderOnboarding(){
       <div class="field">
         <label>Daily calorie goal</label>
         <input type="number" id="ob-calgoal" placeholder="calculated from your info above">
-        <div class="muted" style="margin-top:6px;">Calculated from your age/sex/height/weight and weekly goal — edit if you'd rather set your own.</div>
+        <div class="muted" id="ob-calgoal-derived" style="margin-top:6px;">Calculated from your age/sex/height/weight and weekly goal — edit if you'd rather set your own.</div>
       </div>
       <div class="field-row">
         <div class="field"><label>Daily step goal</label><input type="number" id="ob-steps" placeholder="8000" value="8000"></div>
@@ -674,7 +694,12 @@ function renderOnboarding(){
   let goalType = 'lose';
   const calGoalInput = wrap.querySelector('#ob-calgoal');
   let calGoalTouched = false;
-  calGoalInput.addEventListener('input', ()=>{ calGoalTouched = true; });
+  calGoalInput.addEventListener('input', ()=>{ calGoalTouched = true; refreshCalGoalDerived(); });
+  const calGoalDerived = wrap.querySelector('#ob-calgoal-derived');
+  function refreshCalGoalDerived(){
+    const v = Number(calGoalInput.value)||0;
+    if(v>0) calGoalDerived.textContent = calorieGoalBreakdownText(v, wrap.querySelector('#ob-sex').value);
+  }
   function refreshCalGoalSuggestion(){
     if(calGoalTouched) return;
     const age = Number(wrap.querySelector('#ob-age').value)||0;
@@ -686,6 +711,7 @@ function renderOnboarding(){
       age, sex: wrap.querySelector('#ob-sex').value, heightIn: height, weightLb: weight,
       goalType, ratePerWeekLb: goalType==='maintain'?0:rate
     });
+    refreshCalGoalDerived();
   }
   ['ob-age','ob-height','ob-weight','ob-rate','ob-sex'].forEach(id=>{
     const el = wrap.querySelector('#'+id);
@@ -1304,6 +1330,7 @@ function screenSettings(){
           <input type="number" id="s-calgoal" value="${p.calorieGoal||suggestedCalorieGoal(p)}" style="flex:2;">
           <button class="btn-secondary" id="s-calgoal-suggest" style="flex:1;">Suggest</button>
         </div>
+        <div class="muted" id="s-calgoal-derived" style="margin-top:6px;">${calorieGoalBreakdownText(p.calorieGoal||suggestedCalorieGoal(p), p.sex)}</div>
       </div>
       <div class="field-row">
         <div class="field"><label>Daily step goal</label><input type="number" id="s-steps" value="${p.stepGoal}"></div>
@@ -1634,16 +1661,23 @@ function attachHandlers(){
   if(sGoal) sGoal.querySelectorAll('button').forEach(b=>b.addEventListener('click', ()=>{
     sGoal.querySelectorAll('button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
   }));
+  const sCalGoalInput = document.getElementById('s-calgoal');
+  const sCalGoalDerived = document.getElementById('s-calgoal-derived');
+  const refreshCalGoalDerived = ()=>{
+    if(sCalGoalDerived) sCalGoalDerived.textContent = calorieGoalBreakdownText(Number(sCalGoalInput.value)||0, document.getElementById('s-sex').value);
+  };
+  if(sCalGoalInput) sCalGoalInput.addEventListener('input', refreshCalGoalDerived);
   const sCalGoalSuggest = document.getElementById('s-calgoal-suggest');
   if(sCalGoalSuggest) sCalGoalSuggest.addEventListener('click', ()=>{
     const goalType = sGoal.querySelector('.active').dataset.v;
-    document.getElementById('s-calgoal').value = suggestedCalorieGoal({
+    sCalGoalInput.value = suggestedCalorieGoal({
       age: Number(document.getElementById('s-age').value),
       sex: document.getElementById('s-sex').value,
       heightIn: Number(document.getElementById('s-height').value),
       weightLb: Number(document.getElementById('s-weight').value),
       goalType, ratePerWeekLb: goalType==='maintain'?0:Number(document.getElementById('s-rate').value)||0
     });
+    refreshCalGoalDerived();
   });
   const sSave = document.getElementById('s-save');
   if(sSave) sSave.addEventListener('click', ()=>{
