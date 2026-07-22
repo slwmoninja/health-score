@@ -1009,7 +1009,7 @@ function screenToday(){
     ${chartsOn.projection ? `<div class="card">
       <div class="card-head">
         <div style="display:flex;align-items:baseline;gap:8px;">
-          <h3 style="margin-bottom:0;">${sunday?'Week Summary':'This Week'}</h3>
+          <h3 style="margin-bottom:0;color:var(--blue);">${sunday?'Week Summary':'This Week'}</h3>
           <span class="inline-stat">${weekAvg===null?'--':weekAvg}/100${sunday?' this week':` <span class="muted">· ${weekRemain}d to Sunday</span>`}</span>
         </div>
         ${infoBtnHtml('projection')}
@@ -1025,7 +1025,7 @@ function screenToday(){
     ${chartsOn.projection ? `<div class="card">
       <div class="card-head">
         <div style="display:flex;align-items:baseline;gap:8px;">
-          <h3 style="margin-bottom:0;">${monthEnd?'Month Summary':'This Month'}</h3>
+          <h3 style="margin-bottom:0;color:var(--blue);">${monthEnd?'Month Summary':'This Month'}</h3>
           <span class="inline-stat">${monthAvg===null?'--':monthAvg}/100${monthEnd?' this month':` <span class="muted">· ${monthRemain}d left</span>`}</span>
         </div>
         ${infoBtnHtml('projection')}
