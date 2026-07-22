@@ -467,9 +467,15 @@ function weeklyGoalKcalAdjustment(p){
   const sign = p.goalType==='lose' ? -1 : p.goalType==='gain' ? 1 : 0;
   return sign * (p.ratePerWeekLb*3500/7);
 }
+// The baseline daily calorie target (BMR at sedentary activity, adjusted for the
+// weekly weight-change goal) — shown as an editable suggestion at onboarding/Settings
+// rather than a silent recalculation, so a saved override always wins over the formula.
+function suggestedCalorieGoal(p){
+  return Math.round(bmr(p)*1.2 + weeklyGoalKcalAdjustment(p));
+}
 function dailyTargets(p, activityKcal){
-  const rest = bmr(p)*1.2; // sedentary base; tracked exercise added on top
-  const kcal = Math.round(rest + (activityKcal||0) + weeklyGoalKcalAdjustment(p));
+  const base = (p.calorieGoal!=null && p.calorieGoal>0) ? p.calorieGoal : suggestedCalorieGoal(p);
+  const kcal = Math.round(base + (activityKcal||0)); // tracked exercise still added on top of the base goal
   const proteinG = Math.round(lbToKg(p.weightLb)*1.6);
   const proteinKcal = proteinG*4;
   const remaining = Math.max(kcal-proteinKcal, 200);
@@ -484,6 +490,15 @@ function dayTotals(iso){
   return t;
 }
 function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
+// Calories consumed vs. goal for the week so far (Monday through iso) — the goal side
+// sums each day's own target since activity-based bonus calories vary day to day.
+function weekCalorieProgress(iso){
+  const {start:ws} = weekRange(iso);
+  const weekDates = datesBetween(ws, iso);
+  const consumed = weekDates.reduce((sum,d)=>sum+dayTotals(d).kcal, 0);
+  const goal = weekDates.reduce((sum,d)=>sum+dailyTargets(state.profile, getDay(d).activity.kcal).kcal, 0);
+  return {consumed, goal};
+}
 
 function nutritionScore(iso){
   const p = state.profile; if(!p) return null;
@@ -537,18 +552,18 @@ function avgRaw(dates, fn){
   if(vals.length===0) return null;
   return vals.reduce((a,b)=>a+b,0)/vals.length;
 }
-function buildFeedback(dates, weightScoreOverride){
+function buildFeedback(dates, periodLabel, weightScoreOverride){
+  periodLabel = periodLabel || 'period';
   const p = state.profile;
   const nAvg = avgScore(dates, nutritionScore);
   const aAvg = avgScore(dates, activityScore);
   const loggedDays = dates.filter(d=>getDay(d).foods.length>0).length;
-  const goalDays = dates.filter(d=>{const s=activityScore(d); return s!==null && s>=100;}).length;
+  const activityDays = dates.filter(d=>{const a=getDay(d).activity; return a.steps>0||a.activeMin>0;}).length;
   const {start:ws,end:we} = {start:dates[0], end:dates[dates.length-1]};
   const wScore = weightScoreOverride!==undefined ? weightScoreOverride : weightTrendScore(ws,we);
 
   const avgProtein = avgRaw(dates, d=>getDay(d).foods.length ? dayTotals(d).protein : null);
   const avgSteps = avgRaw(dates, d=>{const a=getDay(d).activity; return (a.steps>0||a.activeMin>0) ? a.steps : null;});
-  const avgActiveMin = avgRaw(dates, d=>{const a=getDay(d).activity; return (a.steps>0||a.activeMin>0) ? a.activeMin : null;});
   const targetProteinG = dailyTargets(p, 0).proteinG;
 
   const metrics = [];
@@ -556,22 +571,20 @@ function buildFeedback(dates, weightScoreOverride){
   if(aAvg!==null) metrics.push({key:'activity', label:'Activity', score:aAvg});
   if(wScore!==null) metrics.push({key:'weight', label:'Weigh-in trend', score:wScore});
 
-  // Positives — cast a wide net so a strong week surfaces several wins, and even a
-  // rough week still finds real, specific things that went right.
-  const positives = [];
-  if(loggedDays>=Math.ceil(dates.length*0.6)) positives.push(`You logged food on ${loggedDays} of ${dates.length} days — that consistency is the hardest part, and you nailed it.`);
-  if(goalDays>0) positives.push(`You hit your full activity goal on ${goalDays} day${goalDays===1?'':'s'} — great work getting moving.`);
-  if(avgSteps!==null && avgSteps>=p.stepGoal*0.85) positives.push(`You averaged ${Math.round(avgSteps).toLocaleString()} steps a day, right in range of your ${p.stepGoal.toLocaleString()} goal.`);
-  if(avgProtein!==null && avgProtein>=targetProteinG*0.9) positives.push(`Protein averaged ${Math.round(avgProtein)}g a day — right where you want it for your goal.`);
-  if(nAvg!==null && nAvg>=75) positives.push(`Nutrition scored ${nAvg}/100 on average — your calories and macros were well balanced.`);
-  if(aAvg!==null && aAvg>=75) positives.push(`Activity scored ${aAvg}/100 on average — steps and active minutes were strong.`);
-  if(wScore!==null && wScore>=75) positives.push(`Your weight trend tracked closely with your ${p.goalType} goal of ${p.ratePerWeekLb} lb/week — right on plan.`);
-  if(positives.length===0 && metrics.length>0){
+  // Positives: consistency (nutrition + activity tracking) plus the single strongest metric.
+  const positives = [
+    `Nutrition: You tracked ${loggedDays} day${loggedDays===1?'':'s'} this ${periodLabel}.`,
+    `Activity: You tracked data ${activityDays} day${activityDays===1?'':'s'} this ${periodLabel}.`
+  ];
+  if(metrics.length>0){
     const best = metrics.slice().sort((a,b)=>b.score-a.score)[0];
-    positives.push(`${best.label} was your strongest area at ${best.score}/100 — a real bright spot this period.`);
+    const highlight = {
+      nutrition: `Nutrition scored ${best.score}/100 on average — your calories and macros were well balanced.`,
+      activity: `Activity scored ${best.score}/100 on average — steps and active minutes were strong.`,
+      weight: `Your weight trend tracked closely with your ${p.goalType} goal of ${p.ratePerWeekLb} lb/week.`
+    }[best.key];
+    positives.push(`Top Highlight: ${highlight}`);
   }
-  if(positives.length<2) positives.push(`You showed up and tracked your data — that habit is what compounds into results over time.`);
-  if(positives.length<3 && loggedDays>0) positives.push(`Every day you logged gave you real data to work with instead of guessing — that's a win in itself.`);
 
   // One focus — small, specific, and doable, not a scolding.
   let focus = null;
@@ -629,6 +642,11 @@ function renderOnboarding(){
         <label>Target rate (lb/week)</label>
         <input type="number" step="0.1" id="ob-rate" placeholder="1.0" value="1.0">
       </div>
+      <div class="field">
+        <label>Daily calorie goal</label>
+        <input type="number" id="ob-calgoal" placeholder="calculated from your info above">
+        <div class="muted" style="margin-top:6px;">Calculated from your age/sex/height/weight and weekly goal — edit if you'd rather set your own.</div>
+      </div>
       <div class="field-row">
         <div class="field"><label>Daily step goal</label><input type="number" id="ob-steps" placeholder="8000" value="8000"></div>
         <div class="field"><label>Active min goal</label><input type="number" id="ob-min" placeholder="30" value="30"></div>
@@ -645,10 +663,31 @@ function renderOnboarding(){
 
   const goalSeg = wrap.querySelector('#ob-goal');
   let goalType = 'lose';
+  const calGoalInput = wrap.querySelector('#ob-calgoal');
+  let calGoalTouched = false;
+  calGoalInput.addEventListener('input', ()=>{ calGoalTouched = true; });
+  function refreshCalGoalSuggestion(){
+    if(calGoalTouched) return;
+    const age = Number(wrap.querySelector('#ob-age').value)||0;
+    const height = Number(wrap.querySelector('#ob-height').value)||0;
+    const weight = Number(wrap.querySelector('#ob-weight').value)||0;
+    const rate = Number(wrap.querySelector('#ob-rate').value)||0;
+    if(!age||!height||!weight) return;
+    calGoalInput.value = suggestedCalorieGoal({
+      age, sex: wrap.querySelector('#ob-sex').value, heightIn: height, weightLb: weight,
+      goalType, ratePerWeekLb: goalType==='maintain'?0:rate
+    });
+  }
+  ['ob-age','ob-height','ob-weight','ob-rate','ob-sex'].forEach(id=>{
+    const el = wrap.querySelector('#'+id);
+    el.addEventListener('input', refreshCalGoalSuggestion);
+    el.addEventListener('change', refreshCalGoalSuggestion);
+  });
   goalSeg.querySelectorAll('button').forEach(b=>b.addEventListener('click', ()=>{
     goalSeg.querySelectorAll('button').forEach(x=>x.classList.remove('active'));
     b.classList.add('active'); goalType = b.dataset.v;
     wrap.querySelector('#ob-rate-field').style.display = goalType==='maintain' ? 'none' : 'block';
+    refreshCalGoalSuggestion();
   }));
 
   wrap.querySelector('#ob-save').addEventListener('click', ()=>{
@@ -659,9 +698,11 @@ function renderOnboarding(){
     const min = Number(wrap.querySelector('#ob-min').value)||30;
     const rate = Number(wrap.querySelector('#ob-rate').value)||0;
     if(!age||!height||!weight){ alert('Please fill in age, height, and weight.'); return; }
+    const sex = wrap.querySelector('#ob-sex').value;
+    const calGoal = Number(calGoalInput.value) || suggestedCalorieGoal({age, sex, heightIn:height, weightLb:weight, goalType, ratePerWeekLb: goalType==='maintain'?0:rate});
     state.profile = {
-      age, sex: wrap.querySelector('#ob-sex').value, heightIn: height, weightLb: weight,
-      goalType, ratePerWeekLb: goalType==='maintain'?0:rate, stepGoal:steps, activeMinGoal:min
+      age, sex, heightIn: height, weightLb: weight,
+      goalType, ratePerWeekLb: goalType==='maintain'?0:rate, stepGoal:steps, activeMinGoal:min, calorieGoal: calGoal
     };
     getDay(today()).weightLb = weight;
     saveState();
@@ -782,8 +823,10 @@ function openActivityModal(){
 function openNutritionModal(){
   const t = today();
   const totals = dayTotals(t), targets = dailyTargets(state.profile, getDay(t).activity.kcal);
+  const week = weekCalorieProgress(t);
   openInfoModal('Nutrition', `
-    ${bigStatRow(Math.round(totals.kcal).toLocaleString(), 'Calories', `/ ${targets.kcal.toLocaleString()} target`)}
+    ${bigStatRow(Math.round(totals.kcal).toLocaleString(), 'Calories today', `/ ${targets.kcal.toLocaleString()} goal`)}
+    ${bigStatRow(Math.round(week.consumed).toLocaleString(), 'Calories this week', `/ ${Math.round(week.goal).toLocaleString()} goal`)}
     ${bigStatRow(Math.round(totals.protein), 'Protein (g)', `/ ${targets.proteinG}g target`)}
   `);
 }
@@ -966,6 +1009,7 @@ function screenToday(){
   const totals = dayTotals(t), targets = dailyTargets(p, d.activity.kcal);
   const stepPct = clamp(p.stepGoal>0 ? d.activity.steps/p.stepGoal*100 : 0, 0, 100);
   const calPct = clamp(targets.kcal>0 ? totals.kcal/targets.kcal*100 : 0, 0, 100);
+  const weekCal = weekCalorieProgress(t);
 
   const {start:ws, end:we} = weekRange(t);
   const weekDates = datesBetween(ws, t);
@@ -977,7 +1021,7 @@ function screenToday(){
     return '';
   }
   const weekRemain = (dayOfWeek(t)===0?0:7-dayOfWeek(t));
-  const weekFeedback = sunday ? buildFeedback(weekDates) : null; // week is complete today, so this is the real score, not a projection
+  const weekFeedback = sunday ? buildFeedback(weekDates, 'week') : null; // week is complete today, so this is the real score, not a projection
 
   const {start:ms} = monthRange(t);
   const monthDates = datesBetween(ms, t);
@@ -986,7 +1030,7 @@ function screenToday(){
   const daysInMonth = new Date(dNow.getFullYear(), dNow.getMonth()+1, 0).getDate();
   const monthRemain = daysInMonth - dNow.getDate();
   const monthEnd = dNow.getDate()===daysInMonth;
-  const monthFeedback = monthEnd ? buildFeedback(monthDates) : null; // month is complete today, so this is the real score, not a projection
+  const monthFeedback = monthEnd ? buildFeedback(monthDates, 'month') : null; // month is complete today, so this is the real score, not a projection
 
   const chartsOn = state.settings.charts;
 
@@ -997,7 +1041,7 @@ function screenToday(){
       <div class="score-trio">
         <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, 'Total Score', undefined, 'var(--blue)')}</div>
         <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, null, stepPct, 'var(--critical)')}<div class="cap">Steps<br><span style="font-size:11px;">${d.activity.activeMin} min · ${(d.activity.distanceMi||0).toFixed(1)} mi</span></div></div>
-        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, null, calPct, 'var(--good)')}<div class="cap">Calories</div></div>
+        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, null, calPct, 'var(--good)')}<div class="cap">Calories<br><span style="font-size:11px;">wk: ${formatCompact(weekCal.consumed)}/${formatCompact(weekCal.goal)}</span></div></div>
       </div>
     </div>
 
@@ -1174,7 +1218,7 @@ function screenHistory(){
   const range = historyMode==='week' ? weekRange(t) : monthRange(t);
   const rangeEnd = range.end < t ? range.end : t;
   const dates = datesBetween(range.start, rangeEnd);
-  const fb = buildFeedback(dates);
+  const fb = buildFeedback(dates, historyMode);
   const oAvg = avgScore(dates, dayOverallScore);
 
   const chips = dates.map(d=>{
@@ -1243,6 +1287,13 @@ function screenSettings(){
         </div>
       </div>
       <div class="field"><label>Target rate (lb/week)</label><input type="number" step="0.1" id="s-rate" value="${p.ratePerWeekLb}"></div>
+      <div class="field">
+        <label>Daily calorie goal</label>
+        <div class="field-row">
+          <input type="number" id="s-calgoal" value="${p.calorieGoal||suggestedCalorieGoal(p)}" style="flex:2;">
+          <button class="btn-secondary" id="s-calgoal-suggest" style="flex:1;">Suggest</button>
+        </div>
+      </div>
       <div class="field-row">
         <div class="field"><label>Daily step goal</label><input type="number" id="s-steps" value="${p.stepGoal}"></div>
         <div class="field"><label>Active min goal</label><input type="number" id="s-min" value="${p.activeMinGoal}"></div>
@@ -1306,7 +1357,10 @@ async function startGoogleHealthAuth(){
     client_id: clientId, response_type:'code', redirect_uri: ghRedirectUri(),
     scope: GH_SCOPES, access_type:'offline', prompt:'consent', include_granted_scopes:'true'
   });
-  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+  // location.replace (not .href) so this doesn't push a new history entry — otherwise
+  // the back gesture has to step through the Google consent page before reaching
+  // wherever the user actually was before connecting, instead of going back one step.
+  location.replace('https://accounts.google.com/o/oauth2/v2/auth?' + params.toString());
 }
 async function handleGoogleHealthRedirect(){
   const url = new URL(location.href);
@@ -1569,6 +1623,17 @@ function attachHandlers(){
   if(sGoal) sGoal.querySelectorAll('button').forEach(b=>b.addEventListener('click', ()=>{
     sGoal.querySelectorAll('button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
   }));
+  const sCalGoalSuggest = document.getElementById('s-calgoal-suggest');
+  if(sCalGoalSuggest) sCalGoalSuggest.addEventListener('click', ()=>{
+    const goalType = sGoal.querySelector('.active').dataset.v;
+    document.getElementById('s-calgoal').value = suggestedCalorieGoal({
+      age: Number(document.getElementById('s-age').value),
+      sex: document.getElementById('s-sex').value,
+      heightIn: Number(document.getElementById('s-height').value),
+      weightLb: Number(document.getElementById('s-weight').value),
+      goalType, ratePerWeekLb: goalType==='maintain'?0:Number(document.getElementById('s-rate').value)||0
+    });
+  });
   const sSave = document.getElementById('s-save');
   if(sSave) sSave.addEventListener('click', ()=>{
     const goalType = sGoal.querySelector('.active').dataset.v;
@@ -1580,7 +1645,8 @@ function attachHandlers(){
       goalType,
       ratePerWeekLb: goalType==='maintain'?0:Number(document.getElementById('s-rate').value)||0,
       stepGoal: Number(document.getElementById('s-steps').value)||8000,
-      activeMinGoal: Number(document.getElementById('s-min').value)||30
+      activeMinGoal: Number(document.getElementById('s-min').value)||30,
+      calorieGoal: Number(document.getElementById('s-calgoal').value)||null
     };
     saveState(); alert('Profile saved.'); render();
   });
