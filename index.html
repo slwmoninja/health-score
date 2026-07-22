@@ -205,6 +205,7 @@ input,select{font-family:inherit;}
   font-size:17px;font-weight:800;line-height:1;display:flex;align-items:center;justify-content:center;flex:none;
   box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);}
 .quick-add:active{transform:translateY(1px);box-shadow:none;}
+.quick-add.red{background:var(--critical);}
 </style>
 </head>
 <body>
@@ -879,7 +880,7 @@ function screenToday(){
     </div>
 
     ${chartsOn.activity ? `<div class="card">
-      ${collapsibleHead('Activity', 'activity', 'activity')}
+      ${collapsibleHead('Activity', 'activity', 'activity', '<button class="quick-add red" data-quick-nav="log" title="Log activity">+</button>')}
       <div class="${sectionOpen.activity?'':'hidden'}">
         <div style="display:flex;gap:10px;">
           <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Steps</div><div class="chart" id="chart-steps"></div></div>
