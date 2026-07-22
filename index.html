@@ -189,6 +189,22 @@ input,select{font-family:inherit;}
 .stat-pair{display:flex;align-items:baseline;gap:8px;margin-bottom:4px;}
 .stat-pair .big{font-size:32px;font-weight:800;}
 .stat-pair .of{font-size:13px;color:var(--muted);}
+
+/* ---- trio stat (steps/distance/active min infographic) ---- */
+.trio{display:flex;gap:10px;}
+.trio-col{flex:1;text-align:center;}
+.trio-col .n{font-size:23px;font-weight:800;line-height:1.1;}
+.trio-col .l{font-size:11.5px;color:var(--muted);margin:2px 0 6px;}
+
+/* ---- collapsible section header ---- */
+.section-toggle{display:flex;align-items:center;gap:6px;flex:1;cursor:pointer;}
+.section-toggle h3{margin-bottom:0;}
+.chevron{width:16px;height:16px;color:var(--muted);flex:none;transition:transform .15s;}
+.chevron.open{transform:rotate(180deg);}
+.quick-add{width:26px;height:26px;border-radius:50%;border:none;background:var(--good);color:#fff;
+  font-size:17px;font-weight:800;line-height:1;display:flex;align-items:center;justify-content:center;flex:none;
+  box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);}
+.quick-add:active{transform:translateY(1px);box-shadow:none;}
 </style>
 </head>
 <body>
@@ -198,7 +214,6 @@ input,select{font-family:inherit;}
 
 <div class="bottomnav" id="bottomnav">
   <button class="navbtn" data-tab="today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9M5 10v10h14V10"/></svg>Today</button>
-  <button class="navbtn" data-tab="log"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>Log</button>
   <button class="navbtn" data-tab="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5M12 7v5l4 2"/></svg>History</button>
   <button class="navbtn" data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1z"/></svg>Settings</button>
 </div>
@@ -737,6 +752,19 @@ function trendLineChart(series, labels){
   });
   return svg;
 }
+// Folded by default — tap the title to drill down into detail. State is per-session
+// (module-level), not persisted, so sections start collapsed again on a fresh visit.
+let sectionOpen = {activity:false, nutrition:false, totals:false};
+function collapsibleHead(title, key, infoId, leadingHtml){
+  const open = !!sectionOpen[key];
+  return `<div class="card-head">
+    ${leadingHtml||''}
+    <div class="section-toggle" data-toggle="${key}"><h3>${title}</h3>
+      <svg class="chevron ${open?'open':''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+    ${infoId?infoBtnHtml(infoId):''}
+  </div>`;
+}
 function progRow(label, value, target, unit, color){
   const pct = clamp(target>0 ? (value/target*100) : 0, 0, 100);
   return `<div class="prog-row">
@@ -813,28 +841,69 @@ function screenToday(){
   }
   const chartsOn = state.settings.charts;
   const d = getDay(t);
+  const stepPct = clamp(p.stepGoal>0 ? d.activity.steps/p.stepGoal*100 : 0, 0, 100);
+  const activeMinPct = clamp(p.activeMinGoal>0 ? d.activity.activeMin/p.activeMinGoal*100 : 0, 0, 100);
+  const calPct = clamp(targets.kcal>0 ? totals.kcal/targets.kcal*100 : 0, 0, 100);
 
   return `
   <div class="topbar"><h1>Today</h1><div class="muted" id="today-date"></div></div>
   <div class="screen">
     <div class="card score-hero">
-      <div class="ring-wrap">${scoreRing(oScore)}<div class="ring-label"><div class="num">${oScore===null?'--':oScore}</div><div class="lbl">Today's Score</div></div></div>
-      <div class="row" style="width:100%;justify-content:center;gap:18px;margin-top:6px;">
-        <div class="muted">Nutrition: <strong style="color:var(--text)">${nScore===null?'--':nScore}</strong></div>
-        <div class="muted">Activity: <strong style="color:var(--text)">${aScore===null?'--':aScore}</strong></div>
+      <div class="ring-wrap">${scoreRing(oScore)}<div class="ring-label"><div class="num">${oScore===null?'--':oScore}</div><div class="lbl">Total Score</div></div></div>
+    </div>
+
+    <div class="card">
+      <h3>Steps · Distance · Active Min</h3>
+      <div class="trio">
+        <div class="trio-col">
+          <div class="n">${d.activity.steps.toLocaleString()}</div>
+          <div class="l">Steps</div>
+          <div class="prog-track"><div class="prog-fill" style="width:${stepPct}%;background:var(--blue)"></div></div>
+        </div>
+        <div class="trio-col">
+          <div class="n">${(d.activity.distanceMi||0).toFixed(1)}</div>
+          <div class="l">Miles</div>
+        </div>
+        <div class="trio-col">
+          <div class="n">${d.activity.activeMin}</div>
+          <div class="l">Active min</div>
+          <div class="prog-track"><div class="prog-fill" style="width:${activeMinPct}%;background:var(--aqua)"></div></div>
+        </div>
       </div>
     </div>
 
+    <div class="card">
+      <h3>Total Calories</h3>
+      <div class="stat-pair"><span class="big">${Math.round(totals.kcal).toLocaleString()}</span><span class="of">/ ${targets.kcal.toLocaleString()} target</span></div>
+      <div class="prog-track"><div class="prog-fill" style="width:${calPct}%;background:var(--blue)"></div></div>
+    </div>
+
     ${chartsOn.activity ? `<div class="card">
-      <div class="card-head"><h3>Activity</h3>${infoBtnHtml('activity')}</div>
-      <div style="display:flex;gap:10px;">
-        <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Steps</div><div class="chart" id="chart-steps"></div></div>
-        <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Active min</div><div class="chart" id="chart-activemin"></div></div>
-        <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Distance (mi)</div><div class="chart" id="chart-distance"></div></div>
+      ${collapsibleHead('Activity', 'activity', 'activity')}
+      <div class="${sectionOpen.activity?'':'hidden'}">
+        <div style="display:flex;gap:10px;">
+          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Steps</div><div class="chart" id="chart-steps"></div></div>
+          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Active min</div><div class="chart" id="chart-activemin"></div></div>
+          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Distance (mi)</div><div class="chart" id="chart-distance"></div></div>
+        </div>
+        <div class="legend">
+          <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
+          <div class="legend-item"><span class="swatch" style="background:var(--blue)"></span>Today</div>
+        </div>
       </div>
-      <div class="legend">
-        <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
-        <div class="legend-item"><span class="swatch" style="background:var(--blue)"></span>Today</div>
+    </div>` : ''}
+
+    ${chartsOn.nutrition ? `<div class="card">
+      ${collapsibleHead('Nutrition', 'nutrition', 'nutrition', '<button class="quick-add" data-quick-nav="log" title="Log nutrition">+</button>')}
+      <div class="${sectionOpen.nutrition?'':'hidden'}">
+        <div style="display:flex;gap:10px;">
+          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Calories</div><div class="chart" id="chart-calories"></div></div>
+          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Protein (g)</div><div class="chart" id="chart-protein"></div></div>
+        </div>
+        <div class="legend">
+          <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
+          <div class="legend-item"><span class="swatch" style="background:var(--aqua)"></span>Today</div>
+        </div>
       </div>
     </div>` : ''}
 
@@ -849,27 +918,19 @@ function screenToday(){
         <div class="stat-pair"><span class="big">${weekAvg===null?'--':weekAvg}</span><span class="of">/100 · ${weekRemain}d to Sunday</span></div>
         <div class="muted">${weekAvg===null?'Log today to start the trend.':paceMsg(weekAvg)}</div>
       `}
-      ${chartsOn.nutrition ? `
-        <div style="display:flex;gap:10px;margin-top:14px;">
-          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Calories</div><div class="chart" id="chart-calories"></div></div>
-          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Protein (g)</div><div class="chart" id="chart-protein"></div></div>
-        </div>
-        <div class="legend">
-          <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
-          <div class="legend-item"><span class="swatch" style="background:var(--aqua)"></span>Today</div>
-        </div>
-      ` : ''}
     </div>` : ''}
 
     <div class="card">
-      <h3>Today's totals</h3>
-      ${progRow('Calories', totals.kcal, targets.kcal, '', 'var(--blue)')}
-      ${progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)')}
-      ${progRow('Carbs', totals.carbs, targets.carbG, 'g', 'var(--yellow)')}
-      ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--orange)')}
-      ${progRow('Steps', d.activity.steps, p.stepGoal, '', 'var(--blue)')}
-      ${progRow('Active min', d.activity.activeMin, p.activeMinGoal, '', 'var(--aqua)')}
-      <div class="row" style="margin-top:8px;"><span class="text2">Distance</span><span>${(d.activity.distanceMi||0).toFixed(1)} mi</span></div>
+      ${collapsibleHead("Today's totals", 'totals', null)}
+      <div class="${sectionOpen.totals?'':'hidden'}">
+        ${progRow('Calories', totals.kcal, targets.kcal, '', 'var(--blue)')}
+        ${progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)')}
+        ${progRow('Carbs', totals.carbs, targets.carbG, 'g', 'var(--yellow)')}
+        ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--orange)')}
+        ${progRow('Steps', d.activity.steps, p.stepGoal, '', 'var(--blue)')}
+        ${progRow('Active min', d.activity.activeMin, p.activeMinGoal, '', 'var(--aqua)')}
+        <div class="row" style="margin-top:8px;"><span class="text2">Distance</span><span>${(d.activity.distanceMi||0).toFixed(1)} mi</span></div>
+      </div>
     </div>
   </div>`;
 }
@@ -1342,6 +1403,9 @@ function mountCharts(){
 
 function attachHandlers(){
   document.querySelectorAll('.navbtn').forEach(b=>b.addEventListener('click', ()=>{ activeTab=b.dataset.tab; render(); }));
+  document.querySelectorAll('[data-quick-nav]').forEach(b=>b.addEventListener('click', e=>{
+    e.stopPropagation(); activeTab=b.dataset.quickNav; render();
+  }));
   wireInfoButtons(document);
   document.querySelectorAll('[data-chart-toggle]').forEach(b=>b.addEventListener('click', ()=>{
     const key = b.dataset.chartToggle;
