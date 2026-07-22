@@ -369,81 +369,82 @@ function checkGoalsAndCelebrate(iso){
 /* =========================================================
    FOOD DATABASE  (per=amount the macros describe; unit 'g'/'ml'/'ea')
    ========================================================= */
+// ir = iron (mg), ca = calcium (mg) per the stated amount, alongside the existing macros
 const FOOD_DB = [
-{n:"Chicken breast, cooked",per:100,u:"g",k:165,p:31,c:0,f:3.6},
-{n:"Chicken thigh, cooked",per:100,u:"g",k:209,p:26,c:0,f:10.9},
-{n:"Ground beef 85/15, cooked",per:100,u:"g",k:215,p:26,c:0,f:12},
-{n:"Ground turkey 93/7, cooked",per:100,u:"g",k:176,p:27,c:0,f:7},
-{n:"Salmon, cooked",per:100,u:"g",k:206,p:22,c:0,f:12},
-{n:"Tuna, canned in water",per:100,u:"g",k:116,p:26,c:0,f:1},
-{n:"Shrimp, cooked",per:100,u:"g",k:99,p:24,c:0.2,f:0.3},
-{n:"Bacon",per:1,u:"slice",k:43,p:3,c:0.1,f:3.3},
-{n:"Egg, small",per:1,u:"egg",k:54,p:4.8,c:0.4,f:3.6},
-{n:"Egg, medium",per:1,u:"egg",k:63,p:5.5,c:0.4,f:4.2},
-{n:"Egg, large",per:1,u:"egg",k:72,p:6.3,c:0.4,f:4.8},
-{n:"Egg, extra large",per:1,u:"egg",k:80,p:7,c:0.4,f:5.4},
-{n:"Egg white",per:1,u:"egg white",k:17,p:3.6,c:0.2,f:0.1},
-{n:"Tofu, firm",per:100,u:"g",k:144,p:15.8,c:2.8,f:8.7},
-{n:"Greek yogurt, plain nonfat",per:100,u:"g",k:59,p:10,c:3.6,f:0.4},
-{n:"Cottage cheese, low fat",per:100,u:"g",k:72,p:10,c:4,f:1.5},
-{n:"Whey protein powder",per:1,u:"scoop (30g)",k:120,p:24,c:3,f:1.5},
-{n:"White rice, cooked",per:100,u:"g",k:130,p:2.7,c:28,f:0.3},
-{n:"Brown rice, cooked",per:100,u:"g",k:123,p:2.7,c:26,f:1},
-{n:"Quinoa, cooked",per:100,u:"g",k:120,p:4.4,c:21,f:1.9},
-{n:"Oats, dry",per:100,u:"g",k:389,p:16.9,c:66,f:6.9},
-{n:"Whole wheat bread",per:1,u:"slice",k:81,p:4,c:14,f:1.1},
-{n:"White bread",per:1,u:"slice",k:75,p:2.6,c:14,f:1},
-{n:"Pasta, cooked",per:100,u:"g",k:131,p:5,c:25,f:1.1},
-{n:"Tortilla, flour, medium",per:1,u:"tortilla",k:140,p:4,c:24,f:3.5},
-{n:"Sweet potato, baked",per:100,u:"g",k:90,p:2,c:21,f:0.1},
-{n:"Potato, baked",per:100,u:"g",k:93,p:2.5,c:21,f:0.1},
-{n:"Cereal, generic",per:100,u:"g",k:378,p:7,c:84,f:2},
-{n:"Banana",per:1,u:"banana",k:105,p:1.3,c:27,f:0.4},
-{n:"Apple",per:1,u:"apple",k:95,p:0.5,c:25,f:0.3},
-{n:"Orange",per:1,u:"orange",k:62,p:1.2,c:15,f:0.2},
-{n:"Blueberries",per:100,u:"g",k:57,p:0.7,c:14,f:0.3},
-{n:"Strawberries",per:100,u:"g",k:32,p:0.7,c:7.7,f:0.3},
-{n:"Broccoli, cooked",per:100,u:"g",k:35,p:2.4,c:7,f:0.4},
-{n:"Spinach, raw",per:100,u:"g",k:23,p:2.9,c:3.6,f:0.4},
-{n:"Mixed salad greens",per:100,u:"g",k:15,p:1.4,c:2.9,f:0.2},
-{n:"Carrots, raw",per:100,u:"g",k:41,p:0.9,c:10,f:0.2},
-{n:"Green beans, cooked",per:100,u:"g",k:35,p:1.8,c:8,f:0.2},
-{n:"Avocado",per:1,u:"avocado",k:234,p:2.9,c:12,f:21},
-{n:"Milk, 2%",per:100,u:"ml",k:50,p:3.3,c:4.8,f:2},
-{n:"Almond milk, unsweetened",per:100,u:"ml",k:13,p:0.4,c:0.6,f:1.1},
-{n:"Cheddar cheese",per:100,u:"g",k:403,p:25,c:1.3,f:33},
-{n:"Butter",per:1,u:"tbsp (14g)",k:102,p:0.1,c:0,f:11.5},
-{n:"Olive oil",per:1,u:"tbsp (14g)",k:119,p:0,c:0,f:13.5},
-{n:"Peanut butter",per:1,u:"tbsp (16g)",k:95,p:3.6,c:3.1,f:8.2},
-{n:"Almonds",per:100,u:"g",k:579,p:21,c:22,f:50},
-{n:"Hummus",per:100,u:"g",k:166,p:7.9,c:14,f:9.6},
-{n:"Big Mac",per:1,u:"sandwich",k:563,p:26,c:45,f:33},
-{n:"Chicken sandwich (fast food)",per:1,u:"sandwich",k:530,p:28,c:46,f:25},
-{n:"Cheese pizza",per:1,u:"slice",k:285,p:12,c:36,f:10},
-{n:"Burrito, chicken",per:1,u:"burrito",k:550,p:30,c:65,f:18},
-{n:"French fries, medium",per:1,u:"order",k:365,p:4,c:48,f:17},
-{n:"Caesar salad w/ chicken",per:1,u:"salad",k:350,p:30,c:12,f:20},
-{n:"Protein bar",per:1,u:"bar",k:200,p:20,c:22,f:7},
-{n:"Granola bar",per:1,u:"bar",k:140,p:3,c:22,f:5},
-{n:"Black coffee",per:1,u:"cup",k:2,p:0.3,c:0,f:0},
-{n:"Orange juice",per:100,u:"ml",k:45,p:0.7,c:10.4,f:0.2},
-{n:"Soda",per:100,u:"ml",k:42,p:0,c:10.6,f:0},
-{n:"Beer",per:1,u:"can (355ml)",k:153,p:1.6,c:13,f:0},
-{n:"Wine, red",per:1,u:"glass (150ml)",k:125,p:0.1,c:3.8,f:0},
-{n:"White rice, cooked, 1 cup",per:1,u:"cup",k:205,p:4.3,c:44.5,f:0.4},
-{n:"Brown rice, cooked, 1 cup",per:1,u:"cup",k:218,p:4.5,c:46,f:1.6},
-{n:"Oatmeal, cooked",per:1,u:"cup",k:166,p:6,c:28,f:3.6},
-{n:"Pasta, cooked, 1 cup",per:1,u:"cup",k:220,p:8,c:43,f:1.3},
-{n:"Milk, 2%, 1 cup",per:1,u:"cup",k:122,p:8,c:12,f:4.8},
-{n:"Blueberries, 1 cup",per:1,u:"cup",k:84,p:1.1,c:21,f:0.5},
-{n:"Broccoli, cooked, 1 cup",per:1,u:"cup",k:55,p:3.7,c:11,f:0.6},
-{n:"Greek yogurt, plain nonfat, 1 cup",per:1,u:"cup",k:144,p:24,c:9,f:1},
-{n:"Cereal, generic, 1 cup",per:1,u:"cup",k:113,p:2,c:25,f:0.6},
-{n:"Sugar, granulated, 1 tsp",per:1,u:"tsp",k:16,p:0,c:4,f:0},
-{n:"Sugar, granulated, 1 tbsp",per:1,u:"tbsp",k:48,p:0,c:12.6,f:0},
-{n:"Butter, 1 tsp",per:1,u:"tsp",k:34,p:0,c:0,f:3.8},
-{n:"Honey, 1 tsp",per:1,u:"tsp",k:21,p:0,c:5.7,f:0},
-{n:"Honey, 1 tbsp",per:1,u:"tbsp",k:64,p:0.1,c:17,f:0}
+{n:"Chicken breast, cooked",per:100,u:"g",k:165,p:31,c:0,f:3.6,ir:0.7,ca:15},
+{n:"Chicken thigh, cooked",per:100,u:"g",k:209,p:26,c:0,f:10.9,ir:1.3,ca:12},
+{n:"Ground beef 85/15, cooked",per:100,u:"g",k:215,p:26,c:0,f:12,ir:2.2,ca:18},
+{n:"Ground turkey 93/7, cooked",per:100,u:"g",k:176,p:27,c:0,f:7,ir:1.4,ca:15},
+{n:"Salmon, cooked",per:100,u:"g",k:206,p:22,c:0,f:12,ir:0.5,ca:12},
+{n:"Tuna, canned in water",per:100,u:"g",k:116,p:26,c:0,f:1,ir:1.0,ca:11},
+{n:"Shrimp, cooked",per:100,u:"g",k:99,p:24,c:0.2,f:0.3,ir:0.5,ca:70},
+{n:"Bacon",per:1,u:"slice",k:43,p:3,c:0.1,f:3.3,ir:0.2,ca:1},
+{n:"Egg, small",per:1,u:"egg",k:54,p:4.8,c:0.4,f:3.6,ir:0.6,ca:21},
+{n:"Egg, medium",per:1,u:"egg",k:63,p:5.5,c:0.4,f:4.2,ir:0.7,ca:24},
+{n:"Egg, large",per:1,u:"egg",k:72,p:6.3,c:0.4,f:4.8,ir:0.9,ca:28},
+{n:"Egg, extra large",per:1,u:"egg",k:80,p:7,c:0.4,f:5.4,ir:1.0,ca:31},
+{n:"Egg white",per:1,u:"egg white",k:17,p:3.6,c:0.2,f:0.1,ir:0.03,ca:2},
+{n:"Tofu, firm",per:100,u:"g",k:144,p:15.8,c:2.8,f:8.7,ir:5.4,ca:350},
+{n:"Greek yogurt, plain nonfat",per:100,u:"g",k:59,p:10,c:3.6,f:0.4,ir:0.1,ca:110},
+{n:"Cottage cheese, low fat",per:100,u:"g",k:72,p:10,c:4,f:1.5,ir:0.1,ca:83},
+{n:"Whey protein powder",per:1,u:"scoop (30g)",k:120,p:24,c:3,f:1.5,ir:0.5,ca:120},
+{n:"White rice, cooked",per:100,u:"g",k:130,p:2.7,c:28,f:0.3,ir:0.2,ca:10},
+{n:"Brown rice, cooked",per:100,u:"g",k:123,p:2.7,c:26,f:1,ir:0.5,ca:10},
+{n:"Quinoa, cooked",per:100,u:"g",k:120,p:4.4,c:21,f:1.9,ir:1.5,ca:17},
+{n:"Oats, dry",per:100,u:"g",k:389,p:16.9,c:66,f:6.9,ir:4.7,ca:54},
+{n:"Whole wheat bread",per:1,u:"slice",k:81,p:4,c:14,f:1.1,ir:0.9,ca:30},
+{n:"White bread",per:1,u:"slice",k:75,p:2.6,c:14,f:1,ir:0.7,ca:40},
+{n:"Pasta, cooked",per:100,u:"g",k:131,p:5,c:25,f:1.1,ir:0.5,ca:7},
+{n:"Tortilla, flour, medium",per:1,u:"tortilla",k:140,p:4,c:24,f:3.5,ir:1.3,ca:60},
+{n:"Sweet potato, baked",per:100,u:"g",k:90,p:2,c:21,f:0.1,ir:0.7,ca:30},
+{n:"Potato, baked",per:100,u:"g",k:93,p:2.5,c:21,f:0.1,ir:1.1,ca:12},
+{n:"Cereal, generic",per:100,u:"g",k:378,p:7,c:84,f:2,ir:8,ca:100},
+{n:"Banana",per:1,u:"banana",k:105,p:1.3,c:27,f:0.4,ir:0.3,ca:6},
+{n:"Apple",per:1,u:"apple",k:95,p:0.5,c:25,f:0.3,ir:0.2,ca:11},
+{n:"Orange",per:1,u:"orange",k:62,p:1.2,c:15,f:0.2,ir:0.2,ca:52},
+{n:"Blueberries",per:100,u:"g",k:57,p:0.7,c:14,f:0.3,ir:0.3,ca:6},
+{n:"Strawberries",per:100,u:"g",k:32,p:0.7,c:7.7,f:0.3,ir:0.4,ca:16},
+{n:"Broccoli, cooked",per:100,u:"g",k:35,p:2.4,c:7,f:0.4,ir:0.7,ca:40},
+{n:"Spinach, raw",per:100,u:"g",k:23,p:2.9,c:3.6,f:0.4,ir:2.7,ca:99},
+{n:"Mixed salad greens",per:100,u:"g",k:15,p:1.4,c:2.9,f:0.2,ir:0.9,ca:33},
+{n:"Carrots, raw",per:100,u:"g",k:41,p:0.9,c:10,f:0.2,ir:0.3,ca:33},
+{n:"Green beans, cooked",per:100,u:"g",k:35,p:1.8,c:8,f:0.2,ir:1.0,ca:37},
+{n:"Avocado",per:1,u:"avocado",k:234,p:2.9,c:12,f:21,ir:1.1,ca:24},
+{n:"Milk, 2%",per:100,u:"ml",k:50,p:3.3,c:4.8,f:2,ir:0.0,ca:120},
+{n:"Almond milk, unsweetened",per:100,u:"ml",k:13,p:0.4,c:0.6,f:1.1,ir:0.3,ca:180},
+{n:"Cheddar cheese",per:100,u:"g",k:403,p:25,c:1.3,f:33,ir:0.7,ca:720},
+{n:"Butter",per:1,u:"tbsp (14g)",k:102,p:0.1,c:0,f:11.5,ir:0.0,ca:3},
+{n:"Olive oil",per:1,u:"tbsp (14g)",k:119,p:0,c:0,f:13.5,ir:0.1,ca:0},
+{n:"Peanut butter",per:1,u:"tbsp (16g)",k:95,p:3.6,c:3.1,f:8.2,ir:0.3,ca:7},
+{n:"Almonds",per:100,u:"g",k:579,p:21,c:22,f:50,ir:3.7,ca:269},
+{n:"Hummus",per:100,u:"g",k:166,p:7.9,c:14,f:9.6,ir:1.6,ca:38},
+{n:"Big Mac",per:1,u:"sandwich",k:563,p:26,c:45,f:33,ir:4.0,ca:200},
+{n:"Chicken sandwich (fast food)",per:1,u:"sandwich",k:530,p:28,c:46,f:25,ir:2.5,ca:100},
+{n:"Cheese pizza",per:1,u:"slice",k:285,p:12,c:36,f:10,ir:1.5,ca:180},
+{n:"Burrito, chicken",per:1,u:"burrito",k:550,p:30,c:65,f:18,ir:3.5,ca:200},
+{n:"French fries, medium",per:1,u:"order",k:365,p:4,c:48,f:17,ir:0.8,ca:15},
+{n:"Caesar salad w/ chicken",per:1,u:"salad",k:350,p:30,c:12,f:20,ir:1.5,ca:150},
+{n:"Protein bar",per:1,u:"bar",k:200,p:20,c:22,f:7,ir:2.0,ca:100},
+{n:"Granola bar",per:1,u:"bar",k:140,p:3,c:22,f:5,ir:0.7,ca:20},
+{n:"Black coffee",per:1,u:"cup",k:2,p:0.3,c:0,f:0,ir:0.0,ca:5},
+{n:"Orange juice",per:100,u:"ml",k:45,p:0.7,c:10.4,f:0.2,ir:0.2,ca:11},
+{n:"Soda",per:100,u:"ml",k:42,p:0,c:10.6,f:0,ir:0.0,ca:0},
+{n:"Beer",per:1,u:"can (355ml)",k:153,p:1.6,c:13,f:0,ir:0.1,ca:14},
+{n:"Wine, red",per:1,u:"glass (150ml)",k:125,p:0.1,c:3.8,f:0,ir:0.5,ca:12},
+{n:"White rice, cooked, 1 cup",per:1,u:"cup",k:205,p:4.3,c:44.5,f:0.4,ir:0.4,ca:16},
+{n:"Brown rice, cooked, 1 cup",per:1,u:"cup",k:218,p:4.5,c:46,f:1.6,ir:0.8,ca:20},
+{n:"Oats, cooked",per:1,u:"cup",k:166,p:6,c:28,f:3.6,ir:2.0,ca:20},
+{n:"Pasta, cooked, 1 cup",per:1,u:"cup",k:220,p:8,c:43,f:1.3,ir:0.9,ca:10},
+{n:"Milk, 2%, 1 cup",per:1,u:"cup",k:122,p:8,c:12,f:4.8,ir:0.1,ca:293},
+{n:"Blueberries, 1 cup",per:1,u:"cup",k:84,p:1.1,c:21,f:0.5,ir:0.4,ca:9},
+{n:"Broccoli, cooked, 1 cup",per:1,u:"cup",k:55,p:3.7,c:11,f:0.6,ir:1.1,ca:62},
+{n:"Greek yogurt, plain nonfat, 1 cup",per:1,u:"cup",k:144,p:24,c:9,f:1,ir:0.2,ca:270},
+{n:"Cereal, generic, 1 cup",per:1,u:"cup",k:113,p:2,c:25,f:0.6,ir:2.4,ca:30},
+{n:"Sugar, granulated, 1 tsp",per:1,u:"tsp",k:16,p:0,c:4,f:0,ir:0,ca:0},
+{n:"Sugar, granulated, 1 tbsp",per:1,u:"tbsp",k:48,p:0,c:12.6,f:0,ir:0,ca:0},
+{n:"Butter, 1 tsp",per:1,u:"tsp",k:34,p:0,c:0,f:3.8,ir:0,ca:1},
+{n:"Honey, 1 tsp",per:1,u:"tsp",k:21,p:0,c:5.7,f:0,ir:0.03,ca:1},
+{n:"Honey, 1 tbsp",per:1,u:"tbsp",k:64,p:0.1,c:17,f:0,ir:0.1,ca:1}
 ];
 function allFoods(){ return FOOD_DB.concat(state.myFoods); }
 
@@ -469,18 +470,25 @@ function estimateActivityKcal(steps, activeMin){
 // moderate activity, matching what "active minutes" from Fitbit/Google Health
 // represent (moderate-to-vigorous exertion), so tracked active minutes are
 // multiplied by the person's actual body weight rather than a flat per-minute rate.
-function estimateCaloriesBurned(p, activeMinutes){
+// Takes the larger of two independent standard estimates rather than summing them,
+// so steps-only data (no active minutes logged) or minutes-only data both still
+// produce a real number, without double-counting when both stem from the same
+// activity (e.g. a brisk walk shows up in both steps and active minutes).
+function estimateCaloriesBurned(p, steps, activeMinutes){
+  const weightKg = lbToKg(p.weightLb);
+  const fromSteps = (steps||0) * weightKg * 0.0006; // ~0.04 kcal/step at a 68kg reference weight
   const MET = 4.0;
-  return Math.round((MET*3.5*lbToKg(p.weightLb)/200) * activeMinutes);
+  const fromActiveMin = (MET*3.5*weightKg/200) * (activeMinutes||0);
+  return Math.round(Math.max(fromSteps, fromActiveMin));
 }
 // Canonical "calories burned" for a day — prefers Google Health's own device-reported
-// figure when available (real, source-specific data), falling back to the MET estimate
-// for manually-entered days. Used both for display and for the weight-goal-impact math,
-// so both stay consistent with each other.
+// figure when available (real, source-specific data), falling back to the estimate
+// above for manually-entered days. Used both for display and for the weight-goal-
+// impact math, so both stay consistent with each other.
 function caloriesBurnedForDay(iso){
   const d = getDay(iso);
   if(d.activity.source==='googlehealth' && d.activity.kcal>0) return d.activity.kcal;
-  return estimateCaloriesBurned(state.profile, d.activity.activeMin);
+  return estimateCaloriesBurned(state.profile, d.activity.steps, d.activity.activeMin);
 }
 function weeklyGoalKcalAdjustment(p){
   const sign = p.goalType==='lose' ? -1 : p.goalType==='gain' ? 1 : 0;
@@ -524,11 +532,17 @@ function dailyTargets(p, activityKcal){
 }
 function dayTotals(iso){
   const d = getDay(iso);
-  const t = d.foods.reduce((a,f)=>({kcal:a.kcal+f.kcal,protein:a.protein+f.protein,carbs:a.carbs+f.carbs,fat:a.fat+f.fat}),
-    {kcal:0,protein:0,carbs:0,fat:0});
+  const t = d.foods.reduce((a,f)=>({
+    kcal:a.kcal+f.kcal, protein:a.protein+f.protein, carbs:a.carbs+f.carbs, fat:a.fat+f.fat,
+    iron:a.iron+(f.iron||0), calcium:a.calcium+(f.calcium||0)
+  }), {kcal:0,protein:0,carbs:0,fat:0,iron:0,calcium:0});
   return t;
 }
 function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
+// Standard adult RDAs — iron is notably sex-dependent (higher for menstruating women);
+// calcium steps up later in life. Simplified age bands rather than full life-stage tables.
+function ironRDA(p){ return p.sex==='male' ? 8 : 18; }
+function calciumRDA(p){ const olderThreshold = p.sex==='male' ? 71 : 51; return p.age>=olderThreshold ? 1200 : 1000; }
 // Calories consumed vs. goal for the week so far (Monday through iso) — the goal side
 // sums each day's own target since activity-based bonus calories vary day to day.
 function weekCalorieProgress(iso){
@@ -887,6 +901,8 @@ function openTotalsModal(){
     ${progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)')}
     ${progRow('Carbs', totals.carbs, targets.carbG, 'g', 'var(--yellow)')}
     ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--orange)')}
+    ${progRow('Iron', totals.iron, ironRDA(p), 'mg', 'var(--critical)')}
+    ${progRow('Calcium', totals.calcium, calciumRDA(p), 'mg', 'var(--muted)')}
     ${progRow('Steps', d.activity.steps, p.stepGoal, '', 'var(--blue)')}
     ${progRow('Active min', d.activity.activeMin, p.activeMinGoal, '', 'var(--aqua)')}
     <div class="row" style="margin-top:8px;"><span class="text2">Distance</span><span>${(d.activity.distanceMi||0).toFixed(1)} mi</span></div>
@@ -908,7 +924,6 @@ function openActivityModal(){
     ${bigStatRow(d.activity.activeMin, 'Active minutes', `/ ${p.activeMinGoal} goal`)}
     ${bigStatRow((d.activity.distanceMi||0).toFixed(1), 'Miles')}
     ${bigStatRow(burned.toLocaleString(), 'Est. calories burned')}
-    <div class="muted" style="margin-top:2px;">${d.activity.source==='googlehealth'?'From Google Health.':'MET-based estimate from your weight and active minutes — a standard exercise-science method, not a device measurement.'}</div>
     ${impactText ? `<div class="feedback-item" style="margin-top:10px;"><div class="dot" style="background:var(--good)"></div><div>${impactText}</div></div>` : ''}
   `);
 }
@@ -923,6 +938,8 @@ function openNutritionModal(){
     ${bigStatRow(Math.round(week.consumed).toLocaleString(), 'Calories this week', `/ ${Math.round(week.goal).toLocaleString()} goal`)}
     ${bigStatRow(Math.round(month.consumed).toLocaleString(), 'Calories this month', `/ ${Math.round(month.goal).toLocaleString()} goal`)}
     ${bigStatRow(Math.round(totals.protein), 'Protein (g)', `/ ${targets.proteinG}g target`)}
+    ${bigStatRow(totals.iron.toFixed(1), 'Iron (mg)', `/ ${ironRDA(p)}mg RDA`)}
+    ${bigStatRow(Math.round(totals.calcium), 'Calcium (mg)', `/ ${calciumRDA(p)}mg RDA`)}
     ${impactText ? `<div class="feedback-item" style="margin-top:10px;"><div class="dot" style="background:var(--good)"></div><div>${impactText}</div></div>` : ''}
   `);
 }
@@ -1075,6 +1092,22 @@ function formatCompact(n){
    TABS / RENDER
    ========================================================= */
 let activeTab = 'today';
+// This app never used to push any history entries of its own, so with nothing to
+// step through, the back gesture always exited straight past the app — regardless
+// of anything OAuth-related. Pushing one entry per tab switch means back walks
+// through Today/History/Settings first, only exiting the app once you're back at
+// the initial screen (which has nothing of ours before it).
+function goToTab(tab, focus){
+  activeTab = tab;
+  if(focus!==undefined) logFocus = focus;
+  history.pushState({tab, focus: focus===undefined?null:focus}, '');
+  render();
+}
+window.addEventListener('popstate', e=>{
+  activeTab = (e.state && e.state.tab) || 'today';
+  logFocus = (e.state && e.state.focus) || null;
+  render();
+});
 
 function render(){
   document.querySelectorAll('.navbtn').forEach(b=>b.classList.toggle('active', b.dataset.tab===activeTab));
@@ -1266,15 +1299,15 @@ function screenLog(){
     ${showActivity ? `<div class="card">
       <div class="card-head"><h3>Activity</h3>${infoBtnHtml('fitsync')}</div>
       <div class="field-row">
-        <div class="field"><label>Steps</label><input type="number" id="act-steps" value="${d.activity.steps||''}" placeholder="0"></div>
-        <div class="field"><label>Active minutes</label><input type="number" id="act-min" value="${d.activity.activeMin||''}" placeholder="0"></div>
+        <div class="field"><label>Steps</label><input type="number" id="act-steps" placeholder="Not entered"></div>
+        <div class="field"><label>Active minutes</label><input type="number" id="act-min" placeholder="Not entered"></div>
       </div>
-      <div class="field"><label>Distance (mi)</label><input type="number" step="0.1" id="act-dist" value="${d.activity.distanceMi||''}" placeholder="0"></div>
-      <div class="muted" style="margin-bottom:10px;">Saves automatically as you type.</div>
+      <div class="field"><label>Distance (mi)</label><input type="number" step="0.1" id="act-dist" placeholder="Not entered"></div>
+      <button class="btn-primary" id="btn-save-activity">Log activity</button>
+      <div style="height:8px"></div>
       ${state.googleHealth.refreshToken
         ? `<div class="row"><span class="muted">Google Health connected — syncs automatically</span><button class="iconbtn" id="btn-connect-fit" title="Sync now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg></button></div>`
         : `<button class="btn-secondary" id="btn-connect-fit">Connect Google Health (optional)</button>`}
-      <div class="muted" style="margin-top:8px;">${d.activity.source==='googlehealth'?'Synced from Google Health for today.':'Manual entry — tap ⓘ above for Google Health sync.'}</div>
     </div>` : ''}
   </div>`;
 }
@@ -1283,11 +1316,15 @@ function screenLog(){
 // popup — matches the earlier fix for "should stay in the text bar until Enter or a
 // suggestion is picked" by keeping everything in one continuous form.
 function selectFoodIntoForm(food){
+  // Read whatever the user already typed in Amount BEFORE render() below recreates
+  // the field (it has no value= binding, so a fresh render always wipes it blank).
+  const priorAmountEl = document.getElementById('food-amount');
+  const priorAmount = priorAmountEl ? Number(priorAmountEl.value) : 0;
   matchedFood = food;
   logFoodQuery = food.n;
   render();
   const remembered = state.foodMemory[food.n];
-  const amt = remembered ? remembered.qty : food.per;
+  const amt = priorAmount>0 ? priorAmount : (remembered ? remembered.qty : food.per);
   const amountEl = document.getElementById('food-amount');
   const kcalEl = document.getElementById('food-kcal');
   amountEl.value = amt;
@@ -1311,6 +1348,10 @@ function screenCustomFoodModal(){
         <div class="field"><label>Carbs (g)</label><input type="number" id="cf-c" value="0"></div>
         <div class="field"><label>Fat (g)</label><input type="number" id="cf-f" value="0"></div>
       </div>
+      <div class="field-row">
+        <div class="field"><label>Iron (mg)</label><input type="number" id="cf-ir" value="0"></div>
+        <div class="field"><label>Calcium (mg)</label><input type="number" id="cf-ca" value="0"></div>
+      </div>
       <button class="btn-primary" id="cf-save">Add to today & save food</button>
     </div>
   </div>`;
@@ -1323,9 +1364,11 @@ function screenCustomFoodModal(){
     const pr = Number(wrap.querySelector('#cf-p').value)||0;
     const cb = Number(wrap.querySelector('#cf-c').value)||0;
     const ft = Number(wrap.querySelector('#cf-f').value)||0;
-    const foodDef = {n:name, per:1, u:unit, k:kcal, p:pr, c:cb, f:ft};
+    const ir = Number(wrap.querySelector('#cf-ir').value)||0;
+    const ca = Number(wrap.querySelector('#cf-ca').value)||0;
+    const foodDef = {n:name, per:1, u:unit, k:kcal, p:pr, c:cb, f:ft, ir, ca};
     state.myFoods.push(foodDef);
-    getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel:`1 ${unit}`, kcal, protein:pr, carbs:cb, fat:ft});
+    getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel:`1 ${unit}`, kcal, protein:pr, carbs:cb, fat:ft, iron:ir, calcium:ca});
     saveState(); wrap.remove(); logFoodQuery=''; matchedFood=null; render();
   });
 }
@@ -1488,7 +1531,7 @@ async function handleGoogleHealthRedirect(){
   const url = new URL(location.href);
   const code = url.searchParams.get('code');
   if(!code) return;
-  history.replaceState({}, '', ghRedirectUri()); // strip ?code= before it lingers in the URL/history
+  history.replaceState({tab:'today', focus:null}, '', ghRedirectUri()); // strip ?code=, keep the tab-history convention consistent
   const {clientId, clientSecret} = state.settings;
   if(!clientId || !clientSecret) return;
   try{
@@ -1670,9 +1713,9 @@ function mountCharts(){
 }
 
 function attachHandlers(){
-  document.querySelectorAll('.navbtn').forEach(b=>b.addEventListener('click', ()=>{ activeTab=b.dataset.tab; render(); }));
+  document.querySelectorAll('.navbtn').forEach(b=>b.addEventListener('click', ()=>goToTab(b.dataset.tab)));
   document.querySelectorAll('[data-quick-nav]').forEach(b=>b.addEventListener('click', e=>{
-    e.stopPropagation(); activeTab=b.dataset.quickNav; logFocus=b.dataset.logFocus||null; render();
+    e.stopPropagation(); goToTab(b.dataset.quickNav, b.dataset.logFocus||null);
   }));
   document.querySelectorAll('[data-open-modal]').forEach(el=>el.addEventListener('click', ()=>{
     const which = el.dataset.openModal;
@@ -1722,25 +1765,39 @@ function attachHandlers(){
       el.addEventListener('click', ()=>selectFoodIntoForm(results[Number(el.dataset.idx)]));
     });
   }
+  // Recalculates Calories live while a matched food's Amount is being adjusted —
+  // this listener was missing entirely, so editing Amount after picking a food left
+  // Calories stuck at whatever it was computed as at selection time.
+  const amountInputEl = document.getElementById('food-amount');
+  if(amountInputEl) amountInputEl.addEventListener('input', ()=>{
+    if(!matchedFood) return;
+    const amt = Number(amountInputEl.value)||0;
+    const kcalEl = document.getElementById('food-kcal');
+    if(kcalEl) kcalEl.value = Math.round(matchedFood.k*(amt/matchedFood.per));
+  });
   const addFoodBtn = document.getElementById('btn-add-food');
   if(addFoodBtn) addFoodBtn.addEventListener('click', ()=>{
     const name = document.getElementById('food-search').value.trim();
     if(!name){ alert('Enter a food name.'); return; }
     const amount = Number(document.getElementById('food-amount').value) || 1;
     const kcal = Number(document.getElementById('food-kcal').value) || 0;
-    let protein=0, carbs=0, fat=0, qtyLabel;
+    if(!(matchedFood && matchedFood.n===name) && kcal===0){
+      if(!confirm(`"${name}" didn't match a known food, and no calories were entered. Add it anyway with 0 calories?`)) return;
+    }
+    let protein=0, carbs=0, fat=0, iron=0, calcium=0, qtyLabel;
     if(matchedFood && matchedFood.n===name){
       const ratio = amount/matchedFood.per;
       protein = matchedFood.p*ratio; carbs = matchedFood.c*ratio; fat = matchedFood.f*ratio;
+      iron = (matchedFood.ir||0)*ratio; calcium = (matchedFood.ca||0)*ratio;
       qtyLabel = `${amount} ${matchedFood.u}`;
     }else{
       // Freeform name — save it as a reusable custom food too (macros default to 0;
       // use "Add with full nutrition" below for a food that needs real protein/carbs/fat).
       const unitLabel = foodUnitSelect ? foodUnitSelect.selectedOptions[0].textContent : 'serving';
       qtyLabel = `${amount} ${unitLabel}`;
-      state.myFoods.push({n:name, per:amount, u:unitLabel, k:kcal, p:0, c:0, f:0});
+      state.myFoods.push({n:name, per:amount, u:unitLabel, k:kcal, p:0, c:0, f:0, ir:0, ca:0});
     }
-    getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel, kcal, protein, carbs, fat});
+    getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel, kcal, protein, carbs, fat, iron, calcium});
     state.foodMemory[name] = {qty:amount, ts:Date.now()};
     logFoodQuery=''; matchedFood=null; foodUnitFilter='any';
     saveState(); render();
@@ -1757,23 +1814,24 @@ function attachHandlers(){
       saveState(); render();
     });
   });
-  // Activity fields auto-save on change (fires on blur/Enter) so a typed value is never
-  // lost by navigating away before an explicit save — mirrors how food logging already
-  // commits immediately. Note: if Google Health is connected, the next reactive resync
-  // (fires via render() below, same as any other action) will overwrite this with synced
-  // data — manual entry is really the fallback for days/metrics Google Health doesn't cover.
-  const saveActivityFromInputs = ()=>{
+  // Fields start blank every time (see screenLog) rather than showing today's current
+  // totals, and are additive: leaving a field blank keeps whatever's already stored for
+  // that metric instead of zeroing it out, so you can log just steps, just active
+  // minutes, just distance, or any combination without clobbering the others (e.g. a
+  // Google Health sync's step count survives if you only fill in distance by hand).
+  const saveActBtn = document.getElementById('btn-save-activity');
+  if(saveActBtn) saveActBtn.addEventListener('click', ()=>{
     const d = getDay(today());
-    const steps = Number(document.getElementById('act-steps').value)||0;
-    const min = Number(document.getElementById('act-min').value)||0;
-    const dist = Number(document.getElementById('act-dist').value)||0;
-    d.activity = {steps, activeMin:min, distanceMi:dist, kcal: estimateActivityKcal(steps,min), source:'manual'};
+    const stepsRaw = document.getElementById('act-steps').value;
+    const minRaw = document.getElementById('act-min').value;
+    const distRaw = document.getElementById('act-dist').value;
+    if(stepsRaw===''&&minRaw===''&&distRaw===''){ alert('Enter at least one value.'); return; }
+    const steps = stepsRaw!=='' ? Number(stepsRaw) : d.activity.steps;
+    const activeMin = minRaw!=='' ? Number(minRaw) : d.activity.activeMin;
+    const distanceMi = distRaw!=='' ? Number(distRaw) : d.activity.distanceMi;
+    d.activity = {steps, activeMin, distanceMi, kcal: estimateActivityKcal(steps, activeMin), source:'manual'};
     saveState(); render();
     checkGoalsAndCelebrate(today());
-  };
-  ['act-steps','act-min','act-dist'].forEach(id=>{
-    const el = document.getElementById(id);
-    if(el) el.addEventListener('change', saveActivityFromInputs);
   });
   const connectFit = document.getElementById('btn-connect-fit');
   if(connectFit) connectFit.addEventListener('click', ()=>{
@@ -1851,6 +1909,7 @@ function attachHandlers(){
   });
 }
 
+history.replaceState({tab:'today', focus:null}, ''); // baseline entry so later tab switches have something to push atop
 render();
 handleGoogleHealthRedirect();
 // Best-effort: asks the browser not to auto-evict this site's storage under
