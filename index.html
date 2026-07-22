@@ -66,7 +66,9 @@ input,select{font-family:inherit;}
 
 /* ---- overall score ring ---- */
 .score-hero{display:flex;flex-direction:column;align-items:center;text-align:center;padding:22px 16px;}
-.ring-wrap{position:relative;width:158px;height:158px;margin-bottom:8px;}
+.ring-wrap{position:relative;width:158px;height:158px;margin-bottom:8px;border-radius:50%;
+  background:var(--surface);
+  box-shadow:0 4px 0 var(--btn-lo), inset 0 2px 2px rgba(255,255,255,.4), inset 0 -3px 5px rgba(0,0,0,.1), 0 6px 12px rgba(0,0,0,.14);}
 .ring-wrap svg{width:100%;height:100%;transform:rotate(-90deg);}
 .ring-label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;}
 .ring-label .num{font-size:38px;font-weight:800;line-height:1;}
@@ -185,10 +187,9 @@ input,select{font-family:inherit;}
 .prog-track{height:8px;border-radius:99px;background:var(--grid);overflow:hidden;box-shadow:inset 0 1px 2px rgba(0,0,0,.12);}
 .prog-fill{height:100%;border-radius:99px;transition:width .3s;}
 
-/* ---- stat pair (projection) ---- */
-.stat-pair{display:flex;align-items:baseline;gap:8px;margin-bottom:4px;}
-.stat-pair .big{font-size:32px;font-weight:800;}
-.stat-pair .of{font-size:13px;color:var(--muted);}
+/* ---- inline stat (This Week/Month score, shown next to the card title) ---- */
+.card-head .inline-stat{font-size:14px;font-weight:700;white-space:nowrap;}
+.card-head .inline-stat .muted{font-weight:500;}
 
 /* ---- score trio (Total/Activity/Nutrition circles, one infographic) ---- */
 .score-trio{display:flex;align-items:center;justify-content:center;gap:18px;flex-wrap:wrap;}
@@ -344,9 +345,25 @@ function datesBetween(startIso, endIso){
   return out;
 }
 function getDay(iso){
-  if(!state.days[iso]) state.days[iso] = {weightLb:null, foods:[], activity:{steps:0,activeMin:0,kcal:0,distanceMi:0,source:'manual'}};
+  if(!state.days[iso]) state.days[iso] = {weightLb:null, foods:[], activity:{steps:0,activeMin:0,kcal:0,distanceMi:0,source:'manual'}, celebrated:{}};
   if(state.days[iso].activity.distanceMi===undefined) state.days[iso].activity.distanceMi = 0; // upgrade older saved days
+  if(!state.days[iso].celebrated) state.days[iso].celebrated = {};
   return state.days[iso];
+}
+// Fires the confetti celebration the first time (per day) steps or active
+// minutes cross the goal — checked after every activity update, but the
+// `celebrated` flag (persisted) stops it from re-firing on every later render.
+function checkGoalsAndCelebrate(iso){
+  const p = state.profile;
+  const d = getDay(iso);
+  let fired = false;
+  if(p.stepGoal>0 && d.activity.steps>=p.stepGoal && !d.celebrated.steps){
+    d.celebrated.steps = true; fired = true;
+  }
+  if(p.activeMinGoal>0 && d.activity.activeMin>=p.activeMinGoal && !d.celebrated.activeMin){
+    d.celebrated.activeMin = true; fired = true;
+  }
+  if(fired){ saveState(); fireConfetti(); }
 }
 
 /* =========================================================
@@ -822,6 +839,54 @@ function trendLineChart(series, labels){
   });
   return svg;
 }
+/* =========================================================
+   CONFETTI — full-screen celebration when a daily goal is hit.
+   Vanilla canvas, no library, so it stays a single self-contained file.
+   ========================================================= */
+let confettiCanvas=null, confettiCtx=null, confettiRAF=null;
+function fireConfetti(){
+  if(!confettiCanvas){
+    confettiCanvas = document.createElement('canvas');
+    confettiCanvas.style.cssText = 'position:fixed;inset:0;z-index:9999;pointer-events:none;';
+    document.body.appendChild(confettiCanvas);
+    confettiCtx = confettiCanvas.getContext('2d');
+  }
+  confettiCanvas.width = window.innerWidth;
+  confettiCanvas.height = window.innerHeight;
+  confettiCanvas.style.display = 'block';
+  const colors = ['#2a78d6','#1baf7a','#eda100','#008300','#4a3aa7','#e34948','#e87ba4','#eb6834'];
+  const particles = Array.from({length:150}, ()=>({
+    x: Math.random()*confettiCanvas.width,
+    y: -20 - Math.random()*confettiCanvas.height*0.4,
+    w: 6+Math.random()*6, h: 8+Math.random()*8,
+    color: colors[Math.floor(Math.random()*colors.length)],
+    rot: Math.random()*360, rotSpeed: (Math.random()-0.5)*12,
+    vy: 2.5+Math.random()*3, vx: (Math.random()-0.5)*2.5
+  }));
+  const start = Date.now(), duration = 3200;
+  if(confettiRAF) cancelAnimationFrame(confettiRAF);
+  (function frame(){
+    const elapsed = Date.now()-start;
+    confettiCtx.clearRect(0,0,confettiCanvas.width,confettiCanvas.height);
+    const fadeAlpha = elapsed>duration-600 ? Math.max(0,(duration-elapsed)/600) : 1;
+    particles.forEach(pt=>{
+      pt.x+=pt.vx; pt.y+=pt.vy; pt.rot+=pt.rotSpeed; pt.vy+=0.02;
+      confettiCtx.save();
+      confettiCtx.translate(pt.x, pt.y);
+      confettiCtx.rotate(pt.rot*Math.PI/180);
+      confettiCtx.fillStyle = pt.color;
+      confettiCtx.globalAlpha = fadeAlpha;
+      confettiCtx.fillRect(-pt.w/2, -pt.h/2, pt.w, pt.h);
+      confettiCtx.restore();
+    });
+    if(elapsed<duration){
+      confettiRAF = requestAnimationFrame(frame);
+    } else {
+      confettiCanvas.style.display = 'none';
+      confettiCtx.clearRect(0,0,confettiCanvas.width,confettiCanvas.height);
+    }
+  })();
+}
 function progRow(label, value, target, unit, color){
   const pct = clamp(target>0 ? (value/target*100) : 0, 0, 100);
   return `<div class="prog-row">
@@ -837,9 +902,11 @@ function scoreRing(score, size, fixedColor){
   const val = score===null? 0 : score;
   const color = fixedColor || (val>=80?'var(--good)':val>=60?'var(--yellow)':'var(--critical)');
   return `<svg viewBox="0 0 ${size} ${size}">
-    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--grid)" stroke-width="${sw}"/>
+    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--grid)" stroke-width="${sw}"
+      style="filter:drop-shadow(0 1px 1px rgba(0,0,0,.12))"/>
     <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}"
-      stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ*(1-val/100)}"/>
+      stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ*(1-val/100)}"
+      style="filter:drop-shadow(0 1.5px 1.5px rgba(0,0,0,.28))"/>
   </svg>`;
 }
 // One consistent ring style at any size, used for the Total/Activity/Nutrition trio —
@@ -940,25 +1007,33 @@ function screenToday(){
     </div>
 
     ${chartsOn.projection ? `<div class="card">
-      <div class="card-head"><h3>${sunday?'Week Summary':'This Week'}</h3>${infoBtnHtml('projection')}</div>
+      <div class="card-head">
+        <div style="display:flex;align-items:baseline;gap:8px;">
+          <h3 style="margin-bottom:0;">${sunday?'Week Summary':'This Week'}</h3>
+          <span class="inline-stat">${weekAvg===null?'--':weekAvg}/100${sunday?' this week':` <span class="muted">· ${weekRemain}d to Sunday</span>`}</span>
+        </div>
+        ${infoBtnHtml('projection')}
+      </div>
       ${sunday ? `
-        <div class="stat-pair"><span class="big">${weekAvg===null?'--':weekAvg}</span><span class="of">/100 this week</span></div>
         ${weekFeedback.positives.length ? weekFeedback.positives.map(msg=>`<div class="feedback-item"><div class="dot" style="background:var(--good)"></div><div>${msg}</div></div>`).join('') : '<div class="muted">Log a few days to see your highlights here.</div>'}
         ${weekFeedback.focus ? `<div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${weekFeedback.focus.label}</strong> · ${weekFeedback.focus.tip}</div></div>` : ''}
       ` : `
-        <div class="stat-pair"><span class="big">${weekAvg===null?'--':weekAvg}</span><span class="of">/100 · ${weekRemain}d to Sunday</span></div>
         ${weekAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(weekAvg,'week') ? `<div class="muted">${paceMsg(weekAvg,'week')}</div>` : '')}
       `}
     </div>` : ''}
 
     ${chartsOn.projection ? `<div class="card">
-      <div class="card-head"><h3>${monthEnd?'Month Summary':'This Month'}</h3>${infoBtnHtml('projection')}</div>
+      <div class="card-head">
+        <div style="display:flex;align-items:baseline;gap:8px;">
+          <h3 style="margin-bottom:0;">${monthEnd?'Month Summary':'This Month'}</h3>
+          <span class="inline-stat">${monthAvg===null?'--':monthAvg}/100${monthEnd?' this month':` <span class="muted">· ${monthRemain}d left</span>`}</span>
+        </div>
+        ${infoBtnHtml('projection')}
+      </div>
       ${monthEnd ? `
-        <div class="stat-pair"><span class="big">${monthAvg===null?'--':monthAvg}</span><span class="of">/100 this month</span></div>
         ${monthFeedback.positives.length ? monthFeedback.positives.map(msg=>`<div class="feedback-item"><div class="dot" style="background:var(--good)"></div><div>${msg}</div></div>`).join('') : '<div class="muted">Log a few days to see your highlights here.</div>'}
         ${monthFeedback.focus ? `<div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${monthFeedback.focus.label}</strong> · ${monthFeedback.focus.tip}</div></div>` : ''}
       ` : `
-        <div class="stat-pair"><span class="big">${monthAvg===null?'--':monthAvg}</span><span class="of">/100 · ${monthRemain}d left</span></div>
         ${monthAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(monthAvg,'month') ? `<div class="muted">${paceMsg(monthAvg,'month')}</div>` : '')}
       `}
     </div>` : ''}
@@ -1369,6 +1444,7 @@ async function fetchGoogleHealthToday(silent){
     }catch(e){ /* weight scope/data may not be available yet — activity sync still succeeds */ }
 
     saveState(); render();
+    checkGoalsAndCelebrate(t);
     if(!silent) alert(`Synced from Google Health: ${Math.round(steps)} steps, ${Math.round(activeMin)} active min.`);
   }catch(e){
     console.error('Google Health sync failed:', e);
@@ -1473,6 +1549,7 @@ function attachHandlers(){
     const dist = Number(document.getElementById('act-dist').value)||0;
     d.activity = {steps, activeMin:min, distanceMi:dist, kcal: estimateActivityKcal(steps,min), source:'manual'};
     saveState(); render();
+    checkGoalsAndCelebrate(today());
   };
   ['act-steps','act-min','act-dist'].forEach(id=>{
     const el = document.getElementById(id);
