@@ -470,25 +470,36 @@ function estimateActivityKcal(steps, activeMin){
 // moderate activity, matching what "active minutes" from Fitbit/Google Health
 // represent (moderate-to-vigorous exertion), so tracked active minutes are
 // multiplied by the person's actual body weight rather than a flat per-minute rate.
-// Takes the larger of two independent standard estimates rather than summing them,
-// so steps-only data (no active minutes logged) or minutes-only data both still
-// produce a real number, without double-counting when both stem from the same
-// activity (e.g. a brisk walk shows up in both steps and active minutes).
-function estimateCaloriesBurned(p, steps, activeMinutes){
+// Combines all three collected activity metrics into one estimate instead of
+// picking whichever single signal is largest:
+//  - Base movement calories use the standard walking energy-cost approximation,
+//    ~0.57 kcal per lb per mile (ACE/Compendium-of-Physical-Activities derived),
+//    preferring measured distance (accounts for stride length) and falling back
+//    to a step-count estimate (~0.04 kcal/step at a 68kg reference weight) when
+//    no distance is logged.
+//  - Active minutes add the calories from elevated intensity ABOVE that base
+//    walking pace, using only the incremental MET (moderate-activity MET 4.0
+//    minus an assumed baseline walking MET of 2.0) — the full MET value isn't
+//    added on top, since the walking that occurred during those same minutes is
+//    already counted in the base term; this is what keeps the two from double-
+//    counting the same movement.
+function estimateCaloriesBurned(p, steps, activeMinutes, distanceMi){
   const weightKg = lbToKg(p.weightLb);
-  const fromSteps = (steps||0) * weightKg * 0.0006; // ~0.04 kcal/step at a 68kg reference weight
-  const MET = 4.0;
-  const fromActiveMin = (MET*3.5*weightKg/200) * (activeMinutes||0);
-  return Math.round(Math.max(fromSteps, fromActiveMin));
+  const baseKcal = (distanceMi||0)>0
+    ? distanceMi * p.weightLb * 0.57
+    : (steps||0) * weightKg * 0.0006;
+  const deltaMET = 2.0;
+  const activeExtraKcal = (deltaMET*3.5*weightKg/200) * (activeMinutes||0);
+  return Math.round(baseKcal + activeExtraKcal);
 }
 // Canonical "calories burned" for a day — prefers Google Health's own device-reported
-// figure when available (real, source-specific data), falling back to the estimate
-// above for manually-entered days. Used both for display and for the weight-goal-
-// impact math, so both stay consistent with each other.
+// figure when available (real, source-specific data), falling back to the combined
+// estimate above for manually-entered days. Used both for display and for the
+// weight-goal-impact math, so both stay consistent with each other.
 function caloriesBurnedForDay(iso){
   const d = getDay(iso);
   if(d.activity.source==='googlehealth' && d.activity.kcal>0) return d.activity.kcal;
-  return estimateCaloriesBurned(state.profile, d.activity.steps, d.activity.activeMin);
+  return estimateCaloriesBurned(state.profile, d.activity.steps, d.activity.activeMin, d.activity.distanceMi);
 }
 function weeklyGoalKcalAdjustment(p){
   const sign = p.goalType==='lose' ? -1 : p.goalType==='gain' ? 1 : 0;
