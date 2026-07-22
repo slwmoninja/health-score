@@ -1131,12 +1131,31 @@ function recentFoods(limit){
     .filter(Boolean)
     .slice(0, limit||5);
 }
+// Classifies a food's stored unit string into one of the Unit dropdown's filter
+// buckets. Compound labels (e.g. "tbsp (14g)") are matched by prefix so older
+// entries still land in the right bucket; anything else is a discrete "unit" (egg,
+// slice, banana, sandwich, etc.) rather than a weight/volume measure.
+function unitCategory(u){
+  if(u==='g') return 'g';
+  if(u==='ml') return 'ml';
+  if(u==='cup') return 'cup';
+  if(u.startsWith('tsp')) return 'tsp';
+  if(u.startsWith('tbsp')) return 'tbsp';
+  return 'unit';
+}
+const FOOD_UNIT_OPTIONS = [
+  {v:'any', l:'Any'}, {v:'g', l:'Grams'}, {v:'unit', l:'Units/pieces'},
+  {v:'cup', l:'Cups'}, {v:'tsp', l:'Tsp'}, {v:'tbsp', l:'Tbsp'}, {v:'ml', l:'Ml'}
+];
+let foodUnitFilter = 'any';
+let matchedFood = null; // the FOOD_DB/myFoods entry currently selected from suggestions, or null for a freeform/custom name
 function getFoodResults(){
-  if(logFoodQuery.length>0){
-    return {list: allFoods().filter(f=>f.n.toLowerCase().includes(logFoodQuery.toLowerCase())).slice(0,8), heading:null};
-  }
-  const recent = recentFoods(5);
-  return {list: recent, heading: recent.length ? 'Recent' : null};
+  let list = logFoodQuery.length>0
+    ? allFoods().filter(f=>f.n.toLowerCase().includes(logFoodQuery.toLowerCase()))
+    : recentFoods(20);
+  const heading = logFoodQuery.length>0 ? null : (list.length ? 'Recent' : null);
+  if(foodUnitFilter!=='any') list = list.filter(f=>unitCategory(f.u)===foodUnitFilter);
+  return {list: list.slice(0,8), heading};
 }
 let foodSortMode = 'logged'; // 'logged' | 'kcal'
 function screenLog(){
@@ -1151,12 +1170,24 @@ function screenLog(){
   <div class="screen">
     ${showNutrition ? `<div class="card">
       <h3>Add food</h3>
-      <div class="field"><input type="text" id="food-search" placeholder="Search foods (e.g. chicken, rice)" value="${logFoodQuery}"></div>
+      <div class="field-row">
+        <div class="field" style="flex:1;"><label>Amount</label><input type="number" step="any" id="food-amount" placeholder="1"></div>
+        <div class="field" style="flex:1.3;"><label>Unit</label>
+          <select id="food-unit">${FOOD_UNIT_OPTIONS.map(o=>`<option value="${o.v}" ${foodUnitFilter===o.v?'selected':''}>${o.l}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Food item</label>
+        <input type="text" id="food-search" placeholder="Search, or type a name and press Enter" value="${logFoodQuery}">
+      </div>
       ${heading?`<div class="muted" style="margin:6px 0 -2px;">${heading}</div>`:''}
-      <div class="search-list ${results.length?'':'hidden'}" id="food-results">
+      <div class="search-list ${results.length && !matchedFood?'':'hidden'}" id="food-results">
         ${results.map((f,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${f.n}</div><div class="m">${f.k} kcal per ${f.per} ${f.u}</div></div>`).join('')}
       </div>
-      <button class="btn-secondary" id="btn-custom-food" style="margin-top:10px;">+ Add a custom food</button>
+      <div class="field" style="margin-top:2px;"><label>Calories</label><input type="number" id="food-kcal" placeholder="0"></div>
+      <button class="btn-primary" id="btn-add-food" style="margin-top:4px;">Add to today</button>
+      <div style="height:8px"></div>
+      <button class="btn-secondary" id="btn-custom-food">Add with full nutrition (protein/carbs/fat)</button>
     </div>
 
     <div class="card">
@@ -1185,33 +1216,21 @@ function screenLog(){
   </div>`;
 }
 
-let pendingFood = null; // {n,per,u,k,p,c,f} chosen from search/custom
-function screenAddQtyModal(food){
+// Tapping a suggestion fills the inline form (Amount/Calories) instead of opening a
+// popup — matches the earlier fix for "should stay in the text bar until Enter or a
+// suggestion is picked" by keeping everything in one continuous form.
+function selectFoodIntoForm(food){
+  matchedFood = food;
+  logFoodQuery = food.n;
+  render();
   const remembered = state.foodMemory[food.n];
-  const defaultQty = remembered ? remembered.qty : food.per;
-  const wrap = document.createElement('div');
-  wrap.innerHTML = `
-  <div class="modal-backdrop center">
-    <div class="modal">
-      <h2>${food.n}</h2>
-      <div class="sub">${food.k} kcal per ${food.per} ${food.u}</div>
-      ${remembered ? `<div class="muted" style="margin-bottom:10px;">You usually log <strong style="color:var(--text)">${remembered.qty} ${food.u}</strong> — edit below if that's changed.</div>` : ''}
-      <div class="field"><label>Quantity (in ${food.u})</label><input type="number" id="qty-input" value="${defaultQty}"></div>
-      <button class="btn-primary" id="qty-save">${remembered?'Use this amount':'Add to today'}</button>
-    </div>
-  </div>`;
-  document.body.appendChild(wrap);
-  wrap.querySelector('#qty-save').addEventListener('click', ()=>{
-    const qty = Number(wrap.querySelector('#qty-input').value)||food.per;
-    const ratio = qty/food.per;
-    const t = today();
-    getDay(t).foods.push({
-      id: Date.now()+Math.random(), name: food.n, qtyLabel: `${qty} ${food.u}`,
-      kcal: food.k*ratio, protein: food.p*ratio, carbs: food.c*ratio, fat: food.f*ratio
-    });
-    state.foodMemory[food.n] = {qty, ts: Date.now()};
-    saveState(); wrap.remove(); logFoodQuery=''; render();
-  });
+  const amt = remembered ? remembered.qty : food.per;
+  const amountEl = document.getElementById('food-amount');
+  const kcalEl = document.getElementById('food-kcal');
+  amountEl.value = amt;
+  kcalEl.value = Math.round(food.k*(amt/food.per));
+  amountEl.focus();
+  amountEl.select();
 }
 function screenCustomFoodModal(){
   const wrap = document.createElement('div');
@@ -1244,7 +1263,7 @@ function screenCustomFoodModal(){
     const foodDef = {n:name, per:1, u:unit, k:kcal, p:pr, c:cb, f:ft};
     state.myFoods.push(foodDef);
     getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel:`1 ${unit}`, kcal, protein:pr, carbs:cb, fat:ft});
-    saveState(); wrap.remove(); logFoodQuery=''; render();
+    saveState(); wrap.remove(); logFoodQuery=''; matchedFood=null; render();
   });
 }
 
@@ -1613,6 +1632,7 @@ function attachHandlers(){
   if(search){
     search.addEventListener('input', e=>{
       logFoodQuery = e.target.value;
+      matchedFood = null; // typing again means searching afresh, not editing the matched food
       render();
       // Re-rendering replaces the input with a fresh DOM node, which resets the
       // cursor to the start unless we explicitly put it back at the end.
@@ -1620,14 +1640,48 @@ function attachHandlers(){
       el.focus();
       el.setSelectionRange(el.value.length, el.value.length);
     });
+    // Enter finalizes whatever's typed: an exact name match behaves like tapping that
+    // suggestion, anything else is treated as a freeform/custom food name.
+    search.addEventListener('keydown', e=>{
+      if(e.key!=='Enter') return;
+      e.preventDefault();
+      const exact = allFoods().find(f=>f.n.toLowerCase()===logFoodQuery.trim().toLowerCase());
+      if(exact){ selectFoodIntoForm(exact); }
+      else{ matchedFood = null; render(); const el=document.getElementById('food-amount'); if(el) el.focus(); }
+    });
   }
+  const foodUnitSelect = document.getElementById('food-unit');
+  if(foodUnitSelect) foodUnitSelect.addEventListener('change', e=>{ foodUnitFilter = e.target.value; render(); });
   const resultsEl = document.getElementById('food-results');
   if(resultsEl){
     const {list:results} = getFoodResults();
     resultsEl.querySelectorAll('.search-item').forEach(el=>{
-      el.addEventListener('click', ()=>{ pendingFood = results[Number(el.dataset.idx)]; screenAddQtyModal(pendingFood); });
+      el.addEventListener('click', ()=>selectFoodIntoForm(results[Number(el.dataset.idx)]));
     });
   }
+  const addFoodBtn = document.getElementById('btn-add-food');
+  if(addFoodBtn) addFoodBtn.addEventListener('click', ()=>{
+    const name = document.getElementById('food-search').value.trim();
+    if(!name){ alert('Enter a food name.'); return; }
+    const amount = Number(document.getElementById('food-amount').value) || 1;
+    const kcal = Number(document.getElementById('food-kcal').value) || 0;
+    let protein=0, carbs=0, fat=0, qtyLabel;
+    if(matchedFood && matchedFood.n===name){
+      const ratio = amount/matchedFood.per;
+      protein = matchedFood.p*ratio; carbs = matchedFood.c*ratio; fat = matchedFood.f*ratio;
+      qtyLabel = `${amount} ${matchedFood.u}`;
+    }else{
+      // Freeform name — save it as a reusable custom food too (macros default to 0;
+      // use "Add with full nutrition" below for a food that needs real protein/carbs/fat).
+      const unitLabel = foodUnitSelect ? foodUnitSelect.selectedOptions[0].textContent : 'serving';
+      qtyLabel = `${amount} ${unitLabel}`;
+      state.myFoods.push({n:name, per:amount, u:unitLabel, k:kcal, p:0, c:0, f:0});
+    }
+    getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel, kcal, protein, carbs, fat});
+    state.foodMemory[name] = {qty:amount, ts:Date.now()};
+    logFoodQuery=''; matchedFood=null; foodUnitFilter='any';
+    saveState(); render();
+  });
   const sortBtn = document.getElementById('btn-sort-foods');
   if(sortBtn) sortBtn.addEventListener('click', ()=>{ foodSortMode = foodSortMode==='kcal'?'logged':'kcal'; render(); });
   const customBtn = document.getElementById('btn-custom-food');
