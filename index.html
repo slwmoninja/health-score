@@ -193,7 +193,7 @@ input,select{font-family:inherit;}
 /* ---- score trio (Total/Activity/Nutrition circles, one infographic) ---- */
 .score-trio{display:flex;align-items:center;justify-content:center;gap:18px;flex-wrap:wrap;}
 .score-circle-col{display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;}
-.score-circle-col .cap{font-size:12px;color:var(--muted);}
+.score-circle-col .cap{font-size:12px;color:var(--muted);text-align:center;line-height:1.4;}
 
 /* ---- collapsible section header ---- */
 .section-toggle{display:flex;align-items:center;gap:6px;flex:1;cursor:pointer;}
@@ -799,15 +799,25 @@ function scoreRing(score, size){
 }
 // One consistent ring style at any size, used for the Total/Activity/Nutrition trio —
 // number scales with the circle so the small ones stay legible, not cramped.
-function scoreCircle(score, size, insideLabel){
+// displayText is what's shown; pctForRing (0-100, defaults to displayText when it's
+// already a plain number like the Total Score) drives the ring fill + color, so
+// Activity/Nutrition can show a real value (steps, calories) with a goal-based fill
+// instead of a second abstract score.
+function scoreCircle(displayText, size, insideLabel, pctForRing){
+  const pct = pctForRing===undefined ? displayText : pctForRing;
   const numPx = Math.round(size*0.235), lblPx = Math.max(9, Math.round(size*0.068));
   return `<div class="ring-wrap" style="width:${size}px;height:${size}px;">
-    ${scoreRing(score, size)}
+    ${scoreRing(pct, size)}
     <div class="ring-label">
-      <div class="num" style="font-size:${numPx}px;">${score===null?'--':score}</div>
+      <div class="num" style="font-size:${numPx}px;">${displayText===null?'--':displayText}</div>
       ${insideLabel?`<div class="lbl" style="font-size:${lblPx}px;">${insideLabel}</div>`:''}
     </div>
   </div>`;
+}
+// Abbreviates large counts (steps, calories) so they still fit cleanly in a small ring.
+function formatCompact(n){
+  if(n>=1000) return (n/1000).toFixed(1).replace(/\.0$/,'')+'k';
+  return String(Math.round(n));
 }
 
 /* =========================================================
@@ -839,7 +849,11 @@ function render(){
 /* ---------- TODAY ---------- */
 function screenToday(){
   const t = today();
-  const nScore = nutritionScore(t), aScore = activityScore(t), oScore = dayOverallScore(t);
+  const oScore = dayOverallScore(t);
+  const p = state.profile, d = getDay(t);
+  const totals = dayTotals(t), targets = dailyTargets(p, d.activity.kcal);
+  const stepPct = clamp(p.stepGoal>0 ? d.activity.steps/p.stepGoal*100 : 0, 0, 100);
+  const calPct = clamp(targets.kcal>0 ? totals.kcal/targets.kcal*100 : 0, 0, 100);
 
   const {start:ws, end:we} = weekRange(t);
   const weekDates = datesBetween(ws, t);
@@ -867,9 +881,9 @@ function screenToday(){
   <div class="screen">
     <div class="card score-hero">
       <div class="score-trio">
-        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore, 138, 'Total Score')}</div>
-        <div class="score-circle-col" data-open-modal="activity">${scoreCircle(aScore, 84)}<div class="cap">Activity</div></div>
-        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(nScore, 84)}<div class="cap">Nutrition</div></div>
+        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, 'Total Score')}</div>
+        <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, null, stepPct)}<div class="cap">Steps<br><span style="font-size:11px;">${d.activity.activeMin} min · ${(d.activity.distanceMi||0).toFixed(1)} mi</span></div></div>
+        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, null, calPct)}<div class="cap">Calories</div></div>
       </div>
     </div>
 
