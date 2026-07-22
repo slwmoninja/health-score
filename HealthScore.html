@@ -254,7 +254,22 @@ function loadState(){
     return merged;
   }catch(e){ return defaultState(); }
 }
-function saveState(){ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+let saveWarnedOnce = false;
+function saveState(){
+  try{
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  }catch(e){
+    // Don't call logError() here — it calls saveState() itself, which would recurse
+    // if storage is genuinely broken. Record in-memory only and surface it once.
+    console.error('Save failed:', e);
+    state.errorLog.unshift({ts:Date.now(), message:'Save failed: '+e.message+' — your data may not be persisting.'});
+    state.errorLog = state.errorLog.slice(0,3);
+    if(!saveWarnedOnce){
+      saveWarnedOnce = true;
+      alert('Could not save your data (storage error: '+e.message+'). If this is a private/incognito browser tab, switch to a normal tab — private tabs often block or wipe local storage.');
+    }
+  }
+}
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -646,7 +661,8 @@ const INFO_CONTENT = {
   nutrition: ['Nutrition comparison', `Compares yesterday and today's calories and protein against your daily targets, which are calculated from your age, height, weight, and weekly goal (Settings). Tap any bar for its exact value.`],
   projection: ['Week Pace / Summary', `Monday through Saturday, this averages your daily scores so far this week and projects that same pace forward — not a guess, just "if the rest of the week looks like today did." On Sunday the week is complete, so this becomes the real final score for the week instead, plus your highlights and one focus area for next week.`],
   trend: ['7-day score trend', `Your daily Activity and Nutrition scores (0-100) over the last 7 days. Tap a point for its value.`],
-  fitsync: ['Google Health sync', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Setup, one time: console.cloud.google.com → new project → OAuth consent screen → publishing status <strong>"In Production"</strong> (fine for personal use — Google only requires review past 100 users) → Credentials → OAuth client ID → type <strong>Web application</strong> → Authorized redirect URI: <strong>${location.origin}${location.pathname}</strong> → enable the "Google Health API" and add the activity/fitness and health-metrics scopes → paste the resulting Client ID and Client Secret below. After you connect once, it re-syncs automatically in the background — no further action needed.`]
+  fitsync: ['Google Health sync', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Setup, one time: console.cloud.google.com → new project → OAuth consent screen → publishing status <strong>"In Production"</strong> (fine for personal use — Google only requires review past 100 users) → Credentials → OAuth client ID → type <strong>Web application</strong> → Authorized redirect URI: <strong>${location.origin}${location.pathname}</strong> → enable the "Google Health API" and add the activity/fitness and health-metrics scopes → paste the resulting Client ID and Client Secret below. After you connect once, it re-syncs automatically in the background — no further action needed.`],
+  databackup: ['Data & backups', `Everything here (profile, logged food, activity, Google Health credentials) lives only in this browser's local storage on this device — nothing is sent to a server. That's good for privacy, but it means your phone or browser's own "clear history / clear site data" action can wipe it, the same as it would for any website — there's no way for a site to opt out of that. <strong>Export data</strong> saves everything to a JSON file you can keep as a backup; <strong>Import data</strong> restores from one. Only the <strong>Reset all data</strong> button below is an in-app wipe — a browser-level clear is outside the app's control.`]
 };
 function wireInfoButtons(root){
   (root||document).querySelectorAll('[data-info]').forEach(b=>{
@@ -896,7 +912,7 @@ function screenToday(){
     </div>` : ''}
 
     ${chartsOn.projection ? `<div class="card">
-      <div class="card-head"><h3>${sunday?'Week Summary':'Week Pace'}</h3>${infoBtnHtml('projection')}</div>
+      <div class="card-head"><h3>${sunday?'Week Summary':'This Week'}</h3>${infoBtnHtml('projection')}</div>
       ${sunday ? `
         <div class="stat-pair"><span class="big">${weekAvg===null?'--':weekAvg}</span><span class="of">/100 this week</span></div>
         ${monthAvg!==null ? `<div class="muted" style="margin-bottom:10px;">Month pace: <strong style="color:var(--text)">${monthAvg}/100</strong>, ${monthRemain}d left.</div>` : ''}
@@ -1154,8 +1170,11 @@ function screenSettings(){
     </div>` : ''}
 
     <div class="card">
-      <h3>Data</h3>
+      <div class="card-head"><h3>Data</h3>${infoBtnHtml('databackup')}</div>
       <button class="btn-secondary" id="s-export">Export data (JSON)</button>
+      <div style="height:8px"></div>
+      <button class="btn-secondary" id="s-import">Import data (JSON)</button>
+      <input type="file" id="s-import-file" accept="application/json" class="hidden">
       <div style="height:8px"></div>
       <button class="btn-secondary" id="s-reset" style="color:var(--critical)">Reset all data</button>
     </div>
@@ -1240,24 +1259,28 @@ function extractNumericField(obj, candidates){
   }
   return null;
 }
-// Finds whichever nested field ends in "_sum" rather than guessing the exact
-// name per data type (steps -> count_sum, distance -> distance_sum, etc. per
-// Google's docs) — resilient to the exact key not being confirmed for every type.
+// Finds whichever nested field ends in "Sum" (e.g. steps -> countSum, confirmed
+// against Google's own reference CLI source) rather than a single hardcoded
+// name per data type — resilient to the exact key not being re-checked for
+// every type. Values come back as strings ("9037"), hence the Number() call.
 function extractRollupSum(rollupPoint){
   if(!rollupPoint) return null;
   for(const key of Object.keys(rollupPoint)){
     if(key==='civilStartTime'||key==='civilEndTime') continue;
     const obj = rollupPoint[key];
     if(obj && typeof obj==='object'){
-      const sumKey = Object.keys(obj).find(k=>k.endsWith('_sum'));
+      const sumKey = Object.keys(obj).find(k=>k.toLowerCase().endsWith('sum'));
       if(sumKey) return Number(obj[sumKey]);
     }
   }
   return null;
 }
+// The API's CivilDateTime wraps year/month/day in a "date" key — omitting that
+// wrapper (sending {year,month,day} directly as the range bound) is what was
+// causing the 400 INVALID_DATA_POINT_FILTER_RESTRICTION_COMPARATOR error.
 function civilDate(dateIso){
   const d = dateFromIso(dateIso);
-  return {year:d.getFullYear(), month:d.getMonth()+1, day:d.getDate()};
+  return {date: {year:d.getFullYear(), month:d.getMonth()+1, day:d.getDate()}};
 }
 // One aggregated total for the whole day, computed server-side — avoids both
 // the civil_start_time filter's comparator restrictions and any risk of
@@ -1296,24 +1319,25 @@ async function fetchGoogleHealthToday(silent){
   if(!token){ if(!silent) alert('Not connected to Google Health yet — tap "Connect & sync today" first.'); return; }
   const t = today();
   try{
-    const [steps, activeMin, kcal, distanceM] = await Promise.all([
+    const [steps, activeMin, kcal, distanceMm] = await Promise.all([
       fetchGoogleHealthRollup('steps', t, token),
       fetchGoogleHealthRollup('active-zone-minutes', t, token).catch(()=>0),
       fetchGoogleHealthRollup('active-energy-burned', t, token).catch(()=>0),
-      fetchGoogleHealthRollup('distance', t, token).catch(()=>0)
+      fetchGoogleHealthRollup('distance', t, token).catch(()=>0) // returned in millimeters, per Google's field docs
     ]);
     const d = getDay(t);
     d.activity = {
       steps: Math.round(steps), activeMin: Math.round(activeMin), kcal: Math.round(kcal),
-      distanceMi: Math.round((distanceM/1609.34)*10)/10, source:'googlehealth'
+      distanceMi: Math.round((distanceMm/1609340)*10)/10, source:'googlehealth'
     };
 
     try{
       const weightPoints = await fetchGoogleHealthDataType('weight', 'weight', t, token);
       if(weightPoints.length && !d.weightLb){
         const last = weightPoints[weightPoints.length-1];
-        const kg = extractNumericField(last.weight||last, ['massKilograms','kilograms','valueKilograms','value']);
-        if(kg) d.weightLb = Math.round(kg*2.20462*10)/10;
+        // Google's field is weightGrams — grams, not kilograms.
+        const grams = extractNumericField(last.weight||last, ['weightGrams','massGrams','grams','value']);
+        if(grams) d.weightLb = Math.round((grams/453.592)*10)/10;
       }
     }catch(e){ /* weight scope/data may not be available yet — activity sync still succeeds */ }
 
@@ -1488,6 +1512,25 @@ function attachHandlers(){
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = 'health-score-data.json'; a.click();
   });
+  const importBtn = document.getElementById('s-import');
+  const importFile = document.getElementById('s-import-file');
+  if(importBtn && importFile) importBtn.addEventListener('click', ()=>importFile.click());
+  if(importFile) importFile.addEventListener('change', async ()=>{
+    const file = importFile.files[0];
+    if(!file) return;
+    try{
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if(!parsed || typeof parsed!=='object' || !('days' in parsed)) throw new Error('This file does not look like a Health Score export.');
+      if(!confirm('This will replace all current data on this device with the contents of the imported file. Continue?')) return;
+      state = Object.assign(defaultState(), parsed);
+      state.settings = Object.assign(defaultState().settings, parsed.settings);
+      state.settings.charts = Object.assign(defaultState().settings.charts, parsed.settings && parsed.settings.charts);
+      saveState(); alert('Data imported.'); render();
+    }catch(e){
+      alert('Could not import that file: '+e.message);
+    }
+  });
   const clearErrorsBtn = document.getElementById('s-clear-errors');
   if(clearErrorsBtn) clearErrorsBtn.addEventListener('click', ()=>{ state.errorLog = []; saveState(); render(); });
   const resetBtn = document.getElementById('s-reset');
@@ -1500,6 +1543,10 @@ function attachHandlers(){
 
 render();
 handleGoogleHealthRedirect();
+// Best-effort: asks the browser not to auto-evict this site's storage under
+// low-disk pressure. Does NOT protect against the user explicitly clearing
+// history/site data — no web API can opt out of that.
+if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
 </script>
 </body>
 </html>
