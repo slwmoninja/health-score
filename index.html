@@ -685,6 +685,40 @@ function monthCalorieProgress(iso){
   const goal = monthDates.reduce((sum,d)=>sum+dailyTargets(state.profile, getDay(d).activity.kcal).kcal, 0);
   return {consumed, goal};
 }
+// Protein/iron/calcium totals for a date range vs. the per-day target summed across
+// every date in range (not just logged days), matching weekCalorieProgress's approach
+// so an un-logged day pulls the period average down instead of being skipped.
+function periodNutrientTotals(dates){
+  const p = state.profile;
+  const proteinTarget = dailyTargets(p, 0).proteinG;
+  const ironTarget = ironRDA(p);
+  const calciumTarget = calciumRDA(p);
+  let protein=0, iron=0, calcium=0;
+  dates.forEach(iso=>{ const t = dayTotals(iso); protein+=t.protein; iron+=t.iron; calcium+=t.calcium; });
+  return {
+    protein, proteinGoal: proteinTarget*dates.length,
+    iron, ironGoal: ironTarget*dates.length,
+    calcium, calciumGoal: calciumTarget*dates.length
+  };
+}
+// Actionable, food-specific suggestions for whichever of the three fell short —
+// only surfaced for nutrients actually under target, not shown as a checklist regardless.
+function nutrientShortfallTips(totals){
+  const tips = [];
+  if(totals.proteinGoal>0 && totals.protein < totals.proteinGoal*0.9){
+    const gap = Math.round(totals.proteinGoal-totals.protein);
+    tips.push(`Protein: about ${gap}g short — Greek yogurt, eggs, chicken breast, cottage cheese, or a protein shake are quick ways to close the gap.`);
+  }
+  if(totals.ironGoal>0 && totals.iron < totals.ironGoal*0.9){
+    const gap = (totals.ironGoal-totals.iron).toFixed(1);
+    tips.push(`Iron: about ${gap}mg short — red meat, spinach, lentils, and fortified cereals are strong sources; pair with vitamin C (citrus, peppers) to help absorption.`);
+  }
+  if(totals.calciumGoal>0 && totals.calcium < totals.calciumGoal*0.9){
+    const gap = Math.round(totals.calciumGoal-totals.calcium);
+    tips.push(`Calcium: about ${gap}mg short — milk, yogurt, cheese, fortified plant milk, or leafy greens like kale can help close the gap.`);
+  }
+  return tips;
+}
 // How much of the activity-earned calorie "bonus" (burned calories widen the day's
 // allowed intake) actually became extra progress toward the weight goal vs. being
 // eaten back. bonusDeficit > 0 = bonus went unspent (extra progress); < 0 = ate
@@ -1493,6 +1527,8 @@ function screenHistory(){
   const dates = datesBetween(range.start, rangeEnd);
   const fb = buildFeedback(dates, historyMode);
   const oAvg = avgScore(dates, dayOverallScore);
+  const nutrientTotals = periodNutrientTotals(dates);
+  const nutrientTips = nutrientShortfallTips(nutrientTotals);
 
   const chips = dates.map(d=>{
     const s = dayOverallScore(d);
@@ -1524,12 +1560,20 @@ function screenHistory(){
     </div>` : ''}
 
     <div class="card">
+      <h3>Protein, Iron & Calcium</h3>
+      ${progRow('Protein', nutrientTotals.protein, nutrientTotals.proteinGoal, 'g', 'var(--violet)')}
+      ${progRow('Iron', nutrientTotals.iron, nutrientTotals.ironGoal, 'mg', 'var(--critical)')}
+      ${progRow('Calcium', nutrientTotals.calcium, nutrientTotals.calciumGoal, 'mg', 'var(--muted)')}
+      ${nutrientTips.length ? nutrientTips.map(tip=>`<div class="feedback-item" style="margin-top:8px;"><div class="dot" style="background:var(--warning)"></div><div>${tip}</div></div>`).join('') : `<div class="muted" style="margin-top:8px;">You're on pace with protein, iron, and calcium this ${historyMode==='week'?'week':'month'} — nice work.</div>`}
+    </div>
+
+    <div class="card">
       <h3>What went well</h3>
       ${fb.positives.length===0?'<div class="muted">Log a few days to see your highlights here.</div>':
         fb.positives.map(p=>`<div class="feedback-item"><div class="dot" style="background:var(--good)"></div><div>${p}</div></div>`).join('')}
     </div>
     ${fb.focus?`<div class="card">
-      <div class="card-head"><h3>One thing to focus on</h3></div>
+      <div class="card-head"><h3>Looking ahead</h3></div>
       <div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${fb.focus.label}</strong> · ${fb.focus.tip}</div></div>
     </div>`:''}
   </div>`;
