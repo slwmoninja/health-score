@@ -489,51 +489,23 @@ async function searchFDC(query, dataType){
     return null;
   }
 }
-// Open Food Facts — free, no API key, no rate-limit anxiety. Strong on packaged/
-// branded products, weak on generic whole foods, so it's used as the final
-// fallback tier rather than the primary source. Works even with no FDC key set,
-// since it needs no signup at all.
-function normalizeOFFProduct(prod){
-  const nutr = prod.nutriments || {};
-  const kcal = nutr['energy-kcal_100g'];
-  if(!kcal) return null;
-  return {
-    n: prod.product_name || prod.generic_name || 'Unknown product',
-    per:100, u:'g', k: kcal,
-    p: nutr['proteins_100g']||0,
-    c: nutr['carbohydrates_100g']||0,
-    f: nutr['fat_100g']||0,
-    ir: (nutr['iron_100g']||0)*1000,    // OFF reports iron/calcium in grams, not mg
-    ca: (nutr['calcium_100g']||0)*1000,
-    off: true
-  };
-}
-async function searchOFF(query){
-  if(query.trim().length<2) return null;
-  try{
-    const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&json=1&page_size=10`;
-    const res = await fetch(url);
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    const data = await res.json();
-    return (data.products||[]).map(normalizeOFFProduct).filter(Boolean);
-  }catch(e){
-    logError('Open Food Facts search failed: '+e.message);
-    return null;
-  }
-}
-// Tries each tier in order and stops at the first one that finds anything:
-// FDC generic foods -> FDC branded foods -> Open Food Facts. Each tier only
-// runs if the previous one came up empty, so a common food never pays the
-// cost of extra network round-trips.
+// Open Food Facts was tried as a free, keyless fallback here, but both of its
+// public search endpoints turned out unusable from a static browser app: the
+// legacy cgi/search.pl endpoint is CORS-enabled but fails outright roughly half
+// the time regardless of query or User-Agent (confirmed by repeated testing —
+// not something fixable from the client side), and its newer search-a-licious
+// API sends no Access-Control-Allow-Origin header at all, so the browser blocks
+// it unconditionally. Dropped in favor of the "Search the web" manual fallback.
+//
+// Tries FDC's generic Foundation/SR Legacy dataset first, then its ~300,000-item
+// Branded Foods dataset only if that first, more-curated search comes up empty —
+// so a common food never pays the cost of the second round-trip.
 async function liveFoodSearchCascade(query){
-  if(state.settings.fdcApiKey){
-    let results = await searchFDC(query, 'Foundation,SR Legacy');
-    if(results && results.length) return {results, source:'USDA FoodData Central'};
-    results = await searchFDC(query, 'Branded');
-    if(results && results.length) return {results, source:'USDA FoodData Central (branded)'};
-  }
-  const offResults = await searchOFF(query);
-  if(offResults && offResults.length) return {results:offResults, source:'Open Food Facts'};
+  if(!state.settings.fdcApiKey) return {results:[], source:null};
+  let results = await searchFDC(query, 'Foundation,SR Legacy');
+  if(results && results.length) return {results, source:'USDA FoodData Central'};
+  results = await searchFDC(query, 'Branded');
+  if(results && results.length) return {results, source:'USDA FoodData Central (branded)'};
   return {results:[], source:null};
 }
 let liveFoodResults = null;      // normalized results for the query below, or null if none yet/failed
@@ -1037,7 +1009,7 @@ const INFO_CONTENT = {
   trend: ['7-day score trend', `Your daily Activity and Nutrition scores (0-100) over the last 7 days. Tap a point for its value.`],
   fitsync: ['Google Health sync', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Setup, one time: console.cloud.google.com → new project → OAuth consent screen → publishing status <strong>"In Production"</strong> (fine for personal use — Google only requires review past 100 users) → Credentials → OAuth client ID → type <strong>Web application</strong> → Authorized redirect URI: <strong>${location.origin}${location.pathname}</strong> → enable the "Google Health API" and add the activity/fitness and health-metrics scopes → paste the resulting Client ID and Client Secret below. After you connect once, it re-syncs automatically in the background — no further action needed.`],
   databackup: ['Data & backups', `Everything here (profile, logged food, activity, Google Health credentials) lives only in this browser's local storage on this device — nothing is sent to a server. That's good for privacy, but it means your phone or browser's own "clear history / clear site data" action can wipe it, the same as it would for any website — there's no way for a site to opt out of that. <strong>Export data</strong> saves everything to a JSON file you can keep as a backup; <strong>Import data</strong> restores from one. Only the <strong>Reset all data</strong> button below is an in-app wipe — a browser-level clear is outside the app's control.`],
-  fdc: ['Food search', `Search tries several sources in order and stops at the first one that finds a match. With a free USDA FoodData Central key: it first checks the Foundation/SR Legacy datasets (generic whole foods, to keep casual searches from getting buried in brand names), then falls back to FDC's ~300,000-item Branded Foods dataset if nothing generic matched. Setup: fdc.nal.usda.gov/api-key-signup → fill in the short form → the key is emailed instantly, no approval wait → paste it below. It's free with no usage cost. If FDC (or no key) still finds nothing, it automatically falls back to Open Food Facts, a free crowdsourced database with no key needed — strongest on packaged/branded products. If even that comes up empty, a "Search the web" button appears so you can look it up yourself and enter your best estimate.`]
+  fdc: ['Food search', `With a free USDA FoodData Central key, search first checks the Foundation/SR Legacy datasets (generic whole foods, to keep casual searches from getting buried in brand names), then automatically falls back to FDC's ~300,000-item Branded Foods dataset if nothing generic matched. Setup: fdc.nal.usda.gov/api-key-signup → fill in the short form → the key is emailed instantly, no approval wait → paste it below. It's free with no usage cost. If a search still comes up empty — some very specific items (like a particular fat-percentage of milk) genuinely aren't in either dataset — a "Search the web" button appears so you can look it up yourself and enter your best estimate for calories/macros.`]
 };
 function wireInfoButtons(root){
   (root||document).querySelectorAll('[data-info]').forEach(b=>{
@@ -1462,7 +1434,7 @@ function screenLog(){
       ${heading?`<div class="muted" style="margin:6px 0 -2px;">${heading}</div>`:''}
       ${loading?`<div class="muted" style="margin:6px 0 -2px;">Searching…</div>`:''}
       <div class="search-list ${results.length && !matchedFood?'':'hidden'}" id="food-results">
-        ${results.map((f,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${f.n}${f.fdc?' <span class="muted" style="font-size:10.5px;">USDA</span>':''}${f.off?' <span class="muted" style="font-size:10.5px;">Open Food Facts</span>':''}</div><div class="m">${f.k} kcal per ${f.per} ${f.u}</div></div>`).join('')}
+        ${results.map((f,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${f.n}${f.fdc?' <span class="muted" style="font-size:10.5px;">USDA</span>':''}</div><div class="m">${f.k} kcal per ${f.per} ${f.u}</div></div>`).join('')}
       </div>
       ${showWebSearch && !matchedFood ? `<button class="btn-secondary" id="btn-web-search-food" type="button" style="margin-top:2px;">Search the web for "${logFoodQuery}"</button>` : ''}
       <div class="field" style="margin-top:2px;"><label>Calories</label><input type="number" id="food-kcal" placeholder="0"></div>
@@ -1502,7 +1474,7 @@ function selectFoodIntoForm(food){
   // Cache FDC results into myFoods on selection so foodMemory/recentFoods (both keyed
   // by name, looked up via allFoods()) keep working for it afterward, and so it's
   // still reachable without a network call if the API key is ever removed.
-  if((food.fdc || food.off) && !state.myFoods.some(f=>f.n===food.n)){
+  if(food.fdc && !state.myFoods.some(f=>f.n===food.n)){
     state.myFoods.push({n:food.n, per:food.per, u:food.u, k:food.k, p:food.p, c:food.c, f:food.f, ir:food.ir, ca:food.ca});
   }
   const priorAmount = Number(foodAmountValue)||0;
@@ -1639,7 +1611,7 @@ function screenSettings(){
       <div class="card-head"><h3>Food search</h3>${infoBtnHtml('fdc')}</div>
       <div class="field"><label>USDA FoodData Central API key</label><input type="text" id="s-fdc-key" placeholder="paste your free key here" value="${state.settings.fdcApiKey}"></div>
       <button class="btn-secondary" id="s-fdc-save">Save key</button>
-      <div class="muted" style="margin-top:8px;">${state.settings.fdcApiKey ? 'Food search pulls live results from FoodData Central, with Open Food Facts as a fallback for anything it doesn\'t have.' : 'Without a key, food search uses the small built-in list plus Open Food Facts (no key needed). Add a free key above for much broader USDA results.'}</div>
+      <div class="muted" style="margin-top:8px;">${state.settings.fdcApiKey ? 'Food search pulls live results from FoodData Central, including branded/packaged foods as a fallback for generic-food misses.' : 'Without a key, food search only uses the small built-in list. Add a free key above for live USDA results.'}</div>
     </div>
 
     ${state.errorLog.length ? `<div class="card">
