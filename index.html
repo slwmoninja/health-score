@@ -214,6 +214,12 @@ input,select{font-family:inherit;}
 .pill-btn:active{transform:translateY(2px);box-shadow:0 1px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.3);}
 .pill-btn.green{background:linear-gradient(180deg, color-mix(in srgb, var(--good) 100%, white 15%), var(--good));flex:1.5;}
 .pill-btn.red{background:linear-gradient(180deg, color-mix(in srgb, var(--critical) 100%, white 15%), var(--critical));flex:1;}
+
+/* ---- popup stat rows (large readable numbers, no chart) ---- */
+.popup-stat{padding:12px 0;border-top:1px solid var(--grid);}
+.popup-stat:first-child{border-top:none;}
+.popup-stat .v{font-size:28px;font-weight:800;line-height:1.15;}
+.popup-stat .l{font-size:13px;color:var(--text2);margin-top:2px;}
 </style>
 </head>
 <body>
@@ -697,60 +703,27 @@ function openTotalsModal(){
     <div class="row" style="margin-top:8px;"><span class="text2">Distance</span><span>${(d.activity.distanceMi||0).toFixed(1)} mi</span></div>
   `);
 }
-function mountActivityCharts(){
-  const t = today(), y = addDays(t,-1), p = state.profile;
-  const dy = getDay(y).activity, dt = getDay(t).activity;
-  const stepsEl = document.getElementById('chart-steps');
-  if(stepsEl) stepsEl.appendChild(pairBarChart(dy.steps, dt.steps, p.stepGoal, 'var(--blue)'));
-  const activeMinEl = document.getElementById('chart-activemin');
-  if(activeMinEl) activeMinEl.appendChild(pairBarChart(dy.activeMin, dt.activeMin, p.activeMinGoal, 'var(--blue)'));
-  const distanceEl = document.getElementById('chart-distance');
-  if(distanceEl) distanceEl.appendChild(pairBarChart(dy.distanceMi||0, dt.distanceMi||0, undefined, 'var(--blue)'));
+function bigStatRow(value, label, sub){
+  return `<div class="popup-stat">
+    <div class="v">${value}</div>
+    <div class="l">${label}${sub?` <span class="muted">${sub}</span>`:''}</div>
+  </div>`;
 }
 function openActivityModal(){
+  const t = today(), p = state.profile, d = getDay(t);
   openInfoModal('Activity', `
-    <div class="muted" style="margin-bottom:10px;">Yesterday vs today against your step and active-minute goals (Settings). Tap any bar for its exact value.</div>
-    <div style="display:flex;gap:10px;">
-      <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Steps</div><div class="chart" id="chart-steps"></div></div>
-      <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Active min</div><div class="chart" id="chart-activemin"></div></div>
-      <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Distance (mi)</div><div class="chart" id="chart-distance"></div></div>
-    </div>
-    <div class="legend">
-      <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
-      <div class="legend-item"><span class="swatch" style="background:var(--blue)"></span>Today</div>
-    </div>
-    <button class="btn-secondary" id="modal-log-activity" style="margin-top:14px;">Log activity</button>
+    ${bigStatRow(d.activity.steps.toLocaleString(), 'Steps', `/ ${p.stepGoal.toLocaleString()} goal`)}
+    ${bigStatRow(d.activity.activeMin, 'Active minutes', `/ ${p.activeMinGoal} goal`)}
+    ${bigStatRow((d.activity.distanceMi||0).toFixed(1), 'Miles')}
   `);
-  mountActivityCharts();
-  document.getElementById('modal-log-activity').addEventListener('click', ()=>{
-    document.querySelector('.modal-backdrop').remove(); activeTab='log'; render();
-  });
-}
-function mountNutritionCharts(){
-  const t = today(), y = addDays(t,-1);
-  const ty = dayTotals(y), tt = dayTotals(t);
-  const targets = dailyTargets(state.profile, getDay(t).activity.kcal);
-  const calEl = document.getElementById('chart-calories');
-  if(calEl) calEl.appendChild(pairBarChart(ty.kcal, tt.kcal, targets.kcal, 'var(--aqua)'));
-  const proEl = document.getElementById('chart-protein');
-  if(proEl) proEl.appendChild(pairBarChart(ty.protein, tt.protein, targets.proteinG, 'var(--aqua)'));
 }
 function openNutritionModal(){
+  const t = today();
+  const totals = dayTotals(t), targets = dailyTargets(state.profile, getDay(t).activity.kcal);
   openInfoModal('Nutrition', `
-    <div style="display:flex;gap:10px;">
-      <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Calories</div><div class="chart" id="chart-calories"></div></div>
-      <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Protein (g)</div><div class="chart" id="chart-protein"></div></div>
-    </div>
-    <div class="legend">
-      <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
-      <div class="legend-item"><span class="swatch" style="background:var(--aqua)"></span>Today</div>
-    </div>
-    <button class="btn-secondary" id="modal-log-nutrition" style="margin-top:14px;">Log nutrition</button>
+    ${bigStatRow(Math.round(totals.kcal).toLocaleString(), 'Calories', `/ ${targets.kcal.toLocaleString()} target`)}
+    ${bigStatRow(Math.round(totals.protein), 'Protein (g)', `/ ${targets.proteinG}g target`)}
   `);
-  mountNutritionCharts();
-  document.getElementById('modal-log-nutrition').addEventListener('click', ()=>{
-    document.querySelector('.modal-backdrop').remove(); activeTab='log'; render();
-  });
 }
 function showTooltip(x, y, text){
   const tip = document.getElementById('chart-tooltip');
@@ -769,50 +742,6 @@ function svgEl(tag, attrs){
   const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
   for(const k in attrs) el.setAttribute(k, attrs[k]);
   return el;
-}
-// Grouped vertical bar chart with optional dashed goal line. bars: [{label, series:[{v,color,name}]}]
-function groupedBarChart(bars, opts){
-  opts = opts||{};
-  const W=320,H=140,padL=8,padR=8,padT=18,padB=22;
-  const plotW=W-padL-padR, plotH=H-padT-padB;
-  let max = opts.max || Math.max(1, ...bars.flatMap(b=>b.series.map(s=>s.v)));
-  if(opts.goal) max = Math.max(max, opts.goal);
-  max *= 1.15;
-  const svg = svgEl('svg',{viewBox:`0 0 ${W} ${H}`});
-  svg.appendChild(svgEl('line',{x1:padL,y1:H-padB,x2:W-padR,y2:H-padB,class:'axis-line'}));
-  if(opts.goal){
-    const y = H-padB-(opts.goal/max)*plotH;
-    const gl = svgEl('line',{x1:padL,y1:y,x2:W-padR,y2:y,class:'goal-line'});
-    svg.appendChild(gl);
-    const gt = svgEl('text',{x:W-padR,y:y-4,class:'bar-label','text-anchor':'end'});
-    gt.textContent = opts.goalLabel||'Goal';
-    svg.appendChild(gt);
-  }
-  const groupW = plotW/bars.length;
-  bars.forEach((b,i)=>{
-    const n = b.series.length;
-    const barW = Math.min(30, groupW/(n+1.2));
-    const groupCenter = padL + groupW*i + groupW/2;
-    const totalW = barW*n + (n-1)*4;
-    let x = groupCenter - totalW/2;
-    b.series.forEach(s=>{
-      const h = (s.v/max)*plotH;
-      const rect = svgEl('rect',{x, y:H-padB-h, width:barW, height:Math.max(h,1), rx:4, fill:s.color, class:'chart-mark'});
-      const label = `${b.label}: ${Math.round(s.v)}${s.name?' ('+s.name+')':''}`;
-      rect.addEventListener('click', ev=>{ ev.stopPropagation(); showTooltip(ev.clientX, ev.clientY, label); });
-      svg.appendChild(rect);
-      if(s.v>0){
-        const t = svgEl('text',{x:x+barW/2, y:H-padB-h-5, class:'bar-value','text-anchor':'middle'});
-        t.textContent = Math.round(s.v);
-        svg.appendChild(t);
-      }
-      x += barW+4;
-    });
-    const lbl = svgEl('text',{x:groupCenter, y:H-6, class:'bar-label','text-anchor':'middle'});
-    lbl.textContent = b.label;
-    svg.appendChild(lbl);
-  });
-  return svg;
 }
 // 7-point line chart, one or two series. series: [{name,color,points:[v...]}]
 function trendLineChart(series, labels){
@@ -1388,17 +1317,10 @@ async function autoSyncGoogleHealthIfDue(){
 /* =========================================================
    EVENT WIRING
    ========================================================= */
-// One metric, its own scale: Yesterday vs Today bars plus a dashed goal line.
-function pairBarChart(yVal, tVal, goal, todayColor){
-  return groupedBarChart([
-    {label:'Yest.', series:[{v:yVal, color:'var(--muted)'}]},
-    {label:'Today', series:[{v:tVal, color:todayColor}]}
-  ], {goal, goalLabel:'Goal'});
-}
 function mountCharts(){
-  // Steps/Active-min/Distance/Calories/Protein mini-charts only ever exist inside
-  // the Activity/Nutrition detail popups now (see openActivityModal/openNutritionModal),
-  // which mount them directly when opened — this only needs to handle History's trend chart.
+  // Steps/Active-min/Distance/Calories/Protein no longer render as charts anywhere —
+  // openActivityModal/openNutritionModal show large readable numbers instead.
+  // This only needs to handle History's trend chart.
   const t = today();
   const trendEl = document.getElementById('chart-trend');
   if(trendEl){
