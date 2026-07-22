@@ -249,7 +249,7 @@ function defaultState(){
     myFoods: [],
     foodMemory: {}, // { foodName: {qty, unitLabel} } — last quantity used, recalled next time
     settings: {
-      clientId:'', clientSecret:'', useMetric:false,
+      clientId:'', clientSecret:'', fdcApiKey:'', useMetric:false,
       charts: { projection:true, trend:true }
     },
     googleHealth: { accessToken:null, refreshToken:null, expiresAt:0 },
@@ -447,6 +447,67 @@ const FOOD_DB = [
 {n:"Honey, 1 tbsp",per:1,u:"tbsp",k:64,p:0.1,c:17,f:0,ir:0.1,ca:1}
 ];
 function allFoods(){ return FOOD_DB.concat(state.myFoods); }
+
+/* =========================================================
+   USDA FOODDATA CENTRAL — live food search, supplementing the
+   static FOOD_DB above with a much larger, sourced dataset.
+   ========================================================= */
+function fdcNutrient(f, names){
+  const hit = (f.foodNutrients||[]).find(n=>names.includes(n.nutrientName));
+  return hit ? (hit.value||0) : 0;
+}
+function normalizeFdcFood(f){
+  const kcal = fdcNutrient(f, ['Energy']);
+  if(!kcal) return null; // skip entries with no usable calorie data
+  return {
+    n: f.description, per:100, u:'g', k: kcal,
+    p: fdcNutrient(f, ['Protein']),
+    c: fdcNutrient(f, ['Carbohydrate, by difference']),
+    f: fdcNutrient(f, ['Total lipid (fat)']),
+    ir: fdcNutrient(f, ['Iron, Fe']),
+    ca: fdcNutrient(f, ['Calcium, Ca']),
+    fdc: true
+  };
+}
+async function searchFDC(query){
+  const key = state.settings.fdcApiKey;
+  if(!key || query.trim().length<2) return null;
+  try{
+    const url = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&api_key=${encodeURIComponent(key)}&dataType=Foundation,SR%20Legacy&pageSize=10`;
+    const res = await fetch(url);
+    if(!res.ok){
+      const bodyText = await res.text().catch(()=>'');
+      throw new Error(`HTTP ${res.status}: ${bodyText.slice(0,200)}`);
+    }
+    const data = await res.json();
+    return (data.foods||[]).map(normalizeFdcFood).filter(Boolean);
+  }catch(e){
+    logError('FoodData Central search failed: '+e.message);
+    return null;
+  }
+}
+let liveFoodResults = null;      // normalized results for the query below, or null if none yet/failed
+let liveFoodSearchQuery = '';    // which query liveFoodResults corresponds to
+let liveFoodSearchDebounce = null;
+let liveFoodSearchLoading = false;
+function triggerLiveFoodSearch(query){
+  clearTimeout(liveFoodSearchDebounce);
+  if(!state.settings.fdcApiKey || query.trim().length<2){
+    liveFoodResults = null; liveFoodSearchQuery = query; liveFoodSearchLoading = false;
+    return;
+  }
+  liveFoodSearchLoading = true;
+  liveFoodSearchDebounce = setTimeout(async ()=>{
+    const results = await searchFDC(query);
+    liveFoodSearchLoading = false;
+    if(logFoodQuery!==query) return; // user moved on to a different search meanwhile
+    liveFoodResults = results;
+    liveFoodSearchQuery = query;
+    render();
+    const el = document.getElementById('food-search');
+    if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }, 400);
+}
 
 /* =========================================================
    CALCULATIONS: targets & scores
@@ -889,7 +950,8 @@ const INFO_CONTENT = {
   projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
   trend: ['7-day score trend', `Your daily Activity and Nutrition scores (0-100) over the last 7 days. Tap a point for its value.`],
   fitsync: ['Google Health sync', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Setup, one time: console.cloud.google.com → new project → OAuth consent screen → publishing status <strong>"In Production"</strong> (fine for personal use — Google only requires review past 100 users) → Credentials → OAuth client ID → type <strong>Web application</strong> → Authorized redirect URI: <strong>${location.origin}${location.pathname}</strong> → enable the "Google Health API" and add the activity/fitness and health-metrics scopes → paste the resulting Client ID and Client Secret below. After you connect once, it re-syncs automatically in the background — no further action needed.`],
-  databackup: ['Data & backups', `Everything here (profile, logged food, activity, Google Health credentials) lives only in this browser's local storage on this device — nothing is sent to a server. That's good for privacy, but it means your phone or browser's own "clear history / clear site data" action can wipe it, the same as it would for any website — there's no way for a site to opt out of that. <strong>Export data</strong> saves everything to a JSON file you can keep as a backup; <strong>Import data</strong> restores from one. Only the <strong>Reset all data</strong> button below is an in-app wipe — a browser-level clear is outside the app's control.`]
+  databackup: ['Data & backups', `Everything here (profile, logged food, activity, Google Health credentials) lives only in this browser's local storage on this device — nothing is sent to a server. That's good for privacy, but it means your phone or browser's own "clear history / clear site data" action can wipe it, the same as it would for any website — there's no way for a site to opt out of that. <strong>Export data</strong> saves everything to a JSON file you can keep as a backup; <strong>Import data</strong> restores from one. Only the <strong>Reset all data</strong> button below is an in-app wipe — a browser-level clear is outside the app's control.`],
+  fdc: ['Food search', `Without a key, food search only checks the small built-in list (~75 items) plus anything you've logged before. With a free USDA FoodData Central key, it also searches a much larger, government-maintained nutrition database live as you type. Setup: fdc.nal.usda.gov/api-key-signup → fill in the short form → the key is emailed instantly, no approval wait → paste it below. It's free with no usage cost. Results are limited to the Foundation/SR Legacy datasets (generic whole foods) rather than the ~300,000 branded/packaged items, to keep casual searches from getting buried in specific brand names.`]
 };
 function wireInfoButtons(root){
   (root||document).querySelectorAll('[data-info]').forEach(b=>{
@@ -1257,18 +1319,32 @@ const FOOD_UNIT_OPTIONS = [
 let foodUnitFilter = 'any';
 let matchedFood = null; // the FOOD_DB/myFoods entry currently selected from suggestions, or null for a freeform/custom name
 function getFoodResults(){
-  let list = logFoodQuery.length>0
-    ? allFoods().filter(f=>f.n.toLowerCase().includes(logFoodQuery.toLowerCase()))
-    : recentFoods(20);
-  const heading = logFoodQuery.length>0 ? null : (list.length ? 'Recent' : null);
-  if(foodUnitFilter!=='any') list = list.filter(f=>unitCategory(f.u)===foodUnitFilter);
-  return {list: list.slice(0,8), heading};
+  if(logFoodQuery.length===0){
+    const list = recentFoods(20);
+    return {list: list.slice(0,8), heading: list.length ? 'Recent' : null, loading:false};
+  }
+  let localList = allFoods().filter(f=>f.n.toLowerCase().includes(logFoodQuery.toLowerCase()));
+  // Unit filter only narrows local results — FDC entries are always per-100g, so
+  // filtering them by "Cups"/"Tsp"/etc. would just hide all of them; the Amount/
+  // Unit fields still work fine against a gram-based FDC match regardless.
+  if(foodUnitFilter!=='any') localList = localList.filter(f=>unitCategory(f.u)===foodUnitFilter);
+  const fdcReady = state.settings.fdcApiKey && liveFoodSearchQuery===logFoodQuery && liveFoodResults;
+  if(fdcReady){
+    const seen = new Set(liveFoodResults.map(f=>f.n.toLowerCase()));
+    const combined = [...liveFoodResults, ...localList.filter(f=>!seen.has(f.n.toLowerCase()))];
+    return {list: combined.slice(0,10), heading:'From USDA FoodData Central', loading:false};
+  }
+  return {
+    list: localList.slice(0,8),
+    heading: null,
+    loading: !!(state.settings.fdcApiKey && liveFoodSearchLoading)
+  };
 }
 let foodSortMode = 'logged'; // 'logged' | 'kcal'
 function screenLog(){
   const t = today();
   const d = getDay(t);
-  const {list:results, heading} = getFoodResults();
+  const {list:results, heading, loading} = getFoodResults();
   const foods = foodSortMode==='kcal' ? d.foods.slice().sort((a,b)=>b.kcal-a.kcal) : d.foods;
   const showNutrition = logFocus!=='activity';
   const showActivity = logFocus!=='nutrition';
@@ -1288,13 +1364,12 @@ function screenLog(){
         <input type="text" id="food-search" placeholder="Search, or type a name and press Enter" value="${logFoodQuery}">
       </div>
       ${heading?`<div class="muted" style="margin:6px 0 -2px;">${heading}</div>`:''}
+      ${loading?`<div class="muted" style="margin:6px 0 -2px;">Searching FoodData Central…</div>`:''}
       <div class="search-list ${results.length && !matchedFood?'':'hidden'}" id="food-results">
-        ${results.map((f,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${f.n}</div><div class="m">${f.k} kcal per ${f.per} ${f.u}</div></div>`).join('')}
+        ${results.map((f,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${f.n}${f.fdc?' <span class="muted" style="font-size:10.5px;">USDA</span>':''}</div><div class="m">${f.k} kcal per ${f.per} ${f.u}</div></div>`).join('')}
       </div>
       <div class="field" style="margin-top:2px;"><label>Calories</label><input type="number" id="food-kcal" placeholder="0"></div>
       <button class="btn-primary" id="btn-add-food" style="margin-top:4px;">Add to today</button>
-      <div style="height:8px"></div>
-      <button class="btn-secondary" id="btn-custom-food">Add with full nutrition (protein/carbs/fat)</button>
     </div>
 
     <div class="card">
@@ -1327,6 +1402,12 @@ function screenLog(){
 // popup — matches the earlier fix for "should stay in the text bar until Enter or a
 // suggestion is picked" by keeping everything in one continuous form.
 function selectFoodIntoForm(food){
+  // Cache FDC results into myFoods on selection so foodMemory/recentFoods (both keyed
+  // by name, looked up via allFoods()) keep working for it afterward, and so it's
+  // still reachable without a network call if the API key is ever removed.
+  if(food.fdc && !state.myFoods.some(f=>f.n===food.n)){
+    state.myFoods.push({n:food.n, per:food.per, u:food.u, k:food.k, p:food.p, c:food.c, f:food.f, ir:food.ir, ca:food.ca});
+  }
   // Read whatever the user already typed in Amount BEFORE render() below recreates
   // the field (it has no value= binding, so a fresh render always wipes it blank).
   const priorAmountEl = document.getElementById('food-amount');
@@ -1343,47 +1424,6 @@ function selectFoodIntoForm(food){
   amountEl.focus();
   amountEl.select();
 }
-function screenCustomFoodModal(){
-  const wrap = document.createElement('div');
-  wrap.innerHTML = `
-  <div class="modal-backdrop center">
-    <div class="modal">
-      <h2>Add custom food</h2>
-      <div class="field"><label>Name</label><input type="text" id="cf-name"></div>
-      <div class="field-row">
-        <div class="field"><label>Quantity label</label><input type="text" id="cf-unit" placeholder="1 serving" value="1 serving"></div>
-        <div class="field"><label>Calories</label><input type="number" id="cf-kcal"></div>
-      </div>
-      <div class="field-row">
-        <div class="field"><label>Protein (g)</label><input type="number" id="cf-p" value="0"></div>
-        <div class="field"><label>Carbs (g)</label><input type="number" id="cf-c" value="0"></div>
-        <div class="field"><label>Fat (g)</label><input type="number" id="cf-f" value="0"></div>
-      </div>
-      <div class="field-row">
-        <div class="field"><label>Iron (mg)</label><input type="number" id="cf-ir" value="0"></div>
-        <div class="field"><label>Calcium (mg)</label><input type="number" id="cf-ca" value="0"></div>
-      </div>
-      <button class="btn-primary" id="cf-save">Add to today & save food</button>
-    </div>
-  </div>`;
-  document.body.appendChild(wrap);
-  wrap.querySelector('#cf-save').addEventListener('click', ()=>{
-    const name = wrap.querySelector('#cf-name').value.trim();
-    const kcal = Number(wrap.querySelector('#cf-kcal').value);
-    if(!name||!kcal){ alert('Enter at least a name and calories.'); return; }
-    const unit = wrap.querySelector('#cf-unit').value.trim()||'serving';
-    const pr = Number(wrap.querySelector('#cf-p').value)||0;
-    const cb = Number(wrap.querySelector('#cf-c').value)||0;
-    const ft = Number(wrap.querySelector('#cf-f').value)||0;
-    const ir = Number(wrap.querySelector('#cf-ir').value)||0;
-    const ca = Number(wrap.querySelector('#cf-ca').value)||0;
-    const foodDef = {n:name, per:1, u:unit, k:kcal, p:pr, c:cb, f:ft, ir, ca};
-    state.myFoods.push(foodDef);
-    getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel:`1 ${unit}`, kcal, protein:pr, carbs:cb, fat:ft, iron:ir, calcium:ca});
-    saveState(); wrap.remove(); logFoodQuery=''; matchedFood=null; render();
-  });
-}
-
 /* ---------- HISTORY ---------- */
 let historyMode = 'week';
 function screenHistory(){
@@ -1489,6 +1529,13 @@ function screenSettings(){
       <button class="btn-secondary" id="s-fit-save">Save credentials</button>
       <div style="height:8px"></div>
       <button class="btn-primary" id="s-fit-connect">${state.googleHealth.refreshToken ? 'Reconnect & sync now' : 'Connect & sync today'}</button>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Food search</h3>${infoBtnHtml('fdc')}</div>
+      <div class="field"><label>USDA FoodData Central API key</label><input type="text" id="s-fdc-key" placeholder="paste your free key here" value="${state.settings.fdcApiKey}"></div>
+      <button class="btn-secondary" id="s-fdc-save">Save key</button>
+      <div class="muted" style="margin-top:8px;">${state.settings.fdcApiKey ? 'Food search pulls live results from FoodData Central.' : 'Without a key, food search only uses the small built-in list.'}</div>
     </div>
 
     ${state.errorLog.length ? `<div class="card">
@@ -1750,6 +1797,7 @@ function attachHandlers(){
     search.addEventListener('input', e=>{
       logFoodQuery = e.target.value;
       matchedFood = null; // typing again means searching afresh, not editing the matched food
+      triggerLiveFoodSearch(logFoodQuery);
       render();
       // Re-rendering replaces the input with a fresh DOM node, which resets the
       // cursor to the start unless we explicitly put it back at the end.
@@ -1793,7 +1841,10 @@ function attachHandlers(){
     const amount = Number(document.getElementById('food-amount').value) || 1;
     const kcal = Number(document.getElementById('food-kcal').value) || 0;
     if(!(matchedFood && matchedFood.n===name) && kcal===0){
-      if(!confirm(`"${name}" didn't match a known food, and no calories were entered. Add it anyway with 0 calories?`)) return;
+      alert(`"${name}" isn't a recognized food, so calories can't be estimated automatically — enter your best estimate in the Calories field before adding.`);
+      const kcalEl = document.getElementById('food-kcal');
+      if(kcalEl) kcalEl.focus();
+      return;
     }
     let protein=0, carbs=0, fat=0, iron=0, calcium=0, qtyLabel;
     if(matchedFood && matchedFood.n===name){
@@ -1802,8 +1853,8 @@ function attachHandlers(){
       iron = (matchedFood.ir||0)*ratio; calcium = (matchedFood.ca||0)*ratio;
       qtyLabel = `${amount} ${matchedFood.u}`;
     }else{
-      // Freeform name — save it as a reusable custom food too (macros default to 0;
-      // use "Add with full nutrition" below for a food that needs real protein/carbs/fat).
+      // Freeform name — nutrition is always estimated (search match or FDC), so an
+      // unmatched name just gets the entered calories with macros/micros at 0.
       const unitLabel = foodUnitSelect ? foodUnitSelect.selectedOptions[0].textContent : 'serving';
       qtyLabel = `${amount} ${unitLabel}`;
       state.myFoods.push({n:name, per:amount, u:unitLabel, k:kcal, p:0, c:0, f:0, ir:0, ca:0});
@@ -1815,8 +1866,6 @@ function attachHandlers(){
   });
   const sortBtn = document.getElementById('btn-sort-foods');
   if(sortBtn) sortBtn.addEventListener('click', ()=>{ foodSortMode = foodSortMode==='kcal'?'logged':'kcal'; render(); });
-  const customBtn = document.getElementById('btn-custom-food');
-  if(customBtn) customBtn.addEventListener('click', screenCustomFoodModal);
   document.querySelectorAll('[data-food]').forEach(el=>{
     el.addEventListener('click', ()=>{
       const id = Number(el.dataset.food);
@@ -1900,6 +1949,11 @@ function attachHandlers(){
   });
   const fitConnect = document.getElementById('s-fit-connect');
   if(fitConnect) fitConnect.addEventListener('click', startGoogleHealthAuth);
+  const fdcSave = document.getElementById('s-fdc-save');
+  if(fdcSave) fdcSave.addEventListener('click', ()=>{
+    state.settings.fdcApiKey = document.getElementById('s-fdc-key').value.trim();
+    saveState(); alert('Key saved.'); render();
+  });
   const exportBtn = document.getElementById('s-export');
   if(exportBtn) exportBtn.addEventListener('click', ()=>{
     const blob = new Blob([JSON.stringify(state,null,2)], {type:'application/json'});
