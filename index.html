@@ -192,7 +192,7 @@ input,select{font-family:inherit;}
 
 /* ---- score trio (Total/Activity/Nutrition circles, one infographic) ---- */
 .score-trio{display:flex;align-items:center;justify-content:center;gap:18px;flex-wrap:wrap;}
-.score-circle-col{display:flex;flex-direction:column;align-items:center;gap:6px;}
+.score-circle-col{display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;}
 .score-circle-col .cap{font-size:12px;color:var(--muted);}
 
 /* ---- collapsible section header ---- */
@@ -205,6 +205,15 @@ input,select{font-family:inherit;}
   margin-right:8px;box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);}
 .quick-add:active{transform:translateY(1px);box-shadow:none;}
 .quick-add.red{background:var(--critical);}
+
+/* ---- quick-log pill row (always visible, no tap-to-discover) ---- */
+.pill-row{display:flex;gap:10px;margin-bottom:14px;}
+.pill-btn{border:none;border-radius:11px;color:#fff;font-weight:700;font-size:14.5px;padding:13px;
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  box-shadow:0 3px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);transition:transform .08s, box-shadow .08s;}
+.pill-btn:active{transform:translateY(2px);box-shadow:0 1px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.3);}
+.pill-btn.green{background:linear-gradient(180deg, color-mix(in srgb, var(--good) 100%, white 15%), var(--good));flex:1.5;}
+.pill-btn.red{background:linear-gradient(180deg, color-mix(in srgb, var(--critical) 100%, white 15%), var(--critical));flex:1;}
 </style>
 </head>
 <body>
@@ -234,7 +243,7 @@ function defaultState(){
     foodMemory: {}, // { foodName: {qty, unitLabel} } — last quantity used, recalled next time
     settings: {
       clientId:'', clientSecret:'', useMetric:false,
-      charts: { activity:true, nutrition:true, projection:true, trend:true }
+      charts: { projection:true, trend:true }
     },
     googleHealth: { accessToken:null, refreshToken:null, expiresAt:0 },
     errorLog: [] // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
@@ -657,8 +666,6 @@ function openInfoModal(title, bodyHtml){
 }
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
 const INFO_CONTENT = {
-  activity: ['Activity chart', `Compares yesterday and today against your step and active-minute goals. Bars use your goal (Settings) as the dashed reference line. Tap any bar for its exact value.`],
-  nutrition: ['Nutrition comparison', `Compares yesterday and today's calories and protein against your daily targets, which are calculated from your age, height, weight, and weekly goal (Settings). Tap any bar for its exact value.`],
   projection: ['Week Pace / Summary', `Monday through Saturday, this averages your daily scores so far this week and projects that same pace forward — not a guess, just "if the rest of the week looks like today did." On Sunday the week is complete, so this becomes the real final score for the week instead, plus your highlights and one focus area for next week.`],
   trend: ['7-day score trend', `Your daily Activity and Nutrition scores (0-100) over the last 7 days. Tap a point for its value.`],
   fitsync: ['Google Health sync', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Setup, one time: console.cloud.google.com → new project → OAuth consent screen → publishing status <strong>"In Production"</strong> (fine for personal use — Google only requires review past 100 users) → Credentials → OAuth client ID → type <strong>Web application</strong> → Authorized redirect URI: <strong>${location.origin}${location.pathname}</strong> → enable the "Google Health API" and add the activity/fitness and health-metrics scopes → paste the resulting Client ID and Client Secret below. After you connect once, it re-syncs automatically in the background — no further action needed.`],
@@ -670,6 +677,79 @@ function wireInfoButtons(root){
       const [title, body] = INFO_CONTENT[b.dataset.info];
       openInfoModal(title, body);
     });
+  });
+}
+
+/* =========================================================
+   TODAY SCREEN DETAIL POPUPS — tapping a score circle opens the
+   relevant drill-down instead of an inline foldable card.
+   ========================================================= */
+function openTotalsModal(){
+  const t = today(), p = state.profile, d = getDay(t);
+  const totals = dayTotals(t), targets = dailyTargets(p, d.activity.kcal);
+  openInfoModal("Today's Totals", `
+    ${progRow('Calories', totals.kcal, targets.kcal, '', 'var(--blue)')}
+    ${progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)')}
+    ${progRow('Carbs', totals.carbs, targets.carbG, 'g', 'var(--yellow)')}
+    ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--orange)')}
+    ${progRow('Steps', d.activity.steps, p.stepGoal, '', 'var(--blue)')}
+    ${progRow('Active min', d.activity.activeMin, p.activeMinGoal, '', 'var(--aqua)')}
+    <div class="row" style="margin-top:8px;"><span class="text2">Distance</span><span>${(d.activity.distanceMi||0).toFixed(1)} mi</span></div>
+  `);
+}
+function mountActivityCharts(){
+  const t = today(), y = addDays(t,-1), p = state.profile;
+  const dy = getDay(y).activity, dt = getDay(t).activity;
+  const stepsEl = document.getElementById('chart-steps');
+  if(stepsEl) stepsEl.appendChild(pairBarChart(dy.steps, dt.steps, p.stepGoal, 'var(--blue)'));
+  const activeMinEl = document.getElementById('chart-activemin');
+  if(activeMinEl) activeMinEl.appendChild(pairBarChart(dy.activeMin, dt.activeMin, p.activeMinGoal, 'var(--blue)'));
+  const distanceEl = document.getElementById('chart-distance');
+  if(distanceEl) distanceEl.appendChild(pairBarChart(dy.distanceMi||0, dt.distanceMi||0, undefined, 'var(--blue)'));
+}
+function openActivityModal(){
+  openInfoModal('Activity', `
+    <div class="muted" style="margin-bottom:10px;">Yesterday vs today against your step and active-minute goals (Settings). Tap any bar for its exact value.</div>
+    <div style="display:flex;gap:10px;">
+      <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Steps</div><div class="chart" id="chart-steps"></div></div>
+      <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Active min</div><div class="chart" id="chart-activemin"></div></div>
+      <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Distance (mi)</div><div class="chart" id="chart-distance"></div></div>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--blue)"></span>Today</div>
+    </div>
+    <button class="btn-secondary" id="modal-log-activity" style="margin-top:14px;">Log activity</button>
+  `);
+  mountActivityCharts();
+  document.getElementById('modal-log-activity').addEventListener('click', ()=>{
+    document.querySelector('.modal-backdrop').remove(); activeTab='log'; render();
+  });
+}
+function mountNutritionCharts(){
+  const t = today(), y = addDays(t,-1);
+  const ty = dayTotals(y), tt = dayTotals(t);
+  const targets = dailyTargets(state.profile, getDay(t).activity.kcal);
+  const calEl = document.getElementById('chart-calories');
+  if(calEl) calEl.appendChild(pairBarChart(ty.kcal, tt.kcal, targets.kcal, 'var(--aqua)'));
+  const proEl = document.getElementById('chart-protein');
+  if(proEl) proEl.appendChild(pairBarChart(ty.protein, tt.protein, targets.proteinG, 'var(--aqua)'));
+}
+function openNutritionModal(){
+  openInfoModal('Nutrition', `
+    <div style="display:flex;gap:10px;">
+      <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Calories</div><div class="chart" id="chart-calories"></div></div>
+      <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Protein (g)</div><div class="chart" id="chart-protein"></div></div>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--aqua)"></span>Today</div>
+    </div>
+    <button class="btn-secondary" id="modal-log-nutrition" style="margin-top:14px;">Log nutrition</button>
+  `);
+  mountNutritionCharts();
+  document.getElementById('modal-log-nutrition').addEventListener('click', ()=>{
+    document.querySelector('.modal-backdrop').remove(); activeTab='log'; render();
   });
 }
 function showTooltip(x, y, text){
@@ -768,19 +848,6 @@ function trendLineChart(series, labels){
   });
   return svg;
 }
-// Folded by default — tap the title to drill down into detail. State is per-session
-// (module-level), not persisted, so sections start collapsed again on a fresh visit.
-let sectionOpen = {activity:false, nutrition:false, totals:false};
-function collapsibleHead(title, key, infoId, leadingHtml){
-  const open = !!sectionOpen[key];
-  return `<div class="card-head">
-    ${leadingHtml||''}
-    <div class="section-toggle" data-toggle="${key}"><h3>${title}</h3>
-      <svg class="chevron ${open?'open':''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-    </div>
-    ${infoId?infoBtnHtml(infoId):''}
-  </div>`;
-}
 function progRow(label, value, target, unit, color){
   const pct = clamp(target>0 ? (value/target*100) : 0, 0, 100);
   return `<div class="prog-row">
@@ -843,10 +910,6 @@ function render(){
 /* ---------- TODAY ---------- */
 function screenToday(){
   const t = today();
-  const y = addDays(t,-1);
-  const p = state.profile;
-  const totals = dayTotals(t);
-  const targets = dailyTargets(p, getDay(t).activity.kcal);
   const nScore = nutritionScore(t), aScore = activityScore(t), oScore = dayOverallScore(t);
 
   const {start:ws, end:we} = weekRange(t);
@@ -869,47 +932,22 @@ function screenToday(){
     weekFeedback = buildFeedback(weekDates); // week is complete today, so this is the real score, not a projection
   }
   const chartsOn = state.settings.charts;
-  const d = getDay(t);
 
   return `
   <div class="topbar"><h1>Today</h1><div class="muted" id="today-date"></div></div>
   <div class="screen">
     <div class="card score-hero">
       <div class="score-trio">
-        <div class="score-circle-col">${scoreCircle(oScore, 138, 'Total Score')}</div>
-        <div class="score-circle-col">${scoreCircle(aScore, 84)}<div class="cap">Activity</div></div>
-        <div class="score-circle-col">${scoreCircle(nScore, 84)}<div class="cap">Nutrition</div></div>
+        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore, 138, 'Total Score')}</div>
+        <div class="score-circle-col" data-open-modal="activity">${scoreCircle(aScore, 84)}<div class="cap">Activity</div></div>
+        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(nScore, 84)}<div class="cap">Nutrition</div></div>
       </div>
     </div>
 
-    ${chartsOn.activity ? `<div class="card">
-      ${collapsibleHead('Activity', 'activity', 'activity', '<button class="quick-add red" data-quick-nav="log" title="Log activity">+</button>')}
-      <div class="${sectionOpen.activity?'':'hidden'}">
-        <div style="display:flex;gap:10px;">
-          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Steps</div><div class="chart" id="chart-steps"></div></div>
-          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Active min</div><div class="chart" id="chart-activemin"></div></div>
-          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Distance (mi)</div><div class="chart" id="chart-distance"></div></div>
-        </div>
-        <div class="legend">
-          <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
-          <div class="legend-item"><span class="swatch" style="background:var(--blue)"></span>Today</div>
-        </div>
-      </div>
-    </div>` : ''}
-
-    ${chartsOn.nutrition ? `<div class="card">
-      ${collapsibleHead('Nutrition', 'nutrition', 'nutrition', '<button class="quick-add" data-quick-nav="log" title="Log nutrition">+</button>')}
-      <div class="${sectionOpen.nutrition?'':'hidden'}">
-        <div style="display:flex;gap:10px;">
-          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Calories</div><div class="chart" id="chart-calories"></div></div>
-          <div style="flex:1;"><div class="muted" style="text-align:center;margin-bottom:2px;">Protein (g)</div><div class="chart" id="chart-protein"></div></div>
-        </div>
-        <div class="legend">
-          <div class="legend-item"><span class="swatch" style="background:var(--muted)"></span>Yesterday</div>
-          <div class="legend-item"><span class="swatch" style="background:var(--aqua)"></span>Today</div>
-        </div>
-      </div>
-    </div>` : ''}
+    <div class="pill-row">
+      <button class="pill-btn green" data-quick-nav="log">+ Log Nutrition</button>
+      <button class="pill-btn red" data-quick-nav="log">+ Activity</button>
+    </div>
 
     ${chartsOn.projection ? `<div class="card">
       <div class="card-head"><h3>${sunday?'Week Summary':'This Week'}</h3>${infoBtnHtml('projection')}</div>
@@ -923,19 +961,6 @@ function screenToday(){
         <div class="muted">${weekAvg===null?'Log today to start the trend.':paceMsg(weekAvg)}</div>
       `}
     </div>` : ''}
-
-    <div class="card">
-      ${collapsibleHead("Today's totals", 'totals', null)}
-      <div class="${sectionOpen.totals?'':'hidden'}">
-        ${progRow('Calories', totals.kcal, targets.kcal, '', 'var(--blue)')}
-        ${progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)')}
-        ${progRow('Carbs', totals.carbs, targets.carbG, 'g', 'var(--yellow)')}
-        ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--orange)')}
-        ${progRow('Steps', d.activity.steps, p.stepGoal, '', 'var(--blue)')}
-        ${progRow('Active min', d.activity.activeMin, p.activeMinGoal, '', 'var(--aqua)')}
-        <div class="row" style="margin-top:8px;"><span class="text2">Distance</span><span>${(d.activity.distanceMi||0).toFixed(1)} mi</span></div>
-      </div>
-    </div>
   </div>`;
 }
 
@@ -1148,8 +1173,6 @@ function screenSettings(){
 
     <div class="card">
       <h3>Dashboard</h3>
-      ${dashToggleRow('activity','Activity chart')}
-      ${dashToggleRow('nutrition','Nutrition comparison')}
       ${dashToggleRow('projection','Week/month pace')}
       ${dashToggleRow('trend','7-day trend')}
     </div>
@@ -1373,35 +1396,10 @@ function pairBarChart(yVal, tVal, goal, todayColor){
   ], {goal, goalLabel:'Goal'});
 }
 function mountCharts(){
-  const t = today(), y = addDays(t,-1);
-  const p = state.profile;
-  const stepsEl = document.getElementById('chart-steps');
-  if(stepsEl){
-    const dy = getDay(y).activity, dt = getDay(t).activity;
-    stepsEl.appendChild(pairBarChart(dy.steps, dt.steps, p.stepGoal, 'var(--blue)'));
-  }
-  const distanceEl = document.getElementById('chart-distance');
-  if(distanceEl){
-    const dy = getDay(y).activity, dt = getDay(t).activity;
-    distanceEl.appendChild(pairBarChart(dy.distanceMi||0, dt.distanceMi||0, undefined, 'var(--blue)'));
-  }
-  const activeMinEl = document.getElementById('chart-activemin');
-  if(activeMinEl){
-    const dy = getDay(y).activity, dt = getDay(t).activity;
-    activeMinEl.appendChild(pairBarChart(dy.activeMin, dt.activeMin, p.activeMinGoal, 'var(--blue)'));
-  }
-  const calEl = document.getElementById('chart-calories');
-  if(calEl){
-    const ty = dayTotals(y), tt = dayTotals(t);
-    const targets = dailyTargets(p, getDay(t).activity.kcal);
-    calEl.appendChild(pairBarChart(ty.kcal, tt.kcal, targets.kcal, 'var(--aqua)'));
-  }
-  const proEl = document.getElementById('chart-protein');
-  if(proEl){
-    const ty = dayTotals(y), tt = dayTotals(t);
-    const targets = dailyTargets(p, getDay(t).activity.kcal);
-    proEl.appendChild(pairBarChart(ty.protein, tt.protein, targets.proteinG, 'var(--aqua)'));
-  }
+  // Steps/Active-min/Distance/Calories/Protein mini-charts only ever exist inside
+  // the Activity/Nutrition detail popups now (see openActivityModal/openNutritionModal),
+  // which mount them directly when opened — this only needs to handle History's trend chart.
+  const t = today();
   const trendEl = document.getElementById('chart-trend');
   if(trendEl){
     const dates = []; for(let i=6;i>=0;i--) dates.push(addDays(t,-i));
@@ -1417,6 +1415,12 @@ function attachHandlers(){
   document.querySelectorAll('.navbtn').forEach(b=>b.addEventListener('click', ()=>{ activeTab=b.dataset.tab; render(); }));
   document.querySelectorAll('[data-quick-nav]').forEach(b=>b.addEventListener('click', e=>{
     e.stopPropagation(); activeTab=b.dataset.quickNav; render();
+  }));
+  document.querySelectorAll('[data-open-modal]').forEach(el=>el.addEventListener('click', ()=>{
+    const which = el.dataset.openModal;
+    if(which==='totals') openTotalsModal();
+    else if(which==='activity') openActivityModal();
+    else if(which==='nutrition') openNutritionModal();
   }));
   wireInfoButtons(document);
   document.querySelectorAll('[data-chart-toggle]').forEach(b=>b.addEventListener('click', ()=>{
