@@ -499,6 +499,15 @@ function weekCalorieProgress(iso){
   const goal = weekDates.reduce((sum,d)=>sum+dailyTargets(state.profile, getDay(d).activity.kcal).kcal, 0);
   return {consumed, goal};
 }
+// Same approach, month-to-date — each day's own (activity-adjusted) target is summed
+// rather than a flat dailyGoal*daysSoFar, consistent with weekCalorieProgress.
+function monthCalorieProgress(iso){
+  const {start:ms} = monthRange(iso);
+  const monthDates = datesBetween(ms, iso);
+  const consumed = monthDates.reduce((sum,d)=>sum+dayTotals(d).kcal, 0);
+  const goal = monthDates.reduce((sum,d)=>sum+dailyTargets(state.profile, getDay(d).activity.kcal).kcal, 0);
+  return {consumed, goal};
+}
 
 function nutritionScore(iso){
   const p = state.profile; if(!p) return null;
@@ -824,9 +833,11 @@ function openNutritionModal(){
   const t = today();
   const totals = dayTotals(t), targets = dailyTargets(state.profile, getDay(t).activity.kcal);
   const week = weekCalorieProgress(t);
+  const month = monthCalorieProgress(t);
   openInfoModal('Nutrition', `
     ${bigStatRow(Math.round(totals.kcal).toLocaleString(), 'Calories today', `/ ${targets.kcal.toLocaleString()} goal`)}
     ${bigStatRow(Math.round(week.consumed).toLocaleString(), 'Calories this week', `/ ${Math.round(week.goal).toLocaleString()} goal`)}
+    ${bigStatRow(Math.round(month.consumed).toLocaleString(), 'Calories this month', `/ ${Math.round(month.goal).toLocaleString()} goal`)}
     ${bigStatRow(Math.round(totals.protein), 'Protein (g)', `/ ${targets.proteinG}g target`)}
   `);
 }
