@@ -935,8 +935,8 @@ function screenToday(){
     </div>
 
     <div class="pill-row">
-      <button class="pill-btn green" data-quick-nav="log">+ Log Nutrition</button>
-      <button class="pill-btn red" data-quick-nav="log">+ Activity</button>
+      <button class="pill-btn green" data-quick-nav="log" data-log-focus="nutrition">+ Log Nutrition</button>
+      <button class="pill-btn red" data-quick-nav="log" data-log-focus="activity">+ Activity</button>
     </div>
 
     ${chartsOn.projection ? `<div class="card">
@@ -967,6 +967,7 @@ function screenToday(){
 
 /* ---------- LOG ---------- */
 let logFoodQuery = '';
+let logFocus = null; // 'nutrition' | 'activity' | null (both) — set by which quick-log pill was tapped
 function recentFoods(limit){
   return Object.entries(state.foodMemory)
     .sort((a,b)=>(b[1].ts||0)-(a[1].ts||0))
@@ -987,10 +988,12 @@ function screenLog(){
   const d = getDay(t);
   const {list:results, heading} = getFoodResults();
   const foods = foodSortMode==='kcal' ? d.foods.slice().sort((a,b)=>b.kcal-a.kcal) : d.foods;
+  const showNutrition = logFocus!=='activity';
+  const showActivity = logFocus!=='nutrition';
   return `
-  <div class="topbar"><h1>Log</h1></div>
+  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1></div>
   <div class="screen">
-    <div class="card">
+    ${showNutrition ? `<div class="card">
       <h3>Add food</h3>
       <div class="field"><input type="text" id="food-search" placeholder="Search foods (e.g. chicken, rice)" value="${logFoodQuery}"></div>
       ${heading?`<div class="muted" style="margin:6px 0 -2px;">${heading}</div>`:''}
@@ -1008,9 +1011,9 @@ function screenLog(){
       </div>
       ${foods.length===0?'<div class="muted">Nothing logged yet today.</div>':
         foods.map(f=>`<div class="food-row"><div><div class="name">${f.name}</div><div class="sub">${f.qtyLabel}</div></div><div style="display:flex;align-items:center;gap:8px;"><div class="kcal">${Math.round(f.kcal)} kcal</div><button class="del" data-food="${f.id}">×</button></div></div>`).join('')}
-    </div>
+    </div>` : ''}
 
-    <div class="card">
+    ${showActivity ? `<div class="card">
       <div class="card-head"><h3>Activity</h3>${infoBtnHtml('fitsync')}</div>
       <div class="field-row">
         <div class="field"><label>Steps</label><input type="number" id="act-steps" value="${d.activity.steps||''}" placeholder="0"></div>
@@ -1022,7 +1025,7 @@ function screenLog(){
         ? `<div class="row"><span class="muted">Google Health connected — syncs automatically</span><button class="iconbtn" id="btn-connect-fit" title="Sync now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg></button></div>`
         : `<button class="btn-secondary" id="btn-connect-fit">Connect Google Health (optional)</button>`}
       <div class="muted" style="margin-top:8px;">${d.activity.source==='googlehealth'?'Synced from Google Health for today.':'Manual entry — tap ⓘ above for Google Health sync.'}</div>
-    </div>
+    </div>` : ''}
   </div>`;
 }
 
@@ -1408,7 +1411,7 @@ function mountCharts(){
 function attachHandlers(){
   document.querySelectorAll('.navbtn').forEach(b=>b.addEventListener('click', ()=>{ activeTab=b.dataset.tab; render(); }));
   document.querySelectorAll('[data-quick-nav]').forEach(b=>b.addEventListener('click', e=>{
-    e.stopPropagation(); activeTab=b.dataset.quickNav; render();
+    e.stopPropagation(); activeTab=b.dataset.quickNav; logFocus=b.dataset.logFocus||null; render();
   }));
   document.querySelectorAll('[data-open-modal]').forEach(el=>el.addEventListener('click', ()=>{
     const which = el.dataset.openModal;
