@@ -1176,7 +1176,10 @@ async function fetchGoogleHealthDataType(dataType, filterField, dateIso, token){
   const filter = `${filterField}.interval.civil_start_time >= "${start}" AND ${filterField}.interval.civil_start_time <= "${end}"`;
   const url = `https://health.googleapis.com/v4/users/me/dataTypes/${dataType}/dataPoints?filter=${encodeURIComponent(filter)}`;
   const res = await fetch(url, {headers:{'Authorization':'Bearer '+token}});
-  if(!res.ok) throw new Error('HTTP '+res.status+' for '+dataType);
+  if(!res.ok){
+    const bodyText = await res.text().catch(()=>'');
+    throw new Error(`HTTP ${res.status} for ${dataType}: ${bodyText.slice(0,300)}`);
+  }
   const data = await res.json();
   return data.dataPoints || data.dataPoint || [];
 }
@@ -1208,7 +1211,8 @@ async function fetchGoogleHealthToday(silent){
     saveState(); render();
     if(!silent) alert(`Synced from Google Health: ${Math.round(steps)} steps, ${Math.round(activeMin)} active min.`);
   }catch(e){
-    if(!silent) alert('Could not fetch Google Health data. Manual entry on the Log tab still works.');
+    console.error('Google Health sync failed:', e);
+    if(!silent) alert('Could not fetch Google Health data:\n\n'+e.message+'\n\nManual entry on the Log tab still works.');
   }
 }
 let lastGHAutoSync = 0;
