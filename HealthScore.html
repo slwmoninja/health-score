@@ -1296,6 +1296,11 @@ function screenToday(){
 /* ---------- LOG ---------- */
 let logFoodQuery = '';
 let logFocus = null; // 'nutrition' | 'activity' | null (both) — set by which quick-log pill was tapped
+// Amount needs a real persisted value (unlike Calories, which is fine staying
+// DOM-only) because more than one code path re-renders the Log screen while a
+// search is in flight (live FDC results arriving async) — without this, any of
+// those renders would silently wipe whatever the user had already typed.
+let foodAmountValue = '';
 function recentFoods(limit){
   return Object.entries(state.foodMemory)
     .sort((a,b)=>(b[1].ts||0)-(a[1].ts||0))
@@ -1357,7 +1362,7 @@ function screenLog(){
     ${showNutrition ? `<div class="card">
       <h3>Add food</h3>
       <div class="field-row">
-        <div class="field" style="flex:1;"><label>Amount</label><input type="number" step="any" id="food-amount" placeholder="1"></div>
+        <div class="field" style="flex:1;"><label>Amount</label><input type="number" step="any" id="food-amount" placeholder="1" value="${foodAmountValue}"></div>
         <div class="field" style="flex:1.3;"><label>Unit</label>
           <select id="food-unit">${FOOD_UNIT_OPTIONS.map(o=>`<option value="${o.v}" ${foodUnitFilter===o.v?'selected':''}>${o.l}</option>`).join('')}</select>
         </div>
@@ -1411,18 +1416,15 @@ function selectFoodIntoForm(food){
   if(food.fdc && !state.myFoods.some(f=>f.n===food.n)){
     state.myFoods.push({n:food.n, per:food.per, u:food.u, k:food.k, p:food.p, c:food.c, f:food.f, ir:food.ir, ca:food.ca});
   }
-  // Read whatever the user already typed in Amount BEFORE render() below recreates
-  // the field (it has no value= binding, so a fresh render always wipes it blank).
-  const priorAmountEl = document.getElementById('food-amount');
-  const priorAmount = priorAmountEl ? Number(priorAmountEl.value) : 0;
+  const priorAmount = Number(foodAmountValue)||0;
   matchedFood = food;
   logFoodQuery = food.n;
-  render();
   const remembered = state.foodMemory[food.n];
   const amt = priorAmount>0 ? priorAmount : (remembered ? remembered.qty : food.per);
+  foodAmountValue = String(amt);
+  render();
   const amountEl = document.getElementById('food-amount');
   const kcalEl = document.getElementById('food-kcal');
-  amountEl.value = amt;
   kcalEl.value = Math.round(food.k*(amt/food.per));
   amountEl.focus();
   amountEl.select();
@@ -1832,6 +1834,7 @@ function attachHandlers(){
   // Calories stuck at whatever it was computed as at selection time.
   const amountInputEl = document.getElementById('food-amount');
   if(amountInputEl) amountInputEl.addEventListener('input', ()=>{
+    foodAmountValue = amountInputEl.value;
     if(!matchedFood) return;
     const amt = Number(amountInputEl.value)||0;
     const kcalEl = document.getElementById('food-kcal');
@@ -1864,7 +1867,7 @@ function attachHandlers(){
     }
     getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel, kcal, protein, carbs, fat, iron, calcium});
     state.foodMemory[name] = {qty:amount, ts:Date.now()};
-    logFoodQuery=''; matchedFood=null; foodUnitFilter='any';
+    logFoodQuery=''; matchedFood=null; foodUnitFilter='any'; foodAmountValue='';
     saveState(); render();
   });
   const sortBtn = document.getElementById('btn-sort-foods');
