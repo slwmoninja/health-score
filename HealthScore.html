@@ -672,7 +672,7 @@ function openInfoModal(title, bodyHtml){
 }
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
 const INFO_CONTENT = {
-  projection: ['Week Pace / Summary', `Monday through Saturday, this averages your daily scores so far this week and projects that same pace forward — not a guess, just "if the rest of the week looks like today did." On Sunday the week is complete, so this becomes the real final score for the week instead, plus your highlights and one focus area for next week.`],
+  projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
   trend: ['7-day score trend', `Your daily Activity and Nutrition scores (0-100) over the last 7 days. Tap a point for its value.`],
   fitsync: ['Google Health sync', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Setup, one time: console.cloud.google.com → new project → OAuth consent screen → publishing status <strong>"In Production"</strong> (fine for personal use — Google only requires review past 100 users) → Credentials → OAuth client ID → type <strong>Web application</strong> → Authorized redirect URI: <strong>${location.origin}${location.pathname}</strong> → enable the "Google Health API" and add the activity/fitness and health-metrics scopes → paste the resulting Client ID and Client Secret below. After you connect once, it re-syncs automatically in the background — no further action needed.`],
   databackup: ['Data & backups', `Everything here (profile, logged food, activity, Google Health credentials) lives only in this browser's local storage on this device — nothing is sent to a server. That's good for privacy, but it means your phone or browser's own "clear history / clear site data" action can wipe it, the same as it would for any website — there's no way for a site to opt out of that. <strong>Export data</strong> saves everything to a JSON file you can keep as a backup; <strong>Import data</strong> restores from one. Only the <strong>Reset all data</strong> button below is an in-app wipe — a browser-level clear is outside the app's control.`]
@@ -859,21 +859,23 @@ function screenToday(){
   const weekDates = datesBetween(ws, t);
   const weekAvg = avgScore(weekDates, dayOverallScore);
   const sunday = isSunday(t);
-  function paceMsg(score){
-    if(score>=80) return `You're having a great ${sunday?'month':'week'} — keep it up!`;
+  function paceMsg(score, period){
+    if(score>=80) return `You're having a great ${period} — keep it up!`;
     if(score>=60) return `Solid progress so far.`;
     return `Every day left is a fresh chance to pick up points.`;
   }
   const weekRemain = (dayOfWeek(t)===0?0:7-dayOfWeek(t));
-  let monthAvg = null, monthRemain = null, weekFeedback = null;
-  if(sunday){
-    const {start:ms} = monthRange(t);
-    monthAvg = avgScore(datesBetween(ms, t), dayOverallScore);
-    const dNow = dateFromIso(t);
-    const daysInMonth = new Date(dNow.getFullYear(), dNow.getMonth()+1, 0).getDate();
-    monthRemain = daysInMonth - dNow.getDate();
-    weekFeedback = buildFeedback(weekDates); // week is complete today, so this is the real score, not a projection
-  }
+  const weekFeedback = sunday ? buildFeedback(weekDates) : null; // week is complete today, so this is the real score, not a projection
+
+  const {start:ms} = monthRange(t);
+  const monthDates = datesBetween(ms, t);
+  const monthAvg = avgScore(monthDates, dayOverallScore);
+  const dNow = dateFromIso(t);
+  const daysInMonth = new Date(dNow.getFullYear(), dNow.getMonth()+1, 0).getDate();
+  const monthRemain = daysInMonth - dNow.getDate();
+  const monthEnd = dNow.getDate()===daysInMonth;
+  const monthFeedback = monthEnd ? buildFeedback(monthDates) : null; // month is complete today, so this is the real score, not a projection
+
   const chartsOn = state.settings.charts;
 
   return `
@@ -896,12 +898,23 @@ function screenToday(){
       <div class="card-head"><h3>${sunday?'Week Summary':'This Week'}</h3>${infoBtnHtml('projection')}</div>
       ${sunday ? `
         <div class="stat-pair"><span class="big">${weekAvg===null?'--':weekAvg}</span><span class="of">/100 this week</span></div>
-        ${monthAvg!==null ? `<div class="muted" style="margin-bottom:10px;">Month pace: <strong style="color:var(--text)">${monthAvg}/100</strong>, ${monthRemain}d left.</div>` : ''}
-        ${weekFeedback.positives.length ? weekFeedback.positives.map(p=>`<div class="feedback-item"><div class="dot" style="background:var(--good)"></div><div>${p}</div></div>`).join('') : '<div class="muted">Log a few days to see your highlights here.</div>'}
+        ${weekFeedback.positives.length ? weekFeedback.positives.map(msg=>`<div class="feedback-item"><div class="dot" style="background:var(--good)"></div><div>${msg}</div></div>`).join('') : '<div class="muted">Log a few days to see your highlights here.</div>'}
         ${weekFeedback.focus ? `<div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${weekFeedback.focus.label}</strong> · ${weekFeedback.focus.tip}</div></div>` : ''}
       ` : `
         <div class="stat-pair"><span class="big">${weekAvg===null?'--':weekAvg}</span><span class="of">/100 · ${weekRemain}d to Sunday</span></div>
-        <div class="muted">${weekAvg===null?'Log today to start the trend.':paceMsg(weekAvg)}</div>
+        <div class="muted">${weekAvg===null?'Log today to start the trend.':paceMsg(weekAvg,'week')}</div>
+      `}
+    </div>` : ''}
+
+    ${chartsOn.projection ? `<div class="card">
+      <div class="card-head"><h3>${monthEnd?'Month Summary':'This Month'}</h3>${infoBtnHtml('projection')}</div>
+      ${monthEnd ? `
+        <div class="stat-pair"><span class="big">${monthAvg===null?'--':monthAvg}</span><span class="of">/100 this month</span></div>
+        ${monthFeedback.positives.length ? monthFeedback.positives.map(msg=>`<div class="feedback-item"><div class="dot" style="background:var(--good)"></div><div>${msg}</div></div>`).join('') : '<div class="muted">Log a few days to see your highlights here.</div>'}
+        ${monthFeedback.focus ? `<div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${monthFeedback.focus.label}</strong> · ${monthFeedback.focus.tip}</div></div>` : ''}
+      ` : `
+        <div class="stat-pair"><span class="big">${monthAvg===null?'--':monthAvg}</span><span class="of">/100 · ${monthRemain}d left</span></div>
+        <div class="muted">${monthAvg===null?'Log today to start the trend.':paceMsg(monthAvg,'month')}</div>
       `}
     </div>` : ''}
   </div>`;
