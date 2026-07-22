@@ -463,6 +463,16 @@ function bmr(p){
 function estimateActivityKcal(steps, activeMin){
   return Math.round(steps*0.04 + activeMin*4);
 }
+// "Est. calories burned" for the Activity drill-down — the standard MET (Metabolic
+// Equivalent of Task) method from the Compendium of Physical Activities (Ainsworth
+// et al.): kcal/min = MET x 3.5 x bodyweight(kg) / 200. MET 4.0 approximates brisk/
+// moderate activity, matching what "active minutes" from Fitbit/Google Health
+// represent (moderate-to-vigorous exertion), so tracked active minutes are
+// multiplied by the person's actual body weight rather than a flat per-minute rate.
+function estimateCaloriesBurned(p, activeMinutes){
+  const MET = 4.0;
+  return Math.round((MET*3.5*lbToKg(p.weightLb)/200) * activeMinutes);
+}
 function weeklyGoalKcalAdjustment(p){
   const sign = p.goalType==='lose' ? -1 : p.goalType==='gain' ? 1 : 0;
   return sign * (p.ratePerWeekLb*3500/7);
@@ -853,6 +863,8 @@ function openActivityModal(){
     ${bigStatRow(d.activity.steps.toLocaleString(), 'Steps', `/ ${p.stepGoal.toLocaleString()} goal`)}
     ${bigStatRow(d.activity.activeMin, 'Active minutes', `/ ${p.activeMinGoal} goal`)}
     ${bigStatRow((d.activity.distanceMi||0).toFixed(1), 'Miles')}
+    ${bigStatRow(estimateCaloriesBurned(p, d.activity.activeMin).toLocaleString(), 'Est. calories burned')}
+    <div class="muted" style="margin-top:2px;">MET-based estimate from your weight and active minutes — a standard exercise-science method, not a device measurement.</div>
   `);
 }
 function openNutritionModal(){
