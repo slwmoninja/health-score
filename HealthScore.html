@@ -989,14 +989,17 @@ function bigStatRow(value, label, sub){
 }
 function openActivityModal(){
   const t = today(), p = state.profile, d = getDay(t);
-  const burned = caloriesBurnedForDay(t);
+  const fromActivity = caloriesBurnedForDay(t);
+  const resting = Math.round(bmr(p)*1.2); // sedentary baseline — burned just by being alive, before any tracked activity
   const impact = weightGoalImpact([t]);
   const impactText = weightGoalImpactText(impact, p, 'today');
   openInfoModal('Activity', `
     ${bigStatRow(d.activity.steps.toLocaleString(), 'Steps', `/ ${p.stepGoal.toLocaleString()} goal`)}
     ${bigStatRow(d.activity.activeMin, 'Active minutes', `/ ${p.activeMinGoal} goal`)}
     ${bigStatRow((d.activity.distanceMi||0).toFixed(1), 'Miles')}
-    ${bigStatRow(burned.toLocaleString(), 'Est. calories burned')}
+    ${bigStatRow(fromActivity.toLocaleString(), 'Est. calories burned from activity')}
+    ${bigStatRow((resting+fromActivity).toLocaleString(), 'Est. total calories burned today', `= ${resting.toLocaleString()} resting + ${fromActivity.toLocaleString()} activity`)}
+    <div class="muted" style="margin-top:2px;">"From activity" is exercise on top of your baseline; "Total" adds your estimated resting/base burn (BMR × activity factor) — the number a fitness tracker's "calories burned today" usually means.</div>
     ${impactText ? `<div class="feedback-item" style="margin-top:10px;"><div class="dot" style="background:var(--good)"></div><div>${impactText}</div></div>` : ''}
   `);
 }
