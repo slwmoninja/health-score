@@ -1499,7 +1499,7 @@ async function fetchGoogleHealthToday(silent){
 
     saveState(); render();
     checkGoalsAndCelebrate(t);
-    if(!silent) alert(`Synced from Google Health: ${Math.round(steps)} steps, ${Math.round(activeMin)} active min.`);
+    // No success alert — the infographics/drill-downs just refresh in place via render().
   }catch(e){
     console.error('Google Health sync failed:', e);
     logError('Sync failed: '+e.message);
