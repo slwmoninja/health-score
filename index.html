@@ -231,7 +231,7 @@ input,select{font-family:inherit;}
 
 <div class="bottomnav" id="bottomnav">
   <button class="navbtn" data-tab="today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9M5 10v10h14V10"/></svg>Today</button>
-  <button class="navbtn" data-tab="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5M12 7v5l4 2"/></svg>History</button>
+  <button class="navbtn" data-tab="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5M12 7v5l4 2"/></svg>Trends</button>
   <button class="navbtn" data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1z"/></svg>Settings</button>
 </div>
 
@@ -1288,6 +1288,11 @@ function render(){
 }
 
 /* ---------- TODAY ---------- */
+function paceMsg(score, period){
+  if(score>=80) return `You're having a great ${period} — keep it up!`;
+  if(score>=60) return `Solid progress so far.`;
+  return '';
+}
 function screenToday(){
   const t = today();
   const oScore = dayOverallScore(t);
@@ -1296,31 +1301,6 @@ function screenToday(){
   const stepPct = clamp(p.stepGoal>0 ? d.activity.steps/p.stepGoal*100 : 0, 0, 100);
   const calPct = clamp(targets.kcal>0 ? totals.kcal/targets.kcal*100 : 0, 0, 100);
   const weekCal = weekCalorieProgress(t);
-
-  const {start:ws, end:we} = weekRange(t);
-  const weekDates = datesBetween(ws, t);
-  const weekAvg = avgScore(weekDates, dayOverallScore);
-  const sunday = isSunday(t);
-  function paceMsg(score, period){
-    if(score>=80) return `You're having a great ${period} — keep it up!`;
-    if(score>=60) return `Solid progress so far.`;
-    return '';
-  }
-  const weekRemain = (dayOfWeek(t)===0?0:7-dayOfWeek(t));
-  const weekFeedback = sunday ? buildFeedback(weekDates, 'week') : null; // week is complete today, so this is the real score, not a projection
-  const weekImpactText = weightGoalImpactText(weightGoalImpact(weekDates), p, 'this week');
-
-  const {start:ms} = monthRange(t);
-  const monthDates = datesBetween(ms, t);
-  const monthAvg = avgScore(monthDates, dayOverallScore);
-  const dNow = dateFromIso(t);
-  const daysInMonth = new Date(dNow.getFullYear(), dNow.getMonth()+1, 0).getDate();
-  const monthRemain = daysInMonth - dNow.getDate();
-  const monthEnd = dNow.getDate()===daysInMonth;
-  const monthFeedback = monthEnd ? buildFeedback(monthDates, 'month') : null; // month is complete today, so this is the real score, not a projection
-  const monthImpactText = weightGoalImpactText(weightGoalImpact(monthDates), p, 'this month');
-
-  const chartsOn = state.settings.charts;
 
   return `
   <div class="topbar"><h1>Today</h1><div class="muted" id="today-date"></div></div>
@@ -1338,40 +1318,6 @@ function screenToday(){
       <button class="pill-btn green" data-quick-nav="log" data-log-focus="nutrition">+ Log Nutrition</button>
       <button class="pill-btn red" data-quick-nav="log" data-log-focus="activity">+ Activity</button>
     </div>
-
-    ${chartsOn.projection ? `<div class="card">
-      <div class="card-head">
-        <div style="display:flex;align-items:baseline;gap:8px;">
-          <h3 style="margin-bottom:0;color:var(--blue);">${sunday?'Week Summary':'This Week'}</h3>
-          <span class="inline-stat">${weekAvg===null?'--':weekAvg}/100${sunday?' this week':` <span class="muted">· ${weekRemain}d to Sunday</span>`}</span>
-        </div>
-        ${infoBtnHtml('projection')}
-      </div>
-      ${sunday ? `
-        ${weekFeedback.positives.length ? weekFeedback.positives.map(msg=>`<div class="feedback-item"><div class="dot" style="background:var(--good)"></div><div>${msg}</div></div>`).join('') : '<div class="muted">Log a few days to see your highlights here.</div>'}
-        ${weekFeedback.focus ? `<div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${weekFeedback.focus.label}</strong> · ${weekFeedback.focus.tip}</div></div>` : ''}
-      ` : `
-        ${weekAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(weekAvg,'week') ? `<div class="muted">${paceMsg(weekAvg,'week')}</div>` : '')}
-      `}
-      ${weekImpactText ? `<div class="feedback-item"><div class="dot" style="background:var(--critical)"></div><div>${weekImpactText}</div></div>` : ''}
-    </div>` : ''}
-
-    ${chartsOn.projection ? `<div class="card">
-      <div class="card-head">
-        <div style="display:flex;align-items:baseline;gap:8px;">
-          <h3 style="margin-bottom:0;color:var(--blue);">${monthEnd?'Month Summary':'This Month'}</h3>
-          <span class="inline-stat">${monthAvg===null?'--':monthAvg}/100${monthEnd?' this month':` <span class="muted">· ${monthRemain}d left</span>`}</span>
-        </div>
-        ${infoBtnHtml('projection')}
-      </div>
-      ${monthEnd ? `
-        ${monthFeedback.positives.length ? monthFeedback.positives.map(msg=>`<div class="feedback-item"><div class="dot" style="background:var(--good)"></div><div>${msg}</div></div>`).join('') : '<div class="muted">Log a few days to see your highlights here.</div>'}
-        ${monthFeedback.focus ? `<div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${monthFeedback.focus.label}</strong> · ${monthFeedback.focus.tip}</div></div>` : ''}
-      ` : `
-        ${monthAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(monthAvg,'month') ? `<div class="muted">${paceMsg(monthAvg,'month')}</div>` : '')}
-      `}
-      ${monthImpactText ? `<div class="feedback-item"><div class="dot" style="background:var(--critical)"></div><div>${monthImpactText}</div></div>` : ''}
-    </div>` : ''}
   </div>`;
 }
 
@@ -1529,6 +1475,15 @@ function screenHistory(){
   const nutrientTotals = periodNutrientTotals(dates);
   const nutrientTips = nutrientShortfallTips(nutrientTotals);
 
+  // Pace/projection card, moved here from the Today tab — one card, parametrized by
+  // whichever History tab (week vs month) is currently active.
+  const profile = state.profile;
+  const dNow = dateFromIso(t);
+  const daysInMonth = new Date(dNow.getFullYear(), dNow.getMonth()+1, 0).getDate();
+  const periodComplete = historyMode==='week' ? isSunday(t) : dNow.getDate()===daysInMonth;
+  const periodRemain = historyMode==='week' ? (dayOfWeek(t)===0?0:7-dayOfWeek(t)) : daysInMonth-dNow.getDate();
+  const periodImpactText = weightGoalImpactText(weightGoalImpact(dates), profile, historyMode==='week'?'this week':'this month');
+
   const chips = dates.map(d=>{
     const s = dayOverallScore(d);
     const cls = d===t ? 'today' : (d>t?'future':'');
@@ -1536,7 +1491,7 @@ function screenHistory(){
   }).join('');
 
   return `
-  <div class="topbar"><h1>History</h1></div>
+  <div class="topbar"><h1>Trends</h1></div>
   <div class="screen">
     <div class="seg" id="history-seg">
       <button data-v="week" class="${historyMode==='week'?'active':''}">This Week</button>
@@ -1546,6 +1501,20 @@ function screenHistory(){
     <div class="card score-hero">
       <div class="ring-wrap">${scoreRing(oAvg)}<div class="ring-label"><div class="num">${oAvg===null?'--':oAvg}</div><div class="lbl">${historyMode==='week'?'Week':'Month'} Score</div></div></div>
     </div>
+
+    ${state.settings.charts.projection ? `<div class="card">
+      <div class="card-head">
+        <div style="display:flex;align-items:baseline;gap:8px;">
+          <h3 style="margin-bottom:0;color:var(--blue);">${periodComplete ? (historyMode==='week'?'Week Summary':'Month Summary') : (historyMode==='week'?'This Week':'This Month')}</h3>
+          <span class="inline-stat">${oAvg===null?'--':oAvg}/100${periodComplete ? ` this ${historyMode}` : ` <span class="muted">· ${periodRemain}d ${historyMode==='week'?'to Sunday':'left'}</span>`}</span>
+        </div>
+        ${infoBtnHtml('projection')}
+      </div>
+      ${periodComplete
+        ? `<div class="muted">See "What went well" and "Looking ahead" below for the full ${historyMode==='week'?'week':'month'}'s highlights.</div>`
+        : `${oAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(oAvg, historyMode) ? `<div class="muted">${paceMsg(oAvg, historyMode)}</div>` : '')}`}
+      ${periodImpactText ? `<div class="feedback-item"><div class="dot" style="background:var(--critical)"></div><div>${periodImpactText}</div></div>` : ''}
+    </div>` : ''}
 
     ${historyMode==='week' ? `<div class="card"><h3>Days this week</h3><div class="weekstrip">${chips}</div></div>` : ''}
 
