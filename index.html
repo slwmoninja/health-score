@@ -193,7 +193,12 @@ input,select{font-family:inherit;}
 .card-head .inline-stat .muted{font-weight:500;}
 
 /* ---- score trio (Total/Activity/Nutrition circles, one infographic) ---- */
-.score-trio{display:flex;align-items:center;justify-content:center;gap:18px;flex-wrap:wrap;}
+/* width:100% so this actually stretches to the card's full width instead of just
+   shrink-wrapping its content (the parent's align-items:center would otherwise
+   center a content-sized row) — only then does space-evenly have room to spread
+   the three circles out instead of clumping them together. Wraps on narrow
+   phone screens instead of squeezing, since flex-wrap keeps this responsive. */
+.score-trio{display:flex;align-items:center;justify-content:space-evenly;gap:18px;flex-wrap:wrap;width:100%;}
 .score-circle-col{display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;}
 .score-circle-col .cap{font-size:12px;color:var(--muted);text-align:center;line-height:1.4;}
 
@@ -1029,7 +1034,7 @@ function openInfoModal(title, bodyHtml){
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
 const INFO_CONTENT = {
   projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
-  trend: ['7-day score trend', `Your daily Activity and Nutrition scores (0-100) over the last 7 days. Tap a point for its value.`],
+  trend: ['Score trend', `Your daily Activity and Nutrition scores (0-100) — the last 7 days under "This Week", or month-to-date under "This Month". Tap a point for its value.`],
   fitsync: ['Google Health sync', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Setup, one time: console.cloud.google.com → new project → OAuth consent screen → publishing status <strong>"In Production"</strong> (fine for personal use — Google only requires review past 100 users) → Credentials → OAuth client ID → type <strong>Web application</strong> → Authorized redirect URI: <strong>${location.origin}${location.pathname}</strong> → enable the "Google Health API" and add the activity/fitness and health-metrics scopes → paste the resulting Client ID and Client Secret below. After you connect once, it re-syncs automatically in the background — no further action needed.`],
   databackup: ['Data & backups', `Everything here (profile, logged food, activity, Google Health credentials) lives only in this browser's local storage on this device — nothing is sent to a server. That's good for privacy, but it means your phone or browser's own "clear history / clear site data" action can wipe it, the same as it would for any website — there's no way for a site to opt out of that. <strong>Export data</strong> saves everything to a JSON file you can keep as a backup; <strong>Import data</strong> restores from one. Only the <strong>Reset all data</strong> button below is an in-app wipe — a browser-level clear is outside the app's control.`],
   fdc: ['Food search', `With a free USDA FoodData Central key, search first checks the Foundation/SR Legacy datasets (generic whole foods, to keep casual searches from getting buried in brand names), then automatically falls back to FDC's ~300,000-item Branded Foods dataset if nothing generic matched. Setup: fdc.nal.usda.gov/api-key-signup → fill in the short form → the key is emailed instantly, no approval wait → paste it below. It's free with no usage cost. If a search still comes up empty — some very specific items (like a particular fat-percentage of milk) genuinely aren't in either dataset — a "Search the web" button appears so you can look it up yourself and enter your best estimate for calories/macros.`]
@@ -1484,12 +1489,6 @@ function screenHistory(){
   const periodRemain = historyMode==='week' ? (dayOfWeek(t)===0?0:7-dayOfWeek(t)) : daysInMonth-dNow.getDate();
   const periodImpactText = weightGoalImpactText(weightGoalImpact(dates), profile, historyMode==='week'?'this week':'this month');
 
-  const chips = dates.map(d=>{
-    const s = dayOverallScore(d);
-    const cls = d===t ? 'today' : (d>t?'future':'');
-    return `<div class="daychip ${cls}"><div class="d">${dateFromIso(d).toLocaleDateString(undefined,{weekday:'short'})}</div><div class="v">${s===null?'-':s}</div></div>`;
-  }).join('');
-
   return `
   <div class="topbar"><h1>Trends</h1></div>
   <div class="screen">
@@ -1516,10 +1515,8 @@ function screenHistory(){
       ${periodImpactText ? `<div class="feedback-item"><div class="dot" style="background:var(--critical)"></div><div>${periodImpactText}</div></div>` : ''}
     </div>` : ''}
 
-    ${historyMode==='week' ? `<div class="card"><h3>Days this week</h3><div class="weekstrip">${chips}</div></div>` : ''}
-
     ${state.settings.charts.trend ? `<div class="card">
-      <div class="card-head"><h3>7-day trend</h3>${infoBtnHtml('trend')}</div>
+      <div class="card-head"><h3>${historyMode==='week'?'7-day trend':'Month trend'}</h3>${infoBtnHtml('trend')}</div>
       <div class="chart" id="chart-trend"></div>
       <div class="legend">
         <div class="legend-item"><span class="swatch" style="background:var(--blue)"></span>Activity</div>
@@ -1846,8 +1843,19 @@ function mountCharts(){
   const t = today();
   const trendEl = document.getElementById('chart-trend');
   if(trendEl){
-    const dates = []; for(let i=6;i>=0;i--) dates.push(addDays(t,-i));
-    const labels = dates.map(d=>dateFromIso(d).toLocaleDateString(undefined,{weekday:'short'}).slice(0,2));
+    let dates, labels;
+    if(historyMode==='month'){
+      dates = datesBetween(monthRange(t).start, t); // month-to-date, not into un-lived future days
+      // ~31 points is too dense for a day-of-week label per point, so only label
+      // the 1st, every 5th day, and today.
+      labels = dates.map(d=>{
+        const day = dateFromIso(d).getDate();
+        return (day===1 || day%5===0 || d===t) ? String(day) : '';
+      });
+    }else{
+      dates = []; for(let i=6;i>=0;i--) dates.push(addDays(t,-i));
+      labels = dates.map(d=>dateFromIso(d).toLocaleDateString(undefined,{weekday:'short'}).slice(0,2));
+    }
     trendEl.appendChild(trendLineChart([
       {name:'Activity', color:'var(--blue)', points: dates.map(activityScore)},
       {name:'Nutrition', color:'var(--aqua)', points: dates.map(nutritionScore)}
