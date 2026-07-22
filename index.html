@@ -784,13 +784,13 @@ function progRow(label, value, target, unit, color){
     <div class="prog-track"><div class="prog-fill" style="width:${pct}%;background:${color}"></div></div>
   </div>`;
 }
-function scoreRing(score, size){
+function scoreRing(score, size, fixedColor){
   size = size||158;
   const sw = Math.max(6, Math.round(size*0.076));
   const r = size/2-sw, c = size/2;
   const circ = 2*Math.PI*r;
   const val = score===null? 0 : score;
-  const color = val>=80?'var(--good)':val>=60?'var(--yellow)':'var(--critical)';
+  const color = fixedColor || (val>=80?'var(--good)':val>=60?'var(--yellow)':'var(--critical)');
   return `<svg viewBox="0 0 ${size} ${size}">
     <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--grid)" stroke-width="${sw}"/>
     <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}"
@@ -803,11 +803,11 @@ function scoreRing(score, size){
 // already a plain number like the Total Score) drives the ring fill + color, so
 // Activity/Nutrition can show a real value (steps, calories) with a goal-based fill
 // instead of a second abstract score.
-function scoreCircle(displayText, size, insideLabel, pctForRing){
+function scoreCircle(displayText, size, insideLabel, pctForRing, color){
   const pct = pctForRing===undefined ? displayText : pctForRing;
   const numPx = Math.round(size*0.235), lblPx = Math.max(9, Math.round(size*0.068));
   return `<div class="ring-wrap" style="width:${size}px;height:${size}px;">
-    ${scoreRing(pct, size)}
+    ${scoreRing(pct, size, color)}
     <div class="ring-label">
       <div class="num" style="font-size:${numPx}px;">${displayText===null?'--':displayText}</div>
       ${insideLabel?`<div class="lbl" style="font-size:${lblPx}px;">${insideLabel}</div>`:''}
@@ -883,9 +883,9 @@ function screenToday(){
   <div class="screen">
     <div class="card score-hero">
       <div class="score-trio">
-        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, 'Total Score')}</div>
-        <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, null, stepPct)}<div class="cap">Steps<br><span style="font-size:11px;">${d.activity.activeMin} min · ${(d.activity.distanceMi||0).toFixed(1)} mi</span></div></div>
-        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, null, calPct)}<div class="cap">Calories</div></div>
+        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, 'Total Score', undefined, 'var(--blue)')}</div>
+        <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, null, stepPct, 'var(--critical)')}<div class="cap">Steps<br><span style="font-size:11px;">${d.activity.activeMin} min · ${(d.activity.distanceMi||0).toFixed(1)} mi</span></div></div>
+        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, null, calPct, 'var(--good)')}<div class="cap">Calories</div></div>
       </div>
     </div>
 
