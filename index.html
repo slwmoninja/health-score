@@ -907,7 +907,7 @@ function screenToday(){
   function paceMsg(score, period){
     if(score>=80) return `You're having a great ${period} — keep it up!`;
     if(score>=60) return `Solid progress so far.`;
-    return `Every day left is a fresh chance to pick up points.`;
+    return '';
   }
   const weekRemain = (dayOfWeek(t)===0?0:7-dayOfWeek(t));
   const weekFeedback = sunday ? buildFeedback(weekDates) : null; // week is complete today, so this is the real score, not a projection
@@ -947,7 +947,7 @@ function screenToday(){
         ${weekFeedback.focus ? `<div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${weekFeedback.focus.label}</strong> · ${weekFeedback.focus.tip}</div></div>` : ''}
       ` : `
         <div class="stat-pair"><span class="big">${weekAvg===null?'--':weekAvg}</span><span class="of">/100 · ${weekRemain}d to Sunday</span></div>
-        <div class="muted">${weekAvg===null?'Log today to start the trend.':paceMsg(weekAvg,'week')}</div>
+        ${weekAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(weekAvg,'week') ? `<div class="muted">${paceMsg(weekAvg,'week')}</div>` : '')}
       `}
     </div>` : ''}
 
@@ -959,7 +959,7 @@ function screenToday(){
         ${monthFeedback.focus ? `<div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${monthFeedback.focus.label}</strong> · ${monthFeedback.focus.tip}</div></div>` : ''}
       ` : `
         <div class="stat-pair"><span class="big">${monthAvg===null?'--':monthAvg}</span><span class="of">/100 · ${monthRemain}d left</span></div>
-        <div class="muted">${monthAvg===null?'Log today to start the trend.':paceMsg(monthAvg,'month')}</div>
+        ${monthAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(monthAvg,'month') ? `<div class="muted">${paceMsg(monthAvg,'month')}</div>` : '')}
       `}
     </div>` : ''}
   </div>`;
