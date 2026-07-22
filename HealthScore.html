@@ -293,6 +293,26 @@ function logError(message){
   state.errorLog = state.errorLog.slice(0, 3);
   saveState();
 }
+// Shared by the onboarding "Restore from backup" button and Settings' Import —
+// both need the exact same parse/validate/replace logic.
+async function importDataFromFile(file){
+  if(!file) return;
+  try{
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    if(!parsed || typeof parsed!=='object' || !('days' in parsed)) throw new Error('This file does not look like a Health Score export.');
+    if(!confirm('This will replace all current data on this device with the contents of the imported file. Continue?')) return;
+    state = Object.assign(defaultState(), parsed);
+    state.settings = Object.assign(defaultState().settings, parsed.settings);
+    state.settings.charts = Object.assign(defaultState().settings.charts, parsed.settings && parsed.settings.charts);
+    saveState();
+    document.querySelectorAll('.modal-backdrop').forEach(m=>m.remove()); // close onboarding if open
+    alert('Data imported.');
+    render();
+  }catch(e){
+    alert('Could not import that file: '+e.message);
+  }
+}
 
 function isoDate(d){
   const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
@@ -341,7 +361,10 @@ const FOOD_DB = [
 {n:"Tuna, canned in water",per:100,u:"g",k:116,p:26,c:0,f:1},
 {n:"Shrimp, cooked",per:100,u:"g",k:99,p:24,c:0.2,f:0.3},
 {n:"Bacon",per:1,u:"slice",k:43,p:3,c:0.1,f:3.3},
+{n:"Egg, small",per:1,u:"egg",k:54,p:4.8,c:0.4,f:3.6},
+{n:"Egg, medium",per:1,u:"egg",k:63,p:5.5,c:0.4,f:4.2},
 {n:"Egg, large",per:1,u:"egg",k:72,p:6.3,c:0.4,f:4.8},
+{n:"Egg, extra large",per:1,u:"egg",k:80,p:7,c:0.4,f:5.4},
 {n:"Egg white",per:1,u:"egg white",k:17,p:3.6,c:0.2,f:0.1},
 {n:"Tofu, firm",per:100,u:"g",k:144,p:15.8,c:2.8,f:8.7},
 {n:"Greek yogurt, plain nonfat",per:100,u:"g",k:59,p:10,c:3.6,f:0.4},
@@ -389,7 +412,21 @@ const FOOD_DB = [
 {n:"Orange juice",per:100,u:"ml",k:45,p:0.7,c:10.4,f:0.2},
 {n:"Soda",per:100,u:"ml",k:42,p:0,c:10.6,f:0},
 {n:"Beer",per:1,u:"can (355ml)",k:153,p:1.6,c:13,f:0},
-{n:"Wine, red",per:1,u:"glass (150ml)",k:125,p:0.1,c:3.8,f:0}
+{n:"Wine, red",per:1,u:"glass (150ml)",k:125,p:0.1,c:3.8,f:0},
+{n:"White rice, cooked, 1 cup",per:1,u:"cup",k:205,p:4.3,c:44.5,f:0.4},
+{n:"Brown rice, cooked, 1 cup",per:1,u:"cup",k:218,p:4.5,c:46,f:1.6},
+{n:"Oatmeal, cooked",per:1,u:"cup",k:166,p:6,c:28,f:3.6},
+{n:"Pasta, cooked, 1 cup",per:1,u:"cup",k:220,p:8,c:43,f:1.3},
+{n:"Milk, 2%, 1 cup",per:1,u:"cup",k:122,p:8,c:12,f:4.8},
+{n:"Blueberries, 1 cup",per:1,u:"cup",k:84,p:1.1,c:21,f:0.5},
+{n:"Broccoli, cooked, 1 cup",per:1,u:"cup",k:55,p:3.7,c:11,f:0.6},
+{n:"Greek yogurt, plain nonfat, 1 cup",per:1,u:"cup",k:144,p:24,c:9,f:1},
+{n:"Cereal, generic, 1 cup",per:1,u:"cup",k:113,p:2,c:25,f:0.6},
+{n:"Sugar, granulated, 1 tsp",per:1,u:"tsp",k:16,p:0,c:4,f:0},
+{n:"Sugar, granulated, 1 tbsp",per:1,u:"tbsp",k:48,p:0,c:12.6,f:0},
+{n:"Butter, 1 tsp",per:1,u:"tsp",k:34,p:0,c:0,f:3.8},
+{n:"Honey, 1 tsp",per:1,u:"tsp",k:21,p:0,c:5.7,f:0},
+{n:"Honey, 1 tbsp",per:1,u:"tbsp",k:64,p:0.1,c:17,f:0}
 ];
 function allFoods(){ return FOOD_DB.concat(state.myFoods); }
 
@@ -580,6 +617,9 @@ function renderOnboarding(){
         <div class="field"><label>Active min goal</label><input type="number" id="ob-min" placeholder="30" value="30"></div>
       </div>
       <button class="btn-primary" id="ob-save">Save & Start</button>
+      <div class="muted" style="text-align:center;margin:14px 0 10px;">— or —</div>
+      <button class="btn-secondary" id="ob-import">Restore from backup (JSON)</button>
+      <input type="file" id="ob-import-file" accept="application/json" class="hidden">
     </div>
   </div>`;
   const wrap = document.createElement('div');
@@ -616,6 +656,11 @@ function renderOnboarding(){
       startGoogleHealthAuth();
     }
   });
+
+  const obImportBtn = wrap.querySelector('#ob-import');
+  const obImportFile = wrap.querySelector('#ob-import-file');
+  obImportBtn.addEventListener('click', ()=>obImportFile.click());
+  obImportFile.addEventListener('change', ()=>importDataFromFile(obImportFile.files[0]));
 }
 
 /* =========================================================
@@ -1384,7 +1429,15 @@ function attachHandlers(){
   // LOG tab
   const search = document.getElementById('food-search');
   if(search){
-    search.addEventListener('input', e=>{ logFoodQuery = e.target.value; render(); document.getElementById('food-search').focus(); });
+    search.addEventListener('input', e=>{
+      logFoodQuery = e.target.value;
+      render();
+      // Re-rendering replaces the input with a fresh DOM node, which resets the
+      // cursor to the start unless we explicitly put it back at the end.
+      const el = document.getElementById('food-search');
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
   }
   const resultsEl = document.getElementById('food-results');
   if(resultsEl){
@@ -1468,22 +1521,7 @@ function attachHandlers(){
   const importBtn = document.getElementById('s-import');
   const importFile = document.getElementById('s-import-file');
   if(importBtn && importFile) importBtn.addEventListener('click', ()=>importFile.click());
-  if(importFile) importFile.addEventListener('change', async ()=>{
-    const file = importFile.files[0];
-    if(!file) return;
-    try{
-      const text = await file.text();
-      const parsed = JSON.parse(text);
-      if(!parsed || typeof parsed!=='object' || !('days' in parsed)) throw new Error('This file does not look like a Health Score export.');
-      if(!confirm('This will replace all current data on this device with the contents of the imported file. Continue?')) return;
-      state = Object.assign(defaultState(), parsed);
-      state.settings = Object.assign(defaultState().settings, parsed.settings);
-      state.settings.charts = Object.assign(defaultState().settings.charts, parsed.settings && parsed.settings.charts);
-      saveState(); alert('Data imported.'); render();
-    }catch(e){
-      alert('Could not import that file: '+e.message);
-    }
-  });
+  if(importFile) importFile.addEventListener('change', ()=>importDataFromFile(importFile.files[0]));
   const clearErrorsBtn = document.getElementById('s-clear-errors');
   if(clearErrorsBtn) clearErrorsBtn.addEventListener('click', ()=>{ state.errorLog = []; saveState(); render(); });
   const resetBtn = document.getElementById('s-reset');
