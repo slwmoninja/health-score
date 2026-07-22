@@ -190,11 +190,10 @@ input,select{font-family:inherit;}
 .stat-pair .big{font-size:32px;font-weight:800;}
 .stat-pair .of{font-size:13px;color:var(--muted);}
 
-/* ---- trio stat (steps/distance/active min infographic) ---- */
-.trio{display:flex;gap:10px;}
-.trio-col{flex:1;text-align:center;}
-.trio-col .n{font-size:23px;font-weight:800;line-height:1.1;}
-.trio-col .l{font-size:11.5px;color:var(--muted);margin:2px 0 6px;}
+/* ---- score trio (Total/Activity/Nutrition circles, one infographic) ---- */
+.score-trio{display:flex;align-items:center;justify-content:center;gap:18px;flex-wrap:wrap;}
+.score-circle-col{display:flex;flex-direction:column;align-items:center;gap:6px;}
+.score-circle-col .cap{font-size:12px;color:var(--muted);}
 
 /* ---- collapsible section header ---- */
 .section-toggle{display:flex;align-items:center;gap:6px;flex:1;cursor:pointer;}
@@ -203,7 +202,7 @@ input,select{font-family:inherit;}
 .chevron.open{transform:rotate(180deg);}
 .quick-add{width:26px;height:26px;border-radius:50%;border:none;background:var(--good);color:#fff;
   font-size:17px;font-weight:800;line-height:1;display:flex;align-items:center;justify-content:center;flex:none;
-  box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);}
+  margin-right:8px;box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);}
 .quick-add:active{transform:translateY(1px);box-shadow:none;}
 .quick-add.red{background:var(--critical);}
 </style>
@@ -775,15 +774,28 @@ function progRow(label, value, target, unit, color){
 }
 function scoreRing(score, size){
   size = size||158;
-  const r = size/2-14, c = size/2;
+  const sw = Math.max(6, Math.round(size*0.076));
+  const r = size/2-sw, c = size/2;
   const circ = 2*Math.PI*r;
   const val = score===null? 0 : score;
   const color = val>=80?'var(--good)':val>=60?'var(--yellow)':'var(--critical)';
   return `<svg viewBox="0 0 ${size} ${size}">
-    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--grid)" stroke-width="12"/>
-    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${color}" stroke-width="12"
+    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--grid)" stroke-width="${sw}"/>
+    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}"
       stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ*(1-val/100)}"/>
   </svg>`;
+}
+// One consistent ring style at any size, used for the Total/Activity/Nutrition trio —
+// number scales with the circle so the small ones stay legible, not cramped.
+function scoreCircle(score, size, insideLabel){
+  const numPx = Math.round(size*0.235), lblPx = Math.max(9, Math.round(size*0.068));
+  return `<div class="ring-wrap" style="width:${size}px;height:${size}px;">
+    ${scoreRing(score, size)}
+    <div class="ring-label">
+      <div class="num" style="font-size:${numPx}px;">${score===null?'--':score}</div>
+      ${insideLabel?`<div class="lbl" style="font-size:${lblPx}px;">${insideLabel}</div>`:''}
+    </div>
+  </div>`;
 }
 
 /* =========================================================
@@ -842,41 +854,16 @@ function screenToday(){
   }
   const chartsOn = state.settings.charts;
   const d = getDay(t);
-  const stepPct = clamp(p.stepGoal>0 ? d.activity.steps/p.stepGoal*100 : 0, 0, 100);
-  const activeMinPct = clamp(p.activeMinGoal>0 ? d.activity.activeMin/p.activeMinGoal*100 : 0, 0, 100);
-  const calPct = clamp(targets.kcal>0 ? totals.kcal/targets.kcal*100 : 0, 0, 100);
 
   return `
   <div class="topbar"><h1>Today</h1><div class="muted" id="today-date"></div></div>
   <div class="screen">
     <div class="card score-hero">
-      <div class="ring-wrap">${scoreRing(oScore)}<div class="ring-label"><div class="num">${oScore===null?'--':oScore}</div><div class="lbl">Total Score</div></div></div>
-    </div>
-
-    <div class="card">
-      <h3>Steps · Distance · Active Min</h3>
-      <div class="trio">
-        <div class="trio-col">
-          <div class="n">${d.activity.steps.toLocaleString()}</div>
-          <div class="l">Steps</div>
-          <div class="prog-track"><div class="prog-fill" style="width:${stepPct}%;background:var(--blue)"></div></div>
-        </div>
-        <div class="trio-col">
-          <div class="n">${(d.activity.distanceMi||0).toFixed(1)}</div>
-          <div class="l">Miles</div>
-        </div>
-        <div class="trio-col">
-          <div class="n">${d.activity.activeMin}</div>
-          <div class="l">Active min</div>
-          <div class="prog-track"><div class="prog-fill" style="width:${activeMinPct}%;background:var(--aqua)"></div></div>
-        </div>
+      <div class="score-trio">
+        <div class="score-circle-col">${scoreCircle(oScore, 138, 'Total Score')}</div>
+        <div class="score-circle-col">${scoreCircle(aScore, 84)}<div class="cap">Activity</div></div>
+        <div class="score-circle-col">${scoreCircle(nScore, 84)}<div class="cap">Nutrition</div></div>
       </div>
-    </div>
-
-    <div class="card">
-      <h3>Total Calories</h3>
-      <div class="stat-pair"><span class="big">${Math.round(totals.kcal).toLocaleString()}</span><span class="of">/ ${targets.kcal.toLocaleString()} target</span></div>
-      <div class="prog-track"><div class="prog-fill" style="width:${calPct}%;background:var(--blue)"></div></div>
     </div>
 
     ${chartsOn.activity ? `<div class="card">
