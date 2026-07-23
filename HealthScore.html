@@ -1545,9 +1545,15 @@ function getFoodResults(){
   if(foodUnitFilter!=='any') localList = localList.filter(f=>unitCategory(f.u)===foodUnitFilter);
   const liveReady = liveFoodSearchQuery===logFoodQuery && liveFoodResults;
   if(liveReady && liveFoodResults.length){
-    const seen = new Set(liveFoodResults.map(f=>f.n.toLowerCase()));
-    const combined = [...liveFoodResults, ...localList.filter(f=>!seen.has(f.n.toLowerCase()))];
-    return {list: combined.slice(0,10), heading:'From '+liveFoodSearchSource, loading:false};
+    // Local matches go first and are never bumped once live results arrive —
+    // FDC's search alone can return up to 10 items, which used to fill the
+    // whole capped list and push out a match that was already visible the
+    // instant you typed it (a built-in food or something you'd logged
+    // before), making it seem to disappear ~400ms after it showed up.
+    const seenLocal = new Set(localList.map(f=>f.n.toLowerCase()));
+    const extraLive = liveFoodResults.filter(f=>!seenLocal.has(f.n.toLowerCase()));
+    const combined = [...localList, ...extraLive];
+    return {list: combined.slice(0,10), heading: localList.length ? null : 'From '+liveFoodSearchSource, loading:false};
   }
   const noMatchAtAll = liveReady && liveFoodResults.length===0 && localList.length===0;
   return {
