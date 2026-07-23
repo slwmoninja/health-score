@@ -310,6 +310,10 @@ let saveWarnedOnce = false;
 function saveState(){
   try{
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    // Rides on whatever click/tap just called saveState() — see the big
+    // comment above runAutoBackupDownload() for why it has to happen here
+    // rather than on backgrounding.
+    runAutoBackupDownload();
   }catch(e){
     // Don't call logError() here — it calls saveState() itself, which would recurse
     // if storage is genuinely broken. Record in-memory only and surface it once.
@@ -325,38 +329,54 @@ function saveState(){
 // TESTING-ONLY convenience for the 2-tester phase: clearing browser history on a
 // phone wipes localStorage the same as a fresh visit — no client-side technique
 // can survive that intentionally, since that's what the browser feature is for.
-// This tries to download a backup file whenever the app is backgrounded (see the
-// visibilitychange listener near the bottom of this script), so onboarding's
-// "Restore from backup" button has a recent file to pick up after a wipe.
-// CONFIRMED on-device: some mobile browsers silently block a file download that
-// isn't triggered by a direct tap — a visibilitychange handler doesn't count as
-// one — so this background attempt is a best-effort bonus, not something to
-// depend on. The "Back up now" button in Settings' Data card is the reliable
-// path (a real tap always gets through) and is what actually needs tapping
-// right before going to clear history. Flip this off before a production
-// rollout and evaluate a real solution then (e.g. cloud-backed sync) — this is
-// a testing-phase shortcut, not something to ship broadly.
+// A fully hands-free version of this (auto-write AND auto-restore, with data
+// never leaving the phone) isn't possible on a mobile browser: reading a file
+// back into the page always needs either a manual pick or the File System
+// Access API's persisted-overwrite trick, and that API doesn't exist on iOS
+// Safari or Android Chrome at all (desktop Chrome/Edge only). So this handles
+// what CAN be fully automatic — the save side — and onboarding's "Restore from
+// backup" button remains the one unavoidable tap on the other side.
+//
+// CONFIRMED on-device: a download triggered from a non-gesture event (like
+// visibilitychange on backgrounding) gets silently blocked by some mobile
+// browsers — no error, it just never happens. A download triggered
+// synchronously inside a real click/tap handler does NOT hit that block, so
+// this is called from saveState() itself, which every "Save"/"Log"/toggle
+// action in the app already calls synchronously from its own click handler —
+// no separate gesture needed, it rides along on whatever the user just tapped.
+//
+// Throttled to roughly once every few minutes of activity rather than every
+// single save: browsers can't overwrite an existing download (confirmed
+// on-device as a hard "file already exists" error, not a silent rename), so
+// firing on every field save would flood Downloads with one new file each
+// time. The "Back up now" button in Settings' Data card bypasses the throttle
+// for an on-demand fresh copy right before going to clear history.
+//
+// Flip this off before a production rollout and evaluate a real solution then
+// (e.g. cloud-backed sync, which trades this privacy property for true
+// zero-touch restore) — this is a testing-phase shortcut, not something to
+// ship broadly.
 const AUTO_BACKUP_DOWNLOAD_ENABLED = true;
+const AUTO_BACKUP_THROTTLE_MS = 3*60*1000;
 let lastAutoBackupJson = null;
-function runAutoBackupDownload(){
+let lastAutoBackupAttemptAt = 0;
+function runAutoBackupDownload(force){
   if(!AUTO_BACKUP_DOWNLOAD_ENABLED || !state.profile) return;
+  if(!force && Date.now()-lastAutoBackupAttemptAt<AUTO_BACKUP_THROTTLE_MS) return;
   const json = JSON.stringify(state);
-  if(json===lastAutoBackupJson) return; // nothing's changed since the last backup
+  if(!force && json===lastAutoBackupJson) return; // nothing's changed since the last backup
+  lastAutoBackupAttemptAt = Date.now();
   try{
     const blob = new Blob([json], {type:'application/json'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    // Timestamped, not a fixed name — some mobile browsers surface a hard
-    // "file already exists" error on a repeated same-name download rather than
-    // silently renaming it (unlike desktop Chrome/Firefox), which broke this
-    // outright. A unique name every time avoids that at the cost of Downloads
-    // accumulating one file per background event; restore always wants the
-    // most recent one anyway.
+    // Timestamped, not a fixed name — a fixed name hit a hard "file already
+    // exists" error on-device rather than a silent auto-rename.
     const stamp = new Date().toISOString().replace(/[:.]/g,'-');
     a.download = `health-score-data-${stamp}.json`;
     a.click();
     lastAutoBackupJson = json;
-  }catch(e){ /* best-effort — the manual Export button in Settings still works as a fallback */ }
+  }catch(e){ /* best-effort — the "Back up now" button in Settings still works as a fallback */ }
 }
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1937,7 +1957,7 @@ function screenSettings(){
     <details class="card" data-card-key="data" ${settingsCardOpenAttr('data')}>
       <summary class="card-summary"><h3>Data</h3><span class="chevron">⌄</span></summary>
       <button class="btn-secondary" id="s-backup-now">Back up now</button>
-      <div class="muted" style="margin-top:8px;">Saves a fresh copy to Downloads/Files — tap this right before clearing your browser history, since that wipes this app's data the same as visiting fresh. The automatic background backup can be silently blocked by some phone browsers, so this button is the reliable one.</div>
+      <div class="muted" style="margin-top:8px;">A backup already saves itself to Downloads/Files automatically every few minutes while you use the app — no need to remember. Tap this button for an on-the-spot fresh copy right before clearing your browser history, since that wipes this app's data the same as visiting fresh.</div>
       <div style="height:14px"></div>
       <button class="btn-secondary" id="s-reset" style="color:var(--critical)">Reset all data</button>
     </details>
@@ -2443,8 +2463,7 @@ function attachHandlers(){
   });
   const backupNowBtn = document.getElementById('s-backup-now');
   if(backupNowBtn) backupNowBtn.addEventListener('click', ()=>{
-    lastAutoBackupJson = null; // force a fresh file even if nothing's changed since the last auto-attempt
-    runAutoBackupDownload();
+    runAutoBackupDownload(true); // bypasses the throttle and the unchanged-data skip
     alert('Backup saved to your Downloads/Files.');
   });
   const resetBtn = document.getElementById('s-reset');
