@@ -112,6 +112,11 @@ input,select{font-family:inherit;}
 .field input[type=text],.field input[type=number],.field select{
   width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--border);
   background:var(--page);color:var(--text);font-size:15px;}
+.input-clear-wrap{position:relative;}
+.input-clear-wrap input{padding-right:36px;}
+.input-clear-btn{position:absolute;right:2px;top:50%;transform:translateY(-50%);width:30px;height:30px;
+  border:none;background:none;color:var(--muted);font-size:20px;line-height:1;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;}
 .field-row{display:flex;gap:10px;}
 .field-row .field{flex:1;}
 .seg{display:flex;background:var(--page);border-radius:10px;padding:3px;border:1px solid var(--border);
@@ -1368,7 +1373,7 @@ function screenToday(){
     <div class="card score-hero">
       <div class="sync-badge">${fitbitSyncLabel()}</div>
       <div class="score-trio">
-        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, undefined, 'var(--blue)', totalGoalMet)}</div>
+        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 104, undefined, 'var(--blue)', totalGoalMet)}</div>
         <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, stepPct, 'var(--critical)', activityGoalMet)}</div>
         <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}</div>
       </div>
@@ -1487,7 +1492,10 @@ function screenLog(){
       </div>
       <div class="field">
         <label>Food item</label>
-        <input type="text" id="food-search" placeholder="Search, or type a name and press Enter" value="${logFoodQuery}">
+        <div class="input-clear-wrap">
+          <input type="text" id="food-search" placeholder="Search, or type a name and press Enter" value="${logFoodQuery}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+          ${logFoodQuery ? `<button type="button" class="input-clear-btn" id="btn-clear-food-search" title="Clear">×</button>` : ''}
+        </div>
       </div>
       ${heading?`<div class="muted" style="margin:6px 0 -2px;">${heading}</div>`:''}
       ${loading?`<div class="muted" style="margin:6px 0 -2px;">Searching…</div>`:''}
@@ -1983,6 +1991,13 @@ function attachHandlers(){
       else{ matchedFood = null; render(); const el=document.getElementById('food-amount'); if(el) el.focus(); }
     });
   }
+  const clearSearchBtn = document.getElementById('btn-clear-food-search');
+  if(clearSearchBtn) clearSearchBtn.addEventListener('click', ()=>{
+    logFoodQuery = ''; matchedFood = null; liveFoodResults = null; liveFoodSearchQuery = '';
+    render();
+    const el = document.getElementById('food-search');
+    if(el) el.focus();
+  });
   const foodUnitSelect = document.getElementById('food-unit');
   if(foodUnitSelect) foodUnitSelect.addEventListener('change', e=>{ foodUnitFilter = e.target.value; render(); });
   // Manual last-resort: opens a pre-filled Google search in a new tab rather than
