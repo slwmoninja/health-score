@@ -199,8 +199,7 @@ input,select{font-family:inherit;}
    the three circles out instead of clumping them together. Wraps on narrow
    phone screens instead of squeezing, since flex-wrap keeps this responsive. */
 .score-trio{display:flex;align-items:center;justify-content:space-evenly;gap:18px;flex-wrap:wrap;width:100%;}
-.score-circle-col{display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;}
-.score-circle-col .cap{font-size:12px;color:var(--muted);text-align:center;line-height:1.4;}
+.score-circle-col{display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;}
 
 /* ---- collapsible section header ---- */
 .section-toggle{display:flex;align-items:center;gap:6px;flex:1;cursor:pointer;}
@@ -1233,16 +1232,39 @@ function scoreRing(score, size, fixedColor){
 // already a plain number like the Total Score) drives the ring fill + color, so
 // Activity/Nutrition can show a real value (steps, calories) with a goal-based fill
 // instead of a second abstract score.
-function scoreCircle(displayText, size, insideLabel, pctForRing, color){
+function scoreCircle(displayText, size, pctForRing, color){
   const pct = pctForRing===undefined ? displayText : pctForRing;
-  const numPx = Math.round(size*0.235), lblPx = Math.max(9, Math.round(size*0.068));
+  const numPx = Math.round(size*0.235);
   return `<div class="ring-wrap" style="width:${size}px;height:${size}px;">
     ${scoreRing(pct, size, color)}
     <div class="ring-label">
       <div class="num" style="font-size:${numPx}px;">${displayText===null?'--':displayText}</div>
-      ${insideLabel?`<div class="lbl" style="font-size:${lblPx}px;">${insideLabel}</div>`:''}
     </div>
   </div>`;
+}
+// A one-line caption that curves along the bottom of a scoreCircle() of the same
+// size instead of sitting as flat text below it — concentric with the ring (same
+// center, slightly larger radius) so it reads as an extension of the ring's own
+// curve rather than a separate label.
+function curvedCaption(text, size){
+  if(!text) return '';
+  const strokeW = Math.max(6, Math.round(size*0.076));
+  const ringR = size/2 - strokeW;
+  const r = ringR + strokeW/2 + 6; // just outside the ring's visible outer edge
+  const fontPx = Math.max(8, Math.round(size*0.095));
+  const halfAngleDeg = 64; // arc span either side of straight-down (90°)
+  const cx = size/2, cy = size/2;
+  const rad = deg=>deg*Math.PI/180;
+  const pt = deg=>[cx+r*Math.cos(rad(deg)), cy+r*Math.sin(rad(deg))];
+  const [x1,y1] = pt(90+halfAngleDeg), [x2,y2] = pt(90-halfAngleDeg);
+  const yTop = y1 - 4, yBottom = cy+r+fontPx+2; // crop to just the arc's own band, not the whole ring height
+  const pathId = 'cap'+Math.random().toString(36).slice(2,9);
+  return `<svg viewBox="0 ${yTop} ${size} ${yBottom-yTop}" width="${size}" style="display:block;overflow:visible;">
+    <path id="${pathId}" d="M${x1},${y1} A${r},${r} 0 0,0 ${x2},${y2}" fill="none"/>
+    <text font-size="${fontPx}" fill="var(--muted)" text-anchor="middle">
+      <textPath href="#${pathId}" startOffset="50%">${escapeHtml(text)}</textPath>
+    </text>
+  </svg>`;
 }
 // Abbreviates large counts (steps, calories) so they still fit cleanly in a small ring.
 function formatCompact(n){
@@ -1313,9 +1335,9 @@ function screenToday(){
     <div class="card score-hero">
       <div class="sync-badge">${fitbitSyncLabel()}</div>
       <div class="score-trio">
-        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, 'Total Score', undefined, 'var(--blue)')}</div>
-        <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, null, stepPct, 'var(--critical)')}<div class="cap">Steps<br><span style="font-size:11px;">${d.activity.activeMin} min · ${(d.activity.distanceMi||0).toFixed(1)} mi</span></div></div>
-        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, null, calPct, 'var(--good)')}<div class="cap">Calories<br><span style="font-size:11px;">wk: ${formatCompact(weekCal.consumed)}/${formatCompact(weekCal.goal)}</span></div></div>
+        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, undefined, 'var(--blue)')}${curvedCaption('Total Score', 138)}</div>
+        <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, stepPct, 'var(--critical)')}${curvedCaption(`Steps · ${d.activity.activeMin}m · ${(d.activity.distanceMi||0).toFixed(1)}mi`, 84)}</div>
+        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}${curvedCaption(`Calories · wk ${formatCompact(weekCal.consumed)}/${formatCompact(weekCal.goal)}`, 84)}</div>
       </div>
     </div>
 
@@ -1323,6 +1345,8 @@ function screenToday(){
       <button class="pill-btn green" data-quick-nav="log" data-log-focus="nutrition">+ Log Nutrition</button>
       <button class="pill-btn red" data-quick-nav="log" data-log-focus="activity">+ Activity</button>
     </div>
+
+    ${todaysFoodsCard()}
   </div>`;
 }
 
@@ -1388,11 +1412,24 @@ function getFoodResults(){
   };
 }
 let foodSortMode = 'logged'; // 'logged' | 'kcal'
-function screenLog(){
-  const t = today();
-  const d = getDay(t);
-  const {list:results, heading, loading, showWebSearch} = getFoodResults();
+// Shared with the Today tab, which shows the same list read-only-ish (still deletable)
+// alongside the score rings, so today's log is visible without switching tabs.
+function todaysFoodsCard(){
+  const d = getDay(today());
   const foods = foodSortMode==='kcal' ? d.foods.slice().sort((a,b)=>b.kcal-a.kcal) : d.foods;
+  return `
+    <div class="card">
+      <div class="card-head"><h3>Today's foods</h3>
+        <button class="iconbtn" id="btn-sort-foods" title="Sort by calories">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M6 12h12M10 18h4"/></svg>
+        </button>
+      </div>
+      ${foods.length===0?'<div class="muted">Nothing logged yet today.</div>':
+        foods.map(f=>`<div class="food-row"><div><div class="name">${f.name}</div><div class="sub">${f.qtyLabel}</div></div><div style="display:flex;align-items:center;gap:8px;"><div class="kcal">${Math.round(f.kcal)} kcal</div><button class="del" data-food="${f.id}">×</button></div></div>`).join('')}
+    </div>`;
+}
+function screenLog(){
+  const {list:results, heading, loading, showWebSearch} = getFoodResults();
   const showNutrition = logFocus!=='activity';
   const showActivity = logFocus!=='nutrition';
   return `
@@ -1420,15 +1457,7 @@ function screenLog(){
       <button class="btn-primary" id="btn-add-food" style="margin-top:4px;">Add to today</button>
     </div>
 
-    <div class="card">
-      <div class="card-head"><h3>Today's foods</h3>
-        <button class="iconbtn" id="btn-sort-foods" title="Sort by calories">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M6 12h12M10 18h4"/></svg>
-        </button>
-      </div>
-      ${foods.length===0?'<div class="muted">Nothing logged yet today.</div>':
-        foods.map(f=>`<div class="food-row"><div><div class="name">${f.name}</div><div class="sub">${f.qtyLabel}</div></div><div style="display:flex;align-items:center;gap:8px;"><div class="kcal">${Math.round(f.kcal)} kcal</div><button class="del" data-food="${f.id}">×</button></div></div>`).join('')}
-    </div>` : ''}
+    ${todaysFoodsCard()}` : ''}
 
     ${showActivity ? `<div class="card">
       <div class="card-head"><h3>Activity</h3>${infoBtnHtml('fitsync')}</div>
@@ -1830,7 +1859,7 @@ function fitbitSyncLabel(){
   const d = new Date(gh.lastSyncAt);
   const time = d.toLocaleTimeString(undefined, {hour:'numeric', minute:'2-digit'});
   const sameDay = d.toDateString()===new Date().toDateString();
-  return `Fitbit synced ${sameDay ? time : d.toLocaleDateString(undefined,{month:'short',day:'numeric'})+', '+time}`;
+  return `Fitbit sync ${sameDay ? time : d.toLocaleDateString(undefined,{month:'short',day:'numeric'})+', '+time}`;
 }
 
 /* =========================================================
