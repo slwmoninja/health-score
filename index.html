@@ -199,7 +199,7 @@ input,select{font-family:inherit;}
    the three circles out instead of clumping them together. Wraps on narrow
    phone screens instead of squeezing, since flex-wrap keeps this responsive. */
 .score-trio{display:flex;align-items:center;justify-content:space-evenly;gap:18px;flex-wrap:wrap;width:100%;}
-.score-circle-col{display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;}
+.score-circle-col{display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;}
 
 /* ---- collapsible section header ---- */
 .section-toggle{display:flex;align-items:center;gap:6px;flex:1;cursor:pointer;}
@@ -1245,23 +1245,27 @@ function scoreCircle(displayText, size, pctForRing, color){
 // A one-line caption that curves along the bottom of a scoreCircle() of the same
 // size instead of sitting as flat text below it — concentric with the ring (same
 // center, slightly larger radius) so it reads as an extension of the ring's own
-// curve rather than a separate label.
-function curvedCaption(text, size){
+// curve rather than a separate label. Same fixed font size for every circle
+// regardless of its diameter, so Total Score/Steps/Calories all read as one
+// consistent label style; `gap` (radial distance outside the ring) is the one
+// thing tuned per size, since a small ring needs less clearance than a big one.
+const CAPTION_FONT_PX = 13;
+function curvedCaption(text, size, gap){
   if(!text) return '';
+  gap = gap===undefined ? 9 : gap;
   const strokeW = Math.max(6, Math.round(size*0.076));
   const ringR = size/2 - strokeW;
-  const r = ringR + strokeW/2 + 6; // just outside the ring's visible outer edge
-  const fontPx = Math.max(8, Math.round(size*0.095));
+  const r = ringR + strokeW/2 + gap; // just outside the ring's visible outer edge
   const halfAngleDeg = 64; // arc span either side of straight-down (90°)
   const cx = size/2, cy = size/2;
   const rad = deg=>deg*Math.PI/180;
   const pt = deg=>[cx+r*Math.cos(rad(deg)), cy+r*Math.sin(rad(deg))];
   const [x1,y1] = pt(90+halfAngleDeg), [x2,y2] = pt(90-halfAngleDeg);
-  const yTop = y1 - 4, yBottom = cy+r+fontPx+2; // crop to just the arc's own band, not the whole ring height
+  const yTop = y1 - 6, yBottom = cy+r+CAPTION_FONT_PX+2; // crop to just the arc's own band, not the whole ring height
   const pathId = 'cap'+Math.random().toString(36).slice(2,9);
   return `<svg viewBox="0 ${yTop} ${size} ${yBottom-yTop}" width="${size}" style="display:block;overflow:visible;">
     <path id="${pathId}" d="M${x1},${y1} A${r},${r} 0 0,0 ${x2},${y2}" fill="none"/>
-    <text font-size="${fontPx}" fill="var(--muted)" text-anchor="middle">
+    <text font-size="${CAPTION_FONT_PX}" fill="#fff" text-anchor="middle">
       <textPath href="#${pathId}" startOffset="50%">${escapeHtml(text)}</textPath>
     </text>
   </svg>`;
@@ -1335,9 +1339,9 @@ function screenToday(){
     <div class="card score-hero">
       <div class="sync-badge">${fitbitSyncLabel()}</div>
       <div class="score-trio">
-        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, undefined, 'var(--blue)')}${curvedCaption('Total Score', 138)}</div>
-        <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, stepPct, 'var(--critical)')}${curvedCaption(`Steps · ${d.activity.activeMin}m · ${(d.activity.distanceMi||0).toFixed(1)}mi`, 84)}</div>
-        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}${curvedCaption(`Calories · wk ${formatCompact(weekCal.consumed)}/${formatCompact(weekCal.goal)}`, 84)}</div>
+        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, undefined, 'var(--blue)')}${curvedCaption('Total Score', 138, 9)}</div>
+        <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, stepPct, 'var(--critical)')}${curvedCaption(`${d.activity.activeMin}m · ${(d.activity.distanceMi||0).toFixed(1)}mi`, 84, 7)}</div>
+        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}${curvedCaption(`wk ${formatCompact(weekCal.consumed)}/${formatCompact(weekCal.goal)}`, 84, 7)}</div>
       </div>
     </div>
 
@@ -2128,12 +2132,37 @@ function attachHandlers(){
 history.replaceState({tab:'today', focus:null}, ''); // baseline entry so later tab switches have something to push atop
 render();
 handleGoogleHealthRedirect();
+// This is a plain static page with no service worker, so a phone that already has it
+// open (installed as a home-screen "web clip" or just left in a background tab) will
+// otherwise keep running whatever version it loaded — potentially for days — since
+// simply switching back to an already-open tab/webview doesn't re-fetch anything on
+// its own. A no-store HEAD request bypasses both the browser's HTTP cache and GitHub
+// Pages' CDN cache (Cache-Control: max-age=600) to always see the truly-latest
+// deploy, so a push shows up next time the app is reopened, without anyone needing
+// to know to manually refresh. Skips the reload while a field is focused so an
+// update never clobbers whatever's mid-typing; localStorage data itself is
+// untouched by a reload either way, since every change is already saved as it
+// happens (see saveState() calls throughout).
+let deployedVersionTag = null;
+async function checkForUpdate(){
+  try{
+    const res = await fetch(location.pathname+'?_='+Date.now(), {cache:'no-store', method:'HEAD'});
+    const tag = res.headers.get('etag') || res.headers.get('last-modified');
+    if(!tag) return;
+    if(deployedVersionTag===null){ deployedVersionTag = tag; return; } // first check just records the baseline
+    if(tag===deployedVersionTag) return;
+    if(isUserTyping()) return; // try again next check instead of interrupting active input
+    location.reload();
+  }catch(e){ /* offline or blocked — silently skip, next successful check catches up */ }
+}
+checkForUpdate();
 // "visibilitychange" (not beforeunload) is the reliable close/backgrounding signal on
 // mobile, where a PWA is far more often backgrounded/swiped away than formally
 // "unloaded" — this covers the "sync on close" half of open+close syncing, alongside
 // the sync render() already fires on open and on every subsequent app action.
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='hidden') autoSyncGoogleHealthIfDue();
+  if(document.visibilityState==='visible') checkForUpdate();
 });
 // Best-effort: asks the browser not to auto-evict this site's storage under
 // low-disk pressure. Does NOT protect against the user explicitly clearing
