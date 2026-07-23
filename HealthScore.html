@@ -1965,6 +1965,10 @@ function screenSettings(){
       <button class="btn-secondary" id="s-backup-now">Back up now</button>
       <div class="muted" style="margin-top:8px;">Tap this for an on-the-spot fresh copy right before clearing your browser history, since that wipes this app's data the same as visiting fresh.</div>
       <div style="height:14px"></div>
+      <button class="btn-secondary" id="s-show-data-files">Show data files</button>
+      <input type="file" id="s-show-data-files-input" accept="application/json,.json" class="hidden">
+      <div class="muted" style="margin-top:8px;">Opens your phone's file browser so you can see and delete old backups yourself — a webpage can't do that automatically. Navigate to Downloads (or "On My iPhone/Android → Downloads"); picking a file here doesn't affect the app, so just back out once you're done deleting.</div>
+      <div style="height:14px"></div>
       <button class="btn-secondary" id="s-reset" style="color:var(--critical)">Reset all data</button>
     </details>
   </div>`;
@@ -2472,6 +2476,15 @@ function attachHandlers(){
     runAutoBackupDownload(true); // bypasses the throttle and the unchanged-data skip
     alert('Backup saved to your Downloads/Files.');
   });
+  // No browser lets a webpage list or delete files it doesn't have a handle to —
+  // opening the native file picker is the closest a page can get to "show me my
+  // downloads," since that picker's own UI (Files app on iOS, similar on
+  // Android) supports navigating to and deleting files. Not wired to a 'change'
+  // handler on purpose: picking a file here is just how you browse in this UI,
+  // not an import — nothing should happen to app state either way.
+  const showDataFilesBtn = document.getElementById('s-show-data-files');
+  const showDataFilesInput = document.getElementById('s-show-data-files-input');
+  if(showDataFilesBtn && showDataFilesInput) showDataFilesBtn.addEventListener('click', ()=>showDataFilesInput.click());
   const resetBtn = document.getElementById('s-reset');
   if(resetBtn) resetBtn.addEventListener('click', ()=>{
     if(confirm('This will erase all Health Score data on this device. Continue?')){
