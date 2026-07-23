@@ -268,7 +268,7 @@ function defaultState(){
     foodMemory: {}, // { foodName: {qty, unitLabel} } — last quantity used, recalled next time
     settings: {
       clientId:'', clientSecret:'', fdcApiKey:'', useMetric:false,
-      charts: { projection:true, trend:true },
+      charts: { projection:true },
       weightTrackingEnabled: true
     },
     googleHealth: { accessToken:null, refreshToken:null, expiresAt:0, lastSyncAt:null, email:null },
@@ -1729,7 +1729,7 @@ function screenHistory(){
       </div>` : ''}
     </div>` : ''}
 
-    ${state.settings.charts.trend ? `<div class="card">
+    ${state.settings.charts.projection ? `<div class="card">
       <div class="card-head"><h3>${historyMode==='week'?'7-day trend':'Monthly Trends'}</h3>${infoBtnHtml('trend')}</div>
       <div class="chart" id="chart-trend"></div>
       <div class="legend">
@@ -1868,7 +1868,7 @@ function screenSettings(){
     <details class="card" data-card-key="dashboard" ${settingsCardOpenAttr('dashboard')}>
       <summary class="card-summary"><h3>Dashboard</h3><span class="chevron">⌄</span></summary>
       ${dashToggleRow('projection','Trend reports')}
-      ${dashToggleRow('trend','7-day trend')}
+      <div class="muted" style="margin-top:6px;">Covers both the week/month summary and the trend chart on the Trends tab.</div>
     </details>
 
     <details class="card" data-card-key="fitbit" ${settingsCardOpenAttr('fitbit')}>
