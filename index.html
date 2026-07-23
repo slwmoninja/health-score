@@ -263,7 +263,8 @@ function defaultState(){
       charts: { projection:true, trend:true }
     },
     googleHealth: { accessToken:null, refreshToken:null, expiresAt:0, lastSyncAt:null },
-    errorLog: [] // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
+    errorLog: [], // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
+    pendingCelebration: false // a goal was hit but confetti hasn't played yet — shown on the next fresh page load
   };
 }
 
@@ -360,10 +361,11 @@ function getDay(iso){
   if(!state.days[iso].celebrated) state.days[iso].celebrated = {};
   return state.days[iso];
 }
-// Fires the confetti celebration the first time (per day) steps, active minutes,
-// or a perfect Total Score cross their goal — checked after every activity/food
-// update, but the `celebrated` flag (persisted) stops it from re-firing on every
-// later render. Deliberately does not cover Calories/Nutrition on its own.
+// Marks the first time (per day) steps, active minutes, or a perfect Total Score
+// cross their goal — checked after every activity/food update. Deliberately does
+// not cover Calories/Nutrition on its own. Doesn't fire the confetti itself: that's
+// deferred to the next fresh page load (see the pendingCelebration check near
+// startup) rather than popping up mid-interaction right as the goal is crossed.
 function checkGoalsAndCelebrate(iso){
   const p = state.profile;
   const d = getDay(iso);
@@ -378,7 +380,7 @@ function checkGoalsAndCelebrate(iso){
   if(overall!==null && overall>=100 && !d.celebrated.totalScore){
     d.celebrated.totalScore = true; fired = true;
   }
-  if(fired){ saveState(); fireConfetti(); }
+  if(fired){ state.pendingCelebration = true; saveState(); }
 }
 
 /* =========================================================
@@ -761,15 +763,47 @@ function weightGoalImpactText(impact, p, periodWord){
   return `You ate about ${Math.abs(bonus).toLocaleString()} calories more than even ${possessive} activity-boosted budget — the ${burned.toLocaleString()} calories burned helped, just not quite enough to offset it.`;
 }
 
+// Calorie-vs-target scoring, asymmetric by goal direction: lose/gain only penalize
+// the "wrong" side of target (eating too little when trying to lose, or too much
+// when trying to gain is never penalized), maintain penalizes deviation either way.
+// Shared by the single-day and period-aggregate nutrition scores below.
+function calorieDirectionScore(goalType, kcalDiff, target){
+  if(goalType==='lose') return kcalDiff<=0 ? 100 : clamp(100 - kcalDiff/target*200, 0, 100);
+  if(goalType==='gain') return kcalDiff>=0 ? 100 : clamp(100 - (-kcalDiff)/target*200, 0, 100);
+  return clamp(100 - Math.abs(kcalDiff)/target*200, 0, 100);
+}
+// The Nutrition score is calories-in-vs-calories-burned only — protein/iron/calcium
+// stay tracked and visible (the Trends nutrient card, shortfall tips) but are
+// informational, not scored. Weight loss is the app's primary use case and the
+// calorie balance is what actually drives that, so the score stays focused there
+// instead of blending in a protein ratio that swings wildly on partial-day data
+// (a single low-protein snack could tank the old blended score even on a day
+// that was otherwise well within its calorie goal).
 function nutritionScore(iso){
   const p = state.profile; if(!p) return null;
   const d = getDay(iso);
   if(d.foods.length===0) return null;
   const totals = dayTotals(iso);
-  const targets = dailyTargets(p, d.activity.kcal);
-  const calScore = clamp(100 - Math.abs(totals.kcal-targets.kcal)/targets.kcal*200, 0, 100);
-  const proScore = clamp(100 - Math.abs(totals.protein-targets.proteinG)/targets.proteinG*100, 0, 100);
-  return Math.round(calScore*0.6 + proScore*0.4);
+  const targets = dailyTargets(p, d.activity.kcal); // already folds in today's calories burned, so a bigger burn means a bigger score-free allowance below
+  return Math.round(calorieDirectionScore(p.goalType, totals.kcal-targets.kcal, targets.kcal));
+}
+// Same idea as nutritionScore but scored against the period's AGGREGATE calorie
+// result rather than averaging each day's own score — so a day that ran slightly
+// over doesn't drag down an otherwise-successful week/month as long as the
+// period's overall result is still on the right side of goal. Unlogged days are
+// excluded entirely (not counted as "ate zero"), matching how avgScore already
+// skips days with no food logged.
+function aggregateNutritionScore(dates){
+  const p = state.profile; if(!p) return null;
+  const loggedDates = dates.filter(iso=>getDay(iso).foods.length>0);
+  if(loggedDates.length===0) return null;
+  let consumed=0, target=0;
+  loggedDates.forEach(iso=>{
+    const d = getDay(iso);
+    consumed += dayTotals(iso).kcal;
+    target += dailyTargets(p, d.activity.kcal).kcal;
+  });
+  return Math.round(calorieDirectionScore(p.goalType, consumed-target, target));
 }
 function activityScore(iso){
   const p = state.profile; if(!p) return null;
@@ -781,6 +815,16 @@ function activityScore(iso){
 }
 function dayOverallScore(iso){
   const n = nutritionScore(iso), a = activityScore(iso);
+  if(n===null && a===null) return null;
+  if(n===null) return a;
+  if(a===null) return n;
+  return Math.round(n*0.55 + a*0.45);
+}
+// Week/month version of dayOverallScore — nutrition uses the period aggregate
+// (see aggregateNutritionScore), activity stays a per-day average since only the
+// calorie/nutrition side of the goal was asked to work this way.
+function periodOverallScore(dates){
+  const n = aggregateNutritionScore(dates), a = avgScore(dates, activityScore);
   if(n===null && a===null) return null;
   if(n===null) return a;
   if(a===null) return n;
@@ -816,7 +860,7 @@ function avgRaw(dates, fn){
 function buildFeedback(dates, periodLabel, weightScoreOverride){
   periodLabel = periodLabel || 'period';
   const p = state.profile;
-  const nAvg = avgScore(dates, nutritionScore);
+  const nAvg = aggregateNutritionScore(dates);
   const aAvg = avgScore(dates, activityScore);
   const loggedDays = dates.filter(d=>getDay(d).foods.length>0).length;
   const activityDays = dates.filter(d=>{const a=getDay(d).activity; return a.steps>0||a.activeMin>0;}).length;
@@ -1373,6 +1417,15 @@ function unitCategory(u){
   if(u.startsWith('tbsp')) return 'tbsp';
   return 'unit';
 }
+// True when the Unit dropdown is set to something other than this matched food's
+// own unit — e.g. Unit=Cups but the food is only defined per-gram. The Amount
+// field always multiplies against the food's own per/unit regardless of what's
+// picked here (there's no real cup<->gram conversion), so a mismatch means
+// whatever Amount is typed would silently compute against the wrong basis —
+// often rounding to 0 calories.
+function unitMismatch(food){
+  return !!food && foodUnitFilter!=='any' && unitCategory(food.u)!==foodUnitFilter;
+}
 const FOOD_UNIT_OPTIONS = [
   {v:'any', l:'Any'}, {v:'g', l:'Grams'}, {v:'unit', l:'Units/pieces'},
   {v:'cup', l:'Cups'}, {v:'tsp', l:'Tsp'}, {v:'tbsp', l:'Tbsp'}, {v:'ml', l:'Ml'}
@@ -1445,6 +1498,7 @@ function screenLog(){
         ${results.map((f,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${f.n}${f.fdc?' <span class="muted" style="font-size:10.5px;">USDA</span>':''}</div><div class="m">${f.k} kcal per ${f.per} ${f.u}</div></div>`).join('')}
       </div>
       ${showWebSearch && !matchedFood ? `<button class="btn-secondary" id="btn-web-search-food" type="button" style="margin-top:2px;">Search the web for "${logFoodQuery}"</button>` : ''}
+      ${matchedFood && unitMismatch(matchedFood) ? `<div class="muted" style="color:var(--critical);margin:4px 0 -2px;">${matchedFood.n} is measured in ${matchedFood.u}, not ${FOOD_UNIT_OPTIONS.find(o=>o.v===foodUnitFilter).l.toLowerCase()} — set Unit to match, or enter your own calorie estimate below.</div>` : ''}
       <div class="field" style="margin-top:2px;"><label>Calories</label><input type="number" id="food-kcal" placeholder="0" value="${foodKcalValue}"></div>
       <button class="btn-primary" id="btn-add-food" style="margin-top:4px;">Log item</button>
     </div>
@@ -1483,7 +1537,10 @@ function selectFoodIntoForm(food){
   const remembered = state.foodMemory[food.n];
   const amt = priorAmount>0 ? priorAmount : (remembered ? remembered.qty : food.per);
   foodAmountValue = String(amt);
-  foodKcalValue = String(Math.round(food.k*(amt/food.per)));
+  // Don't auto-fill Calories against the wrong basis when Unit doesn't match this
+  // food's own unit — leave it for the user to fill in themselves; the inline
+  // warning in screenLog() explains why.
+  foodKcalValue = unitMismatch(food) ? '' : String(Math.round(food.k*(amt/food.per)));
   render();
   const amountEl = document.getElementById('food-amount');
   amountEl.focus();
@@ -1497,7 +1554,7 @@ function screenHistory(){
   const rangeEnd = range.end < t ? range.end : t;
   const dates = datesBetween(range.start, rangeEnd);
   const fb = buildFeedback(dates, historyMode);
-  const oAvg = avgScore(dates, dayOverallScore);
+  const oAvg = periodOverallScore(dates);
   const nutrientTotals = periodNutrientTotals(dates);
   const nutrientTips = nutrientShortfallTips(nutrientTotals);
 
@@ -1954,7 +2011,7 @@ function attachHandlers(){
   const amountInputEl = document.getElementById('food-amount');
   if(amountInputEl) amountInputEl.addEventListener('input', ()=>{
     foodAmountValue = amountInputEl.value;
-    if(!matchedFood) return;
+    if(!matchedFood || unitMismatch(matchedFood)) return;
     const amt = Number(amountInputEl.value)||0;
     foodKcalValue = String(Math.round(matchedFood.k*(amt/matchedFood.per)));
     const kcalEl = document.getElementById('food-kcal');
@@ -1980,8 +2037,15 @@ function attachHandlers(){
     const name = rawName || 'Generic food';
     const amount = Number(document.getElementById('food-amount').value) || 1;
     const kcal = Number(document.getElementById('food-kcal').value) || 0;
-    if(!(matchedFood && matchedFood.n===name) && kcal===0){
-      alert('Enter calories before logging — or pick a match from the search results to fill it in automatically.');
+    // A "trusted" match is one whose Unit also matches the food's own unit — only
+    // that case gets to skip the "enter calories yourself" requirement, since a
+    // mismatched Unit means Calories was deliberately left blank instead of
+    // auto-filled against the wrong basis (see selectFoodIntoForm/unitMismatch).
+    const trustedMatch = matchedFood && matchedFood.n===name && !unitMismatch(matchedFood);
+    if(!trustedMatch && kcal===0){
+      alert(matchedFood && matchedFood.n===name
+        ? `${name} is measured in ${matchedFood.u} — set Unit to match, or enter your own calorie estimate.`
+        : 'Enter calories before logging — or pick a match from the search results to fill it in automatically.');
       const kcalEl = document.getElementById('food-kcal');
       if(kcalEl) kcalEl.focus();
       return;
@@ -2121,6 +2185,15 @@ function attachHandlers(){
 history.replaceState({tab:'today', focus:null}, ''); // baseline entry so later tab switches have something to push atop
 render();
 handleGoogleHealthRedirect();
+// Confetti plays here, on the next fresh page load after a goal was hit — not at
+// the moment it's crossed mid-interaction (see checkGoalsAndCelebrate) — so it
+// reads as a "welcome back, you did it" moment rather than popping up over
+// whatever else was on screen right as the last food/activity got logged.
+if(state.pendingCelebration){
+  state.pendingCelebration = false;
+  saveState();
+  fireConfetti();
+}
 // This is a plain static page with no service worker, so a phone that already has it
 // open (installed as a home-screen "web clip" or just left in a background tab) will
 // otherwise keep running whatever version it loaded — potentially for days — since
