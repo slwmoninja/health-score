@@ -1814,18 +1814,17 @@ function connectFitbitStepsHtml(prefix){
   const gh = state.googleHealth;
   const connected = !!gh.refreshToken;
   return `
-    <div class="muted" style="margin-bottom:12px;">Since 2026, Fitbit stores your activity data through a Google account instead of a separate Fitbit login. Follow these steps in order — Step 1 especially, since guessing the wrong account is the most common snag.</div>
+    <div class="muted" style="margin-bottom:12px;">Fitbit data now flows through a Google account — often not your everyday one. Follow these steps in order.</div>
     ${connected ? `<div class="row" style="margin-bottom:12px;"><span class="badge good">Connected${gh.email ? ' as '+escapeHtml(gh.email) : ''} — auto-syncing</span></div>` : ''}
 
     <div style="margin-bottom:14px;">
-      <div style="font-weight:600;margin-bottom:4px;">Step 1 — Find out which Google account your Fitbit uses</div>
-      <div class="muted" style="margin-bottom:6px;">Open the <strong>Fitbit app</strong> on your phone → tap your profile photo (top-left) → <strong>Account settings</strong> → look for <strong>Google account</strong> or <strong>Linked accounts</strong>. It shows the exact email your Fitbit data is tied to. Write it down — you'll need to send it in Step 2 and pick this <em>exact</em> account in Step 3. It doesn't have to end in @gmail.com; any email can be the login for a Google account.</div>
-      <div class="muted">If it says nothing is linked yet, tap <strong>Link Google Account</strong> right there and follow Fitbit's prompts before continuing.</div>
+      <div style="font-weight:600;margin-bottom:4px;">Step 1 — Find your Fitbit's Google account</div>
+      <div class="muted">Fitbit app → profile photo → <strong>Account settings</strong> → <strong>Google account</strong> (or Link Google Account, if none shows yet). Note the exact email — not necessarily @gmail.com — for Steps 2 and 3.</div>
     </div>
 
     <div style="margin-bottom:14px;">
-      <div style="font-weight:600;margin-bottom:4px;">Step 2 — Get approved and get your connection key</div>
-      <div class="muted" style="margin-bottom:6px;">Send the app owner the email address from Step 1 and ask to be added. They'll approve it on their end and send you back two pieces of text — a <strong>Client ID</strong> and a <strong>Client Secret</strong>. Paste those into the two boxes below, then tap <strong>Save credentials</strong>. This only needs doing once per device.</div>
+      <div style="font-weight:600;margin-bottom:4px;">Step 2 — Get approved and get your key</div>
+      <div class="muted">Send the app owner that email and ask to be added. They'll reply with a <strong>Client ID</strong> and <strong>Client Secret</strong> — paste both below and tap Save. One-time, per device.</div>
     </div>
     <div class="field"><label>Google Client ID</label><input type="text" id="${prefix}-fit-client" placeholder="paste what the app owner sent you" value="${state.settings.clientId}"></div>
     <div class="field"><label>Google Client Secret</label><input type="text" id="${prefix}-fit-secret" placeholder="paste what the app owner sent you" value="${state.settings.clientSecret}"></div>
@@ -1833,12 +1832,12 @@ function connectFitbitStepsHtml(prefix){
     <div style="height:14px"></div>
 
     <div style="margin-bottom:10px;">
-      <div style="font-weight:600;margin-bottom:4px;">Step 3 — Connect, and pick the right account</div>
-      <div class="muted">Tap the button below. Google always shows an account-chooser screen, even if you're already signed in somewhere — pick the <strong>exact email from Step 1</strong>, not whichever account looks familiar. Then tap <strong>Allow</strong> to grant access to your activity and health data.</div>
-      <div class="muted" style="margin-top:6px;">If Google shows a page saying the app is <strong>blocked</strong> or <strong>hasn't completed verification</strong> instead of the Allow screen, the app owner hasn't approved your email yet (or approved a different one than you're signing in with) — double-check with them and try again.</div>
+      <div style="font-weight:600;margin-bottom:4px;">Step 3 — Connect and pick the right account</div>
+      <div class="muted">Tap below, then choose the <strong>exact email from Step 1</strong> in Google's picker — not whatever's already signed in — and tap Allow.</div>
+      <div class="muted" style="margin-top:6px;">Google says the app is "blocked" or "unverified"? You haven't been approved yet — check with the app owner.</div>
     </div>
     <button class="btn-primary" id="${prefix}-fit-connect">${connected ? 'Reconnect & sync now' : 'Connect & sync today'}</button>
-    ${connected ? `<div class="muted" style="margin-top:8px;">Connected the wrong account by mistake? Tap "Reconnect & sync now" above and choose the correct email this time.</div>` : ''}
+    ${connected ? `<div class="muted" style="margin-top:8px;">Connected the wrong account? Tap "Reconnect & sync now" and choose again.</div>` : ''}
   `;
 }
 function wireConnectFitbitCard(root, prefix){
