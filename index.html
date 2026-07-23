@@ -1733,9 +1733,6 @@ function screenHistory(){
       <button data-v="month" class="${historyMode==='month'?'active':''}">Monthly</button>
     </div>
     <div style="height:14px"></div>
-    <div class="card score-hero">
-      <div class="ring-wrap">${scoreRing(oAvg)}<div class="ring-label"><div class="num">${oAvg===null?'--':oAvg}</div><div class="lbl">${historyMode==='week'?'Week':'Month'} Score</div></div></div>
-    </div>
 
     ${state.settings.charts.projection ? `<div class="card">
       <div class="card-head">
