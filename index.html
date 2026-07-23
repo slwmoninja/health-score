@@ -285,7 +285,8 @@ function defaultState(){
     settings: {
       clientId:'', clientSecret:'', fdcApiKey:'', useMetric:false,
       charts: { projection:true },
-      weightTrackingEnabled: true
+      weightTrackingEnabled: true,
+      minimizeBackupFiles: true
     },
     googleHealth: { accessToken:null, refreshToken:null, expiresAt:0, lastSyncAt:null, email:null },
     errorLog: [], // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
@@ -357,12 +358,14 @@ function saveState(){
 // zero-touch restore) — this is a testing-phase shortcut, not something to
 // ship broadly.
 const AUTO_BACKUP_DOWNLOAD_ENABLED = true;
-const AUTO_BACKUP_THROTTLE_MS = 3*60*1000;
+const AUTO_BACKUP_THROTTLE_MS = 3*60*1000;        // when "Reduce backup files" is off
+const AUTO_BACKUP_THROTTLE_MS_MINIMIZED = 30*60*1000; // when it's on (default)
 let lastAutoBackupJson = null;
 let lastAutoBackupAttemptAt = 0;
 function runAutoBackupDownload(force){
   if(!AUTO_BACKUP_DOWNLOAD_ENABLED || !state.profile) return;
-  if(!force && Date.now()-lastAutoBackupAttemptAt<AUTO_BACKUP_THROTTLE_MS) return;
+  const throttleMs = state.settings.minimizeBackupFiles ? AUTO_BACKUP_THROTTLE_MS_MINIMIZED : AUTO_BACKUP_THROTTLE_MS;
+  if(!force && Date.now()-lastAutoBackupAttemptAt<throttleMs) return;
   const json = JSON.stringify(state);
   if(!force && json===lastAutoBackupJson) return; // nothing's changed since the last backup
   lastAutoBackupAttemptAt = Date.now();
@@ -1956,8 +1959,11 @@ function screenSettings(){
 
     <details class="card" data-card-key="data" ${settingsCardOpenAttr('data')}>
       <summary class="card-summary"><h3>Data</h3><span class="chevron">⌄</span></summary>
+      <div class="toggle-row"><span>Reduce backup files</span><button class="switch ${state.settings.minimizeBackupFiles?'on':''}" data-setting-toggle="minimizeBackupFiles"></button></div>
+      <div class="muted" style="margin-top:6px;">${state.settings.minimizeBackupFiles ? 'Backs up automatically about every 30 minutes of activity, so Downloads/Files accumulates fewer files over a testing session.' : 'Backs up automatically about every 3 minutes of activity — fresher, but more files pile up in Downloads/Files. A webpage can\'t delete old ones for you; that\'s a manual cleanup in the Files app if it matters.'}</div>
+      <div style="height:12px"></div>
       <button class="btn-secondary" id="s-backup-now">Back up now</button>
-      <div class="muted" style="margin-top:8px;">A backup already saves itself to Downloads/Files automatically every few minutes while you use the app — no need to remember. Tap this button for an on-the-spot fresh copy right before clearing your browser history, since that wipes this app's data the same as visiting fresh.</div>
+      <div class="muted" style="margin-top:8px;">Tap this for an on-the-spot fresh copy right before clearing your browser history, since that wipes this app's data the same as visiting fresh.</div>
       <div style="height:14px"></div>
       <button class="btn-secondary" id="s-reset" style="color:var(--critical)">Reset all data</button>
     </details>
