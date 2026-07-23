@@ -398,6 +398,9 @@ function runAutoBackupDownload(force){
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+// Highlights a data point value (a score, a count, a gap) within the succinct
+// Trends analysis bullets/tips, so the numbers driving each line stand out.
+function hl(v){ return `<span style="color:var(--yellow);font-weight:700;">${v}</span>`; }
 function logError(message){
   state.errorLog.unshift({ts: Date.now(), message});
   state.errorLog = state.errorLog.slice(0, 3);
@@ -875,15 +878,15 @@ function nutrientShortfallTips(totals){
   const tips = [];
   if(totals.proteinGoal>0 && totals.protein < totals.proteinGoal*0.9){
     const gap = Math.round(totals.proteinGoal-totals.protein);
-    tips.push(`Protein: about ${gap}g short — Greek yogurt, eggs, chicken breast, cottage cheese, or a protein shake are quick ways to close the gap.`);
+    tips.push(`Protein: ${hl(gap+'g')} short > Greek yogurt, eggs, chicken breast.`);
   }
   if(totals.ironGoal>0 && totals.iron < totals.ironGoal*0.9){
     const gap = (totals.ironGoal-totals.iron).toFixed(1);
-    tips.push(`Iron: about ${gap}mg short — red meat, spinach, lentils, and fortified cereals are strong sources; pair with vitamin C (citrus, peppers) to help absorption.`);
+    tips.push(`Iron: ${hl(gap+'mg')} short > red meat, spinach, lentils.`);
   }
   if(totals.calciumGoal>0 && totals.calcium < totals.calciumGoal*0.9){
     const gap = Math.round(totals.calciumGoal-totals.calcium);
-    tips.push(`Calcium: about ${gap}mg short — milk, yogurt, cheese, fortified plant milk, or leafy greens like kale can help close the gap.`);
+    tips.push(`Calcium: ${hl(gap+'mg')} short > milk, yogurt, leafy greens.`);
   }
   return tips;
 }
@@ -1009,34 +1012,53 @@ function buildHighlightBullets(dates, periodLabel, oAvg){
   const aAvg = avgScore(dates, activityScore);
   const loggedDays = dates.filter(d=>getDay(d).foods.length>0).length;
   const activityDays = dates.filter(d=>{const a=getDay(d).activity; return a.steps>0||a.activeMin>0;}).length;
+  const oAvgText = oAvg===null ? '--' : oAvg;
 
   const activityText = aAvg===null
-    ? `Log steps or active minutes to start building this ${periodLabel}'s Activity score.`
-    : `Averaged ${aAvg}/100 across ${activityDays} tracked day${activityDays===1?'':'s'}, contributing about ${Math.round(aAvg*0.45)} points toward your ${oAvg===null?'--':oAvg}/100 Total Score.`;
+    ? `Log steps or active minutes to start this ${periodLabel}'s Activity score.`
+    : `${hl(aAvg+'/100')} Avg across ${hl(activityDays)} tracked day${activityDays===1?'':'s'} = ${hl(Math.round(aAvg*0.45)+' pts')} > ${hl(oAvgText+'/100')} Score.`;
 
   const nutritionText = nAvg===null
-    ? `Log meals to start building this ${periodLabel}'s Nutrition score.`
-    : `Averaged ${nAvg}/100 across ${loggedDays} tracked day${loggedDays===1?'':'s'}, contributing about ${Math.round(nAvg*0.55)} points toward your ${oAvg===null?'--':oAvg}/100 Total Score.`;
+    ? `Log meals to start this ${periodLabel}'s Nutrition score.`
+    : `${hl(nAvg+'/100')} Avg across ${hl(loggedDays)} tracked day${loggedDays===1?'':'s'} = ${hl(Math.round(nAvg*0.55)+' pts')} > ${hl(oAvgText+'/100')} Score.`;
 
+  // Goals: built from the raw calorie-burn-vs-budget numbers directly (rather
+  // than weightGoalImpactText's full sentences) to stay in the same succinct,
+  // number-highlighted style as the other three bullets.
   const goalWord = p.goalType==='lose' ? 'weight-loss' : p.goalType==='gain' ? 'weight-gain' : 'maintenance';
-  const impactText = weightGoalImpactText(weightGoalImpact(dates), p, `this ${periodLabel}`);
-  const goalsText = impactText || (oAvg!==null
-    ? `Nutrition and Activity together produced a ${oAvg}/100 Total Score this ${periodLabel} — keep that up to stay on pace for your ${goalWord} goal.`
-    : `Log food and activity this ${periodLabel} to see how they're tracking against your ${goalWord} goal.`);
+  const impact = weightGoalImpact(dates);
+  const burned = Math.round(impact.burned), bonus = Math.round(impact.bonusDeficit);
+  let goalsText;
+  if(burned<30){
+    goalsText = oAvg!==null
+      ? `${hl(oAvgText+'/100')} Score > pace for ${goalWord} goal.`
+      : `Log food/activity > see ${goalWord} goal pace.`;
+  } else if(Math.abs(bonus)<50){
+    goalsText = `${hl(burned+' kcal')} burned > on pace for ${goalWord} goal.`;
+  } else if(bonus>0){
+    goalsText = `${hl(burned+' kcal')} burned, ${hl('+'+bonus+' kcal')} unused > bonus toward ${goalWord} goal.`;
+  } else {
+    goalsText = `${hl(burned+' kcal')} burned, ${hl(Math.abs(bonus)+' kcal')} over > ${goalWord} goal impacted.`;
+  }
 
+  // Action-focused: names whichever of Nutrition/Activity trailed the other and
+  // tells the user to push it past its own current average — a concrete nutrient
+  // shortfall tip stands in for Nutrition when one applies, since "increase
+  // Nutrition beyond X" alone isn't as actionable as naming the actual gap.
   const nutrientTotals = periodNutrientTotals(dates);
   const tips = nutrientShortfallTips(nutrientTotals);
   let lookingAheadText;
   if(nAvg!==null && aAvg!==null){
     const weakerIsNutrition = nAvg<=aAvg;
-    const weakerLabel = weakerIsNutrition ? 'Nutrition' : 'Activity';
-    const weakerScore = weakerIsNutrition ? nAvg : aAvg;
-    const suggestion = weakerIsNutrition && tips.length ? tips[0] : 'keep tightening that up for the biggest jump in Total Score.';
-    lookingAheadText = `${weakerLabel} (${weakerScore}/100) trailed the other this ${periodLabel} — ${suggestion}`;
+    if(weakerIsNutrition){
+      lookingAheadText = tips.length ? tips[0] : `Increase Nutrition beyond ${hl(nAvg+'/100')} > lift Total Score.`;
+    } else {
+      lookingAheadText = `Increase Activity beyond ${hl(aAvg+'/100')} > lift Total Score.`;
+    }
   } else if(tips.length){
     lookingAheadText = tips[0];
   } else {
-    lookingAheadText = `Keep logging food and activity daily — more data this ${periodLabel} means a sharper picture of what to improve.`;
+    lookingAheadText = `Log food/activity daily > build a recommendation.`;
   }
 
   return [
@@ -1797,12 +1819,10 @@ function screenHistory(){
 
   // Pace/projection card, moved here from the Today tab — one card, parametrized by
   // whichever History tab (week vs month) is currently active.
-  const profile = state.profile;
   const dNow = dateFromIso(t);
   const daysInMonth = new Date(dNow.getFullYear(), dNow.getMonth()+1, 0).getDate();
   const periodComplete = historyMode==='week' ? isSunday(t) : dNow.getDate()===daysInMonth;
   const periodRemain = historyMode==='week' ? (dayOfWeek(t)===0?0:7-dayOfWeek(t)) : daysInMonth-dNow.getDate();
-  const periodImpactText = weightGoalImpactText(weightGoalImpact(dates), profile, historyMode==='week'?'this week':'this month');
 
   // Week-over-week Total Score/Weight comparison, shown only in the Monthly card —
   // "this week" is the week containing today (partial if today isn't Sunday yet),
@@ -1839,7 +1859,6 @@ function screenHistory(){
       ${periodComplete
         ? ''
         : `${oAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(oAvg, historyMode) ? `<div class="muted">${paceMsg(oAvg, historyMode)}</div>` : '')}`}
-      ${periodImpactText ? `<div class="feedback-item"><div class="dot" style="background:var(--critical)"></div><div>${periodImpactText}</div></div>` : ''}
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--grid);">
         ${bullets.map((b,i)=>`<div class="feedback-item"><div class="dot" style="background:${i===3?'var(--warning)':'var(--good)'}"></div><div><strong>${b.label}:</strong> ${b.text}</div></div>`).join('')}
       </div>
