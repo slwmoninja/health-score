@@ -306,6 +306,40 @@ function saveState(){
     }
   }
 }
+// TESTING-ONLY convenience for the 2-tester phase: clearing browser history on a
+// phone wipes localStorage the same as a fresh visit — no client-side technique
+// can survive that intentionally, since that's what the browser feature is for.
+// Rather than the two-sided manual Export-then-Import dance, this keeps a backup
+// file downloading in the background whenever the app is backgrounded (see the
+// visibilitychange listener near the bottom of this script), so after a wipe,
+// onboarding's existing "Restore from backup" button only needs one tap to pick
+// a recent file instead of a stale, manually-made one. Deliberately NOT wired to
+// fire on every single save: a browser can't overwrite an existing download
+// (same class of restriction as not being able to silently read one back — a
+// site being able to clobber arbitrary files on request would be a real
+// security hole), so every attempt would land as a new "(1)", "(2)", ...
+// numbered file, and firing on every field save would flood Downloads with one
+// per entry across a testing session. Backgrounding is naturally infrequent
+// (roughly once per session) and is also the exact moment right before someone
+// would go clear their history, so it's the one point that matters most.
+// Flip this off before a production rollout and evaluate a real solution then
+// (e.g. cloud-backed sync) — this is a testing-phase shortcut, not something to
+// ship broadly.
+const AUTO_BACKUP_DOWNLOAD_ENABLED = true;
+let lastAutoBackupJson = null;
+function runAutoBackupDownload(){
+  if(!AUTO_BACKUP_DOWNLOAD_ENABLED || !state.profile) return;
+  const json = JSON.stringify(state);
+  if(json===lastAutoBackupJson) return; // nothing's changed since the last backup
+  try{
+    const blob = new Blob([json], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'health-score-data.json';
+    a.click();
+    lastAutoBackupJson = json;
+  }catch(e){ /* best-effort — the manual Export button in Settings still works as a fallback */ }
+}
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -2465,7 +2499,7 @@ checkForUpdate();
 // "unloaded" — this covers the "sync on close" half of open+close syncing, alongside
 // the sync render() already fires on open and on every subsequent app action.
 document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState==='hidden') autoSyncGoogleHealthIfDue();
+  if(document.visibilityState==='hidden'){ autoSyncGoogleHealthIfDue(); runAutoBackupDownload(); }
   if(document.visibilityState==='visible') checkForUpdate();
 });
 // Best-effort: asks the browser not to auto-evict this site's storage under
