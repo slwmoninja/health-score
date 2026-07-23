@@ -2296,7 +2296,9 @@ function mountCharts(){
       {name:'Weight', color:'var(--orange)', points: weightPoints}
     ], labels, {independentScale:true, tooltipLabels}));
     trendEl.addEventListener('click', ()=>openChartTableModal('Monthly Trends', ['Month','Total Score','Weight'],
-      buckets.map((b,i)=>[tooltipLabels[i], scorePoints[i]===null?'--':scorePoints[i], weightPoints[i]===null?'--':weightPoints[i].toFixed(1)+' lb'])
+      // Reversed to most-recent-first for the table — the chart itself stays
+      // chronological (oldest-to-newest, left-to-right) since that's how a trend line reads.
+      buckets.map((b,i)=>[tooltipLabels[i], scorePoints[i]===null?'--':scorePoints[i], weightPoints[i]===null?'--':weightPoints[i].toFixed(1)+' lb']).reverse()
     ));
   }else{
     const dates = []; for(let i=6;i>=0;i--) dates.push(addDays(t,-i));
