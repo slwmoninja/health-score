@@ -261,7 +261,8 @@ function defaultState(){
     foodMemory: {}, // { foodName: {qty, unitLabel} } — last quantity used, recalled next time
     settings: {
       clientId:'', clientSecret:'', fdcApiKey:'', useMetric:false,
-      charts: { projection:true, trend:true }
+      charts: { projection:true, trend:true },
+      weightTrackingEnabled: true
     },
     googleHealth: { accessToken:null, refreshToken:null, expiresAt:0, lastSyncAt:null },
     errorLog: [], // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
@@ -853,11 +854,6 @@ function weightTrendScore(startIso, endIso){
    FEEDBACK GENERATION — heavy on positive reinforcement,
    with one concrete, achievable action to try next.
    ========================================================= */
-function avgRaw(dates, fn){
-  const vals = dates.map(fn).filter(v=>v!==null && v!==undefined);
-  if(vals.length===0) return null;
-  return vals.reduce((a,b)=>a+b,0)/vals.length;
-}
 function buildFeedback(dates, periodLabel, weightScoreOverride){
   periodLabel = periodLabel || 'period';
   const p = state.profile;
@@ -868,49 +864,57 @@ function buildFeedback(dates, periodLabel, weightScoreOverride){
   const {start:ws,end:we} = {start:dates[0], end:dates[dates.length-1]};
   const wScore = weightScoreOverride!==undefined ? weightScoreOverride : weightTrendScore(ws,we);
 
-  const avgProtein = avgRaw(dates, d=>getDay(d).foods.length ? dayTotals(d).protein : null);
-  const avgSteps = avgRaw(dates, d=>{const a=getDay(d).activity; return (a.steps>0||a.activeMin>0) ? a.steps : null;});
-  const targetProteinG = dailyTargets(p, 0).proteinG;
-
-  const metrics = [];
-  if(nAvg!==null) metrics.push({key:'nutrition', label:'Nutrition', score:nAvg});
-  if(aAvg!==null) metrics.push({key:'activity', label:'Activity', score:aAvg});
-  if(wScore!==null) metrics.push({key:'weight', label:'Weigh-in trend', score:wScore});
-
-  // Positives: consistency (nutrition + activity tracking) plus the single strongest metric.
+  // Positives: consistency (nutrition + activity tracking) plus a Top Highlight
+  // naming the single best-scoring day (week view) or best-scoring week (month
+  // view) by Total Score, rather than an averaged metric.
   const positives = [
     `Nutrition: You tracked ${loggedDays} day${loggedDays===1?'':'s'} this ${periodLabel}.`,
     `Activity: You tracked data ${activityDays} day${activityDays===1?'':'s'} this ${periodLabel}.`
   ];
-  if(metrics.length>0){
-    const best = metrics.slice().sort((a,b)=>b.score-a.score)[0];
-    const highlight = {
-      nutrition: `Nutrition scored ${best.score}/100 on average — your calories and macros were well balanced.`,
-      activity: `Activity scored ${best.score}/100 on average — steps and active minutes were strong.`,
-      weight: `Your weight trend tracked closely with your ${p.goalType} goal of ${p.ratePerWeekLb} lb/week.`
-    }[best.key];
-    positives.push(`Top Highlight: ${highlight}`);
+  if(periodLabel==='week'){
+    const scored = dates.map(iso=>({iso, score:dayOverallScore(iso)})).filter(x=>x.score!==null);
+    if(scored.length){
+      const best = scored.sort((a,b)=>b.score-a.score)[0];
+      const dayName = dateFromIso(best.iso).toLocaleDateString(undefined,{weekday:'long'});
+      positives.push(`Top Highlight: Your best scoring day this week was ${dayName}, with a Total Score of ${best.score}.`);
+    }
+  } else if(periodLabel==='month'){
+    const weekBuckets = {};
+    dates.forEach(iso=>{
+      const wk = weekRange(iso).start;
+      (weekBuckets[wk] = weekBuckets[wk]||[]).push(iso);
+    });
+    const weekScores = Object.entries(weekBuckets)
+      .map(([start,ds])=>({start, score:avgScore(ds, dayOverallScore)}))
+      .filter(w=>w.score!==null);
+    if(weekScores.length){
+      const best = weekScores.sort((a,b)=>b.score-a.score)[0];
+      const label = dateFromIso(best.start).toLocaleDateString(undefined,{month:'short',day:'numeric'});
+      positives.push(`Top Highlight: Your best scoring week this month was the week of ${label}, with a Total Score of ${best.score}.`);
+    }
   }
 
-  // One focus — small, specific, and doable, not a scolding.
+  // Looking ahead: how Calories and Activity scores trended from the first half
+  // of the period to the second half, instead of a single-worst-metric tip.
+  const trendDelta = scoreFn=>{
+    if(dates.length<2) return null;
+    const mid = Math.floor(dates.length/2);
+    const a = avgScore(dates.slice(0,mid), scoreFn), b = avgScore(dates.slice(mid), scoreFn);
+    return (a===null || b===null) ? null : b-a;
+  };
+  const trendPhrase = delta=>{
+    if(delta===null) return null;
+    if(Math.abs(delta)<3) return 'holding steady';
+    return delta>0 ? `trending up (+${delta})` : `trending down (${delta})`;
+  };
+  const calTrendText = trendPhrase(trendDelta(nutritionScore));
+  const actTrendText = trendPhrase(trendDelta(activityScore));
   let focus = null;
-  if(metrics.length>0){
-    const worst = metrics.slice().sort((a,b)=>a.score-b.score)[0];
-    let tip;
-    if(worst.key==='nutrition'){
-      const gap = avgProtein!==null ? Math.round(targetProteinG-avgProtein) : null;
-      tip = (gap!==null && gap>3)
-        ? `Try adding about ${gap}g more protein a day — one scoop of protein powder, a Greek yogurt, or an extra egg would close most of that gap.`
-        : `Try logging meals as you go instead of at day's end — it makes hitting your calorie and protein target a lot easier.`;
-    } else if(worst.key==='activity'){
-      const gap = avgSteps!==null ? Math.round(p.stepGoal-avgSteps) : null;
-      tip = (gap!==null && gap>200)
-        ? `You're about ${gap.toLocaleString()} steps a day short of goal — one 15-20 minute walk covers most of that.`
-        : `Adding one extra short walk on your lowest-activity day would be an easy win next time.`;
-    } else {
-      tip = `Weigh in at the same time each Sunday, under similar conditions — that alone makes your trend much easier to trust.`;
-    }
-    focus = {label:worst.label, score:worst.score, tip};
+  if(calTrendText || actTrendText){
+    const parts = [];
+    if(calTrendText) parts.push(`Calories ${calTrendText}`);
+    if(actTrendText) parts.push(`Activity ${actTrendText}`);
+    focus = {label:'Trend', tip:`${parts.join(' · ')} from the first half of this ${periodLabel} to the second.`};
   }
   return {positives:positives.slice(0,3), focus, nAvg, aAvg, wScore};
 }
@@ -1036,12 +1040,18 @@ function renderOnboarding(){
 /* =========================================================
    SUNDAY WEIGH-IN
    ========================================================= */
-let weighInDismissed = false;
+// Dismissal is persisted per-day (not just an in-memory flag) so skipping it once
+// actually sticks across reloads for the rest of that Sunday — otherwise reopening
+// the app later the same day would show it again despite already being dismissed.
+// Only the weight itself being logged, or an explicit dismiss, stops it; simply
+// reloading/backgrounding the app does not.
 function shouldPromptWeighIn(){
-  if(!state.profile || weighInDismissed) return false;
+  if(!state.profile || !state.settings.weightTrackingEnabled) return false;
   const t = today();
   if(!isSunday(t)) return false;
-  return !getDay(t).weightLb;
+  const d = getDay(t);
+  if(d.weightLb || d.weighInDismissed) return false;
+  return true;
 }
 function renderWeighInModal(){
   const wrap = document.createElement('div');
@@ -1064,7 +1074,9 @@ function renderWeighInModal(){
     state.profile.weightLb = w;
     saveState(); wrap.remove(); render();
   });
-  wrap.querySelector('#wi-skip').addEventListener('click', ()=>{ weighInDismissed = true; wrap.remove(); });
+  wrap.querySelector('#wi-skip').addEventListener('click', ()=>{
+    getDay(today()).weighInDismissed = true; saveState(); wrap.remove();
+  });
 }
 
 /* =========================================================
@@ -1088,7 +1100,7 @@ function openInfoModal(title, bodyHtml){
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
 const INFO_CONTENT = {
   projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
-  trend: ['Score trend', `Your daily Activity and Nutrition scores (0-100) — the last 7 days under "This Week", or month-to-date under "This Month". Tap a point for its value.`],
+  trend: ['Score trend', `Under "This Week", your daily Activity and Nutrition scores (0-100) for the last 7 days. Under "Monthly", your daily Total Score and Weight for the month so far — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value.`],
   fitsync: ['Google Health sync', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Setup, one time: console.cloud.google.com → new project → OAuth consent screen → publishing status <strong>"In Production"</strong> (fine for personal use — Google only requires review past 100 users) → Credentials → OAuth client ID → type <strong>Web application</strong> → Authorized redirect URI: <strong>${location.origin}${location.pathname}</strong> → enable the "Google Health API" and add the activity/fitness and health-metrics scopes → paste the resulting Client ID and Client Secret below. After you connect once, it re-syncs automatically in the background — no further action needed.`],
   databackup: ['Data & backups', `Everything here (profile, logged food, activity, Google Health credentials) lives only in this browser's local storage on this device — nothing is sent to a server. That's good for privacy, but it means your phone or browser's own "clear history / clear site data" action can wipe it, the same as it would for any website — there's no way for a site to opt out of that. <strong>Export data</strong> saves everything to a JSON file you can keep as a backup; <strong>Import data</strong> restores from one. Only the <strong>Reset all data</strong> button below is an in-app wipe — a browser-level clear is outside the app's control.`],
   fdc: ['Food search', `With a free USDA FoodData Central key, search first checks the Foundation/SR Legacy datasets (generic whole foods, to keep casual searches from getting buried in brand names), then automatically falls back to FDC's ~300,000-item Branded Foods dataset if nothing generic matched. Setup: fdc.nal.usda.gov/api-key-signup → fill in the short form → the key is emailed instantly, no approval wait → paste it below. It's free with no usage cost. If a search still comes up empty — some very specific items (like a particular fat-percentage of milk) genuinely aren't in either dataset — a "Search the web" button appears so you can look it up yourself and enter your best estimate for calories/macros.`]
@@ -1146,9 +1158,9 @@ function openActivityModal(){
     ${bigStatRow(d.activity.steps.toLocaleString(), 'Steps', `/ ${p.stepGoal.toLocaleString()} goal`)}
     ${bigStatRow(d.activity.activeMin, 'Active minutes', `/ ${p.activeMinGoal} goal`)}
     ${bigStatRow((d.activity.distanceMi||0).toFixed(1), 'Miles')}
-    ${bigStatRow(fromActivity.toLocaleString(), 'Est. calories burned from activity')}
-    ${bigStatRow((resting+fromActivity).toLocaleString(), 'Est. total calories burned today', `= ${resting.toLocaleString()} resting + ${fromActivity.toLocaleString()} activity`)}
-    <div class="muted" style="margin-top:2px;">"From activity" is exercise on top of your baseline; "Total" adds your estimated resting/base burn (BMR × activity factor) — the number a fitness tracker's "calories burned today" usually means.</div>
+    <div class="popup-stat">
+      <div class="v" style="font-size:19px;line-height:1.5;">${fromActivity.toLocaleString()} <span class="l" style="display:inline;">(Activity)</span> <span class="muted">+</span> ${resting.toLocaleString()} <span class="l" style="display:inline;">(Resting)</span> <span class="muted">=</span> ${(resting+fromActivity).toLocaleString()} <span class="l" style="display:inline;">(Total Calories Burned)</span></div>
+    </div>
     ${impactText ? `<div class="feedback-item" style="margin-top:10px;"><div class="dot" style="background:var(--good)"></div><div>${impactText}</div></div>` : ''}
   `);
 }
@@ -1187,26 +1199,39 @@ function svgEl(tag, attrs){
   return el;
 }
 // 7-point line chart, one or two series. series: [{name,color,points:[v...]}]
-function trendLineChart(series, labels){
+// opts.independentScale: normalizes each series to its OWN min/max instead of a
+// shared 0-100-ish axis — needed when overlaying series with unrelated units
+// (e.g. Total Score 0-100 vs Weight in lb), where a shared scale would flatten
+// whichever series has the smaller range. Default (falsy) keeps the original
+// shared-scale behavior, unaffected, for same-unit series like Activity/Nutrition.
+function trendLineChart(series, labels, opts){
+  opts = opts || {};
   const W=320,H=120,padL=6,padR=6,padT=14,padB=20;
   const plotW=W-padL-padR, plotH=H-padT-padB;
-  const allVals = series.flatMap(s=>s.points.filter(v=>v!==null));
-  const max = Math.max(100, ...allVals);
+  const sharedMax = Math.max(100, ...series.flatMap(s=>s.points.filter(v=>v!==null)));
+  const scaleFor = s=>{
+    if(!opts.independentScale) return {min:0, max:sharedMax};
+    const vals = s.points.filter(v=>v!==null);
+    if(vals.length===0) return {min:0, max:1};
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    return hi>lo ? {min:lo, max:hi} : {min:lo-1, max:hi+1}; // avoid divide-by-zero on a flat line
+  };
   const n = labels.length;
   const svg = svgEl('svg',{viewBox:`0 0 ${W} ${H}`});
   svg.appendChild(svgEl('line',{x1:padL,y1:H-padB,x2:W-padR,y2:H-padB,class:'axis-line'}));
   const stepX = n>1 ? plotW/(n-1) : 0;
   series.forEach(s=>{
+    const {min,max} = scaleFor(s);
     let d = '';
     s.points.forEach((v,i)=>{
       if(v===null) return;
-      const x = padL + stepX*i, y = H-padB-(v/max)*plotH;
+      const x = padL + stepX*i, y = H-padB-((v-min)/(max-min))*plotH;
       d += (d===''?'M':'L')+x+' '+y+' ';
     });
     if(d) svg.appendChild(svgEl('path',{d, fill:'none', stroke:s.color,'stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
     s.points.forEach((v,i)=>{
       if(v===null) return;
-      const x = padL + stepX*i, y = H-padB-(v/max)*plotH;
+      const x = padL + stepX*i, y = H-padB-((v-min)/(max-min))*plotH;
       const c = svgEl('circle',{cx:x,cy:y,r:5,fill:s.color,class:'chart-mark'});
       c.addEventListener('click', ev=>{ ev.stopPropagation(); showTooltip(ev.clientX, ev.clientY, `${labels[i]} · ${s.name}: ${v}`); });
       svg.appendChild(c);
@@ -1584,12 +1609,28 @@ function screenHistory(){
   const periodRemain = historyMode==='week' ? (dayOfWeek(t)===0?0:7-dayOfWeek(t)) : daysInMonth-dNow.getDate();
   const periodImpactText = weightGoalImpactText(weightGoalImpact(dates), profile, historyMode==='week'?'this week':'this month');
 
+  // Week-over-week Total Score/Weight comparison, shown only in the Monthly card —
+  // "this week" is the week containing today (partial if today isn't Sunday yet),
+  // compared against the full prior 7-day week.
+  let curWeekScore=null, prevWeekScore=null, curWeekWeight=null, prevWeekWeight=null;
+  if(historyMode==='month'){
+    const curWeekStart = weekRange(t).start;
+    const curWeekDates = datesBetween(curWeekStart, t);
+    const prevWeekStart = addDays(curWeekStart, -7);
+    const prevWeekDates = datesBetween(prevWeekStart, addDays(prevWeekStart, 6));
+    const latestWeightIn = ds=>{ for(let i=ds.length-1;i>=0;i--){ const w=getDay(ds[i]).weightLb; if(w) return w; } return null; };
+    curWeekScore = avgScore(curWeekDates, dayOverallScore);
+    prevWeekScore = avgScore(prevWeekDates, dayOverallScore);
+    curWeekWeight = latestWeightIn(curWeekDates);
+    prevWeekWeight = latestWeightIn(prevWeekDates);
+  }
+
   return `
   <div class="topbar"><h1>Trends</h1></div>
   <div class="screen">
     <div class="seg" id="history-seg">
       <button data-v="week" class="${historyMode==='week'?'active':''}">This Week</button>
-      <button data-v="month" class="${historyMode==='month'?'active':''}">This Month</button>
+      <button data-v="month" class="${historyMode==='month'?'active':''}">Monthly</button>
     </div>
     <div style="height:14px"></div>
     <div class="card score-hero">
@@ -1599,7 +1640,7 @@ function screenHistory(){
     ${state.settings.charts.projection ? `<div class="card">
       <div class="card-head">
         <div style="display:flex;align-items:baseline;gap:8px;">
-          <h3 style="margin-bottom:0;color:var(--blue);">${periodComplete ? (historyMode==='week'?'Week Summary':'Month Summary') : (historyMode==='week'?'This Week':'This Month')}</h3>
+          <h3 style="margin-bottom:0;color:var(--blue);">${periodComplete ? (historyMode==='week'?'Week Summary':'Month Summary') : (historyMode==='week'?'This Week':'Monthly')}</h3>
           <span class="inline-stat">${oAvg===null?'--':oAvg}/100${periodComplete ? ` this ${historyMode}` : ` <span class="muted">· ${periodRemain}d ${historyMode==='week'?'to Sunday':'left'}</span>`}</span>
         </div>
         ${infoBtnHtml('projection')}
@@ -1608,24 +1649,31 @@ function screenHistory(){
         ? `<div class="muted">See "What went well" and "Looking ahead" below for the full ${historyMode==='week'?'week':'month'}'s highlights.</div>`
         : `${oAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(oAvg, historyMode) ? `<div class="muted">${paceMsg(oAvg, historyMode)}</div>` : '')}`}
       ${periodImpactText ? `<div class="feedback-item"><div class="dot" style="background:var(--critical)"></div><div>${periodImpactText}</div></div>` : ''}
+      ${historyMode==='month' ? `
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--grid);">
+        <div class="muted" style="font-size:12px;margin-bottom:6px;">Week over week</div>
+        ${curWeekScore!==null && prevWeekScore!==null
+          ? `<div class="row"><span class="text2">Total Score</span><span>${curWeekScore} <span class="muted">(${curWeekScore-prevWeekScore>=0?'+':''}${curWeekScore-prevWeekScore} vs last week)</span></span></div>`
+          : `<div class="muted">Not enough weeks logged yet to compare.</div>`}
+        ${curWeekWeight!==null && prevWeekWeight!==null
+          ? `<div class="row" style="margin-top:4px;"><span class="text2">Weight</span><span>${curWeekWeight.toFixed(1)} lb <span class="muted">(${curWeekWeight-prevWeekWeight>=0?'+':''}${(curWeekWeight-prevWeekWeight).toFixed(1)} lb vs last week)</span></span></div>`
+          : ''}
+      </div>` : ''}
     </div>` : ''}
 
     ${state.settings.charts.trend ? `<div class="card">
-      <div class="card-head"><h3>${historyMode==='week'?'7-day trend':'Month trend'}</h3>${infoBtnHtml('trend')}</div>
+      <div class="card-head"><h3>${historyMode==='week'?'7-day trend':'Monthly Trends'}</h3>${infoBtnHtml('trend')}</div>
       <div class="chart" id="chart-trend"></div>
       <div class="legend">
+        ${historyMode==='month' ? `
+        <div class="legend-item"><span class="swatch" style="background:var(--blue)"></span>Total Score</div>
+        <div class="legend-item"><span class="swatch" style="background:var(--orange)"></span>Weight</div>
+        ` : `
         <div class="legend-item"><span class="swatch" style="background:var(--blue)"></span>Activity</div>
         <div class="legend-item"><span class="swatch" style="background:var(--aqua)"></span>Nutrition</div>
+        `}
       </div>
     </div>` : ''}
-
-    <div class="card">
-      <h3>Protein, Iron & Calcium</h3>
-      ${progRow('Protein', nutrientTotals.protein, nutrientTotals.proteinGoal, 'g', 'var(--violet)')}
-      ${progRow('Iron', nutrientTotals.iron, nutrientTotals.ironGoal, 'mg', 'var(--critical)')}
-      ${progRow('Calcium', nutrientTotals.calcium, nutrientTotals.calciumGoal, 'mg', 'var(--muted)')}
-      ${nutrientTips.length ? nutrientTips.map(tip=>`<div class="feedback-item" style="margin-top:8px;"><div class="dot" style="background:var(--warning)"></div><div>${tip}</div></div>`).join('') : `<div class="muted" style="margin-top:8px;">You're on pace with protein, iron, and calcium this ${historyMode==='week'?'week':'month'} — nice work.</div>`}
-    </div>
 
     <div class="card">
       <h3>What went well</h3>
@@ -1636,6 +1684,14 @@ function screenHistory(){
       <div class="card-head"><h3>Looking ahead</h3></div>
       <div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${fb.focus.label}</strong> · ${fb.focus.tip}</div></div>
     </div>`:''}
+
+    <div class="card">
+      <h3>Nutrition</h3>
+      ${progRow('Protein', nutrientTotals.protein, nutrientTotals.proteinGoal, 'g', 'var(--violet)')}
+      ${progRow('Iron', nutrientTotals.iron, nutrientTotals.ironGoal, 'mg', 'var(--critical)')}
+      ${progRow('Calcium', nutrientTotals.calcium, nutrientTotals.calciumGoal, 'mg', 'var(--muted)')}
+      ${nutrientTips.length ? nutrientTips.map(tip=>`<div class="feedback-item" style="margin-top:8px;"><div class="dot" style="background:var(--warning)"></div><div>${tip}</div></div>`).join('') : `<div class="muted" style="margin-top:8px;">You're on pace with protein, iron, and calcium this ${historyMode==='week'?'week':'month'} — nice work.</div>`}
+    </div>
   </div>`;
 }
 
@@ -1677,6 +1733,12 @@ function screenSettings(){
         <div class="field"><label>Active min goal</label><input type="number" id="s-min" value="${p.activeMinGoal}"></div>
       </div>
       <button class="btn-primary" id="s-save">Save profile</button>
+    </div>
+
+    <div class="card">
+      <h3>Weight Tracking</h3>
+      <div class="toggle-row"><span>Sunday weigh-in reminder</span><button class="switch ${state.settings.weightTrackingEnabled?'on':''}" data-setting-toggle="weightTrackingEnabled"></button></div>
+      <div class="muted" style="margin-top:6px;">${state.settings.weightTrackingEnabled ? "You'll be prompted each Sunday to log your weight — the reminder stays up until you log it or dismiss it, and won't nag again that same day once dismissed." : 'Reminders are off. You can still log a weight manually any Sunday from this prompt if you turn it back on, or track it outside the app.'}</div>
     </div>
 
     <div class="card">
@@ -1951,10 +2013,19 @@ function mountCharts(){
       dates = []; for(let i=6;i>=0;i--) dates.push(addDays(t,-i));
       labels = dates.map(d=>dateFromIso(d).toLocaleDateString(undefined,{weekday:'short'}).slice(0,2));
     }
-    trendEl.appendChild(trendLineChart([
-      {name:'Activity', color:'var(--blue)', points: dates.map(activityScore)},
-      {name:'Nutrition', color:'var(--aqua)', points: dates.map(nutritionScore)}
-    ], labels));
+    if(historyMode==='month'){
+      // Total Score and Weight are unrelated units (0-100 vs lb), so this chart
+      // needs independent per-series scaling — see trendLineChart's opts.
+      trendEl.appendChild(trendLineChart([
+        {name:'Total Score', color:'var(--blue)', points: dates.map(dayOverallScore)},
+        {name:'Weight', color:'var(--orange)', points: dates.map(d=>getDay(d).weightLb)}
+      ], labels, {independentScale:true}));
+    }else{
+      trendEl.appendChild(trendLineChart([
+        {name:'Activity', color:'var(--blue)', points: dates.map(activityScore)},
+        {name:'Nutrition', color:'var(--aqua)', points: dates.map(nutritionScore)}
+      ], labels));
+    }
   }
 }
 
@@ -1973,6 +2044,11 @@ function attachHandlers(){
   document.querySelectorAll('[data-chart-toggle]').forEach(b=>b.addEventListener('click', ()=>{
     const key = b.dataset.chartToggle;
     state.settings.charts[key] = !state.settings.charts[key];
+    saveState(); render();
+  }));
+  document.querySelectorAll('[data-setting-toggle]').forEach(b=>b.addEventListener('click', ()=>{
+    const key = b.dataset.settingToggle;
+    state.settings[key] = !state.settings[key];
     saveState(); render();
   }));
 
