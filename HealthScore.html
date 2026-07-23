@@ -66,7 +66,6 @@ input,select{font-family:inherit;}
 
 /* ---- overall score ring ---- */
 .score-hero{position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;padding:16px;}
-.sync-badge{position:absolute;top:10px;right:14px;font-size:11px;color:var(--muted);white-space:nowrap;}
 .ring-wrap{position:relative;width:158px;height:158px;border-radius:50%;
   background:var(--surface);
   box-shadow:0 4px 0 var(--btn-lo), inset 0 2px 2px rgba(255,255,255,.4), inset 0 -3px 5px rgba(0,0,0,.1), 0 6px 12px rgba(0,0,0,.14);}
@@ -1107,10 +1106,19 @@ function wireInfoButtons(root){
    TODAY SCREEN DETAIL POPUPS — tapping a score circle opens the
    relevant drill-down instead of an inline foldable card.
    ========================================================= */
+function modalSectionLabel(text){
+  return `<div style="font-size:14px;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin:14px 0 10px;">${text}</div>`;
+}
 function openTotalsModal(){
   const t = today(), p = state.profile, d = getDay(t);
   const totals = dayTotals(t), targets = dailyTargets(p, d.activity.kcal);
-  openInfoModal("Today's Totals", `
+  const n = nutritionScore(t), a = activityScore(t), overall = dayOverallScore(t);
+  openInfoModal("Scorecard", `
+    ${modalSectionLabel('How today’s score is calculated')}
+    <div class="muted" style="margin-bottom:10px;">Total Score ${overall===null?'--':overall}/100 = Nutrition (55%) + Activity (45%)</div>
+    ${n!==null ? progRow('Nutrition Score', n, 100, '', 'var(--good)') : '<div class="muted">Log food to see your nutrition score.</div>'}
+    ${a!==null ? progRow('Activity Score', a, 100, '', 'var(--critical)') : '<div class="muted">Log activity to see your activity score.</div>'}
+    ${modalSectionLabel("Today's data")}
     ${progRow('Calories', totals.kcal, targets.kcal, '', 'var(--blue)')}
     ${progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)')}
     ${progRow('Carbs', totals.carbs, targets.carbG, 'g', 'var(--yellow)')}
@@ -1368,10 +1376,14 @@ function screenToday(){
   const activityGoalMet = (p.stepGoal>0 && d.activity.steps>=p.stepGoal) || (p.activeMinGoal>0 && d.activity.activeMin>=p.activeMinGoal);
 
   return `
-  <div class="topbar"><h1>Today</h1><div class="muted" id="today-date"></div></div>
+  <div class="topbar"><h1>Today</h1>
+    <div style="text-align:right;">
+      <div class="muted" id="today-date"></div>
+      <div class="muted" style="font-size:11px;">${fitbitSyncLabel()}</div>
+    </div>
+  </div>
   <div class="screen">
     <div class="card score-hero">
-      <div class="sync-badge">${fitbitSyncLabel()}</div>
       <div class="score-trio">
         <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 92, undefined, 'var(--blue)', totalGoalMet)}</div>
         <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, stepPct, 'var(--critical)', activityGoalMet)}</div>
