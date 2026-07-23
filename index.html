@@ -53,6 +53,13 @@ input,select{font-family:inherit;}
 .card h3{font-size:14px;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:10px;}
 .card-head h3{margin-bottom:0;}
 .card + .card{margin-top:0;}
+summary.card-summary{display:flex;align-items:center;justify-content:space-between;cursor:pointer;list-style:none;user-select:none;}
+summary.card-summary::-webkit-details-marker{display:none;}
+summary.card-summary .card-head{flex:1;margin-bottom:0;}
+summary.card-summary h3{margin-bottom:0;}
+summary.card-summary .chevron{color:var(--muted);font-size:12px;flex:none;margin-left:10px;transition:transform .15s ease;}
+details.card[open] > summary.card-summary{margin-bottom:12px;}
+details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
 .row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
 .muted{color:var(--muted);font-size:12.5px;}
 .text2{color:var(--text2);}
@@ -1153,7 +1160,8 @@ const INFO_CONTENT = {
 };
 function wireInfoButtons(root){
   (root||document).querySelectorAll('[data-info]').forEach(b=>{
-    b.addEventListener('click', ()=>{
+    b.addEventListener('click', e=>{
+      e.preventDefault(); // stops a <summary>-wrapped info button from also toggling the fold it sits inside
       const [title, body] = INFO_CONTENT[b.dataset.info];
       openInfoModal(title, body);
     });
@@ -1391,6 +1399,13 @@ function formatCompact(n){
    TABS / RENDER
    ========================================================= */
 let activeTab = 'today';
+// Which Settings cards are expanded — starts empty (everything folded) so the
+// screen opens as a scannable list of section names. render() replaces the
+// whole #app innerHTML on every action (saving a field, flipping a toggle,
+// etc.), which would otherwise re-collapse every <details> each time; tracking
+// open state here and re-applying it as each card's `open` attribute is what
+// makes a card stay open across those re-renders.
+let openSettingsCards = new Set();
 // This app never used to push any history entries of its own, so with nothing to
 // step through, the back gesture always exited straight past the app — regardless
 // of anything OAuth-related. Pushing one entry per tab switch means back walks
@@ -1798,13 +1813,14 @@ function wireConnectFitbitCard(root, prefix){
 }
 
 /* ---------- SETTINGS ---------- */
+function settingsCardOpenAttr(key){ return openSettingsCards.has(key) ? 'open' : ''; }
 function screenSettings(){
   const p = state.profile;
   return `
   <div class="topbar"><h1>Settings</h1></div>
   <div class="screen">
-    <div class="card">
-      <h3>Profile</h3>
+    <details class="card" data-card-key="profile" ${settingsCardOpenAttr('profile')}>
+      <summary class="card-summary"><h3>Profile</h3><span class="chevron">⌄</span></summary>
       <div class="field-row">
         <div class="field"><label>Age</label><input type="number" id="s-age" value="${p.age}"></div>
         <div class="field"><label>Sex</label><select id="s-sex"><option value="female" ${p.sex==='female'?'selected':''}>Female</option><option value="male" ${p.sex==='male'?'selected':''}>Male</option></select></div>
@@ -1835,46 +1851,46 @@ function screenSettings(){
         <div class="field"><label>Active min goal</label><input type="number" id="s-min" value="${p.activeMinGoal}"></div>
       </div>
       <button class="btn-primary" id="s-save">Save profile</button>
-    </div>
+    </details>
 
-    <div class="card">
-      <h3>Weight Tracking</h3>
+    <details class="card" data-card-key="weight" ${settingsCardOpenAttr('weight')}>
+      <summary class="card-summary"><h3>Weight Tracking</h3><span class="chevron">⌄</span></summary>
       <div class="toggle-row"><span>Sunday weigh-in reminder</span><button class="switch ${state.settings.weightTrackingEnabled?'on':''}" data-setting-toggle="weightTrackingEnabled"></button></div>
       <div class="muted" style="margin-top:6px;">${state.settings.weightTrackingEnabled ? "You'll be prompted each Sunday to log your weight — the reminder stays up until you log it or dismiss it, and won't nag again that same day once dismissed." : 'Reminders are off. You can still log a weight manually any Sunday from this prompt if you turn it back on, or track it outside the app.'}</div>
-    </div>
+    </details>
 
-    <div class="card">
-      <h3>Dashboard</h3>
-      ${dashToggleRow('projection','Week/month pace')}
+    <details class="card" data-card-key="dashboard" ${settingsCardOpenAttr('dashboard')}>
+      <summary class="card-summary"><h3>Dashboard</h3><span class="chevron">⌄</span></summary>
+      ${dashToggleRow('projection','Trend reports')}
       ${dashToggleRow('trend','7-day trend')}
-    </div>
+    </details>
 
-    <div class="card">
-      <div class="card-head"><h3>Connect your Fitbit</h3>${infoBtnHtml('fitsync')}</div>
+    <details class="card" data-card-key="fitbit" ${settingsCardOpenAttr('fitbit')}>
+      <summary class="card-summary"><div class="card-head"><h3>Connect your Fitbit</h3>${infoBtnHtml('fitsync')}</div><span class="chevron">⌄</span></summary>
       ${connectFitbitStepsHtml('s')}
-    </div>
+    </details>
 
-    <div class="card">
-      <div class="card-head"><h3>Food search</h3>${infoBtnHtml('fdc')}</div>
+    <details class="card" data-card-key="food" ${settingsCardOpenAttr('food')}>
+      <summary class="card-summary"><div class="card-head"><h3>Food search</h3>${infoBtnHtml('fdc')}</div><span class="chevron">⌄</span></summary>
       <div class="field"><label>USDA FoodData Central API key</label><input type="text" id="s-fdc-key" placeholder="paste your free key here" value="${state.settings.fdcApiKey}"></div>
       <button class="btn-secondary" id="s-fdc-save">Save key</button>
       <div class="muted" style="margin-top:8px;">${state.settings.fdcApiKey ? 'Food search pulls live results from FoodData Central, including branded/packaged foods as a fallback for generic-food misses.' : 'Without a key, food search only uses the small built-in list. Add a free key above for live USDA results.'}</div>
-    </div>
+    </details>
 
-    ${state.errorLog.length ? `<div class="card">
-      <div class="card-head"><h3>Error log</h3><button class="iconbtn" id="s-clear-errors" title="Clear">✕</button></div>
+    ${state.errorLog.length ? `<details class="card" data-card-key="errors" ${settingsCardOpenAttr('errors')}>
+      <summary class="card-summary"><div class="card-head"><h3>Error log</h3><button class="iconbtn" id="s-clear-errors" title="Clear">✕</button></div><span class="chevron">⌄</span></summary>
       ${state.errorLog.map(e=>`<div class="feedback-item"><div class="dot" style="background:var(--critical)"></div><div><span class="muted">${new Date(e.ts).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span><br><span style="font-family:monospace;font-size:12px;word-break:break-word;">${escapeHtml(e.message)}</span></div></div>`).join('')}
-    </div>` : ''}
+    </details>` : ''}
 
-    <div class="card">
-      <div class="card-head"><h3>Data</h3>${infoBtnHtml('databackup')}</div>
+    <details class="card" data-card-key="data" ${settingsCardOpenAttr('data')}>
+      <summary class="card-summary"><div class="card-head"><h3>Data</h3>${infoBtnHtml('databackup')}</div><span class="chevron">⌄</span></summary>
       <button class="btn-secondary" id="s-export">Export data (JSON)</button>
       <div style="height:8px"></div>
       <button class="btn-secondary" id="s-import">Import data (JSON)</button>
       <input type="file" id="s-import-file" accept="application/json" class="hidden">
       <div style="height:8px"></div>
       <button class="btn-secondary" id="s-reset" style="color:var(--critical)">Reset all data</button>
-    </div>
+    </details>
   </div>`;
 }
 function dashToggleRow(key, label){
@@ -2381,12 +2397,24 @@ function attachHandlers(){
   if(importBtn && importFile) importBtn.addEventListener('click', ()=>importFile.click());
   if(importFile) importFile.addEventListener('change', ()=>importDataFromFile(importFile.files[0]));
   const clearErrorsBtn = document.getElementById('s-clear-errors');
-  if(clearErrorsBtn) clearErrorsBtn.addEventListener('click', ()=>{ state.errorLog = []; saveState(); render(); });
+  if(clearErrorsBtn) clearErrorsBtn.addEventListener('click', e=>{
+    e.preventDefault(); // stays inside a <summary> — don't also toggle the fold
+    state.errorLog = []; saveState(); render();
+  });
   const resetBtn = document.getElementById('s-reset');
   if(resetBtn) resetBtn.addEventListener('click', ()=>{
     if(confirm('This will erase all Health Score data on this device. Continue?')){
       localStorage.removeItem(STORE_KEY); state = defaultState(); render();
     }
+  });
+  // Settings cards fold by default; a card that's been manually opened stays
+  // open across the re-renders every save/toggle action triggers, since
+  // render() otherwise wipes and rebuilds this whole screen from scratch.
+  document.querySelectorAll('#app details.card[data-card-key]').forEach(d=>{
+    d.addEventListener('toggle', ()=>{
+      const key = d.dataset.cardKey;
+      if(d.open) openSettingsCards.add(key); else openSettingsCards.delete(key);
+    });
   });
 }
 
