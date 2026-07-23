@@ -464,6 +464,32 @@ function isTrackedDay(iso){
 function trackedDatesBetween(startIso, endIso){
   return datesBetween(startIso, endIso).filter(isTrackedDay);
 }
+// Last logged weight within a date list, scanning from the end — shared by the
+// Monthly Trends chart's month buckets and the month view's week-over-week comparison.
+function latestWeightIn(dates){
+  for(let i=dates.length-1;i>=0;i--){ const w=getDay(dates[i]).weightLb; if(w) return w; }
+  return null;
+}
+const MONTH_LETTERS = 'JFMAMJJASOND';
+// A calendar month's date range, capped at `today` so the current (in-progress)
+// month doesn't pull in un-lived future days the way a plain monthRange() would.
+function monthEndCapped(year, monthIdx){
+  const last = isoDate(new Date(year, monthIdx+1, 0));
+  const t = today();
+  return last < t ? last : t;
+}
+// Trailing n calendar months ending with the month containing `endIso` (inclusive) —
+// used for the Monthly Trends chart's rolling-year view, one point per month.
+function trailingMonthBuckets(n, endIso){
+  const d = dateFromIso(endIso);
+  const buckets = [];
+  for(let i=n-1;i>=0;i--){
+    const bd = new Date(d.getFullYear(), d.getMonth()-i, 1);
+    const year = bd.getFullYear(), monthIdx = bd.getMonth();
+    buckets.push({start: isoDate(bd), end: monthEndCapped(year, monthIdx), year, monthIdx});
+  }
+  return buckets;
+}
 function getDay(iso){
   if(!state.days[iso]) state.days[iso] = {weightLb:null, foods:[], activity:{steps:0,activeMin:0,kcal:0,distanceMi:0,source:'manual'}, celebrated:{}};
   if(state.days[iso].activity.distanceMi===undefined) state.days[iso].activity.distanceMi = 0; // upgrade older saved days
@@ -966,86 +992,59 @@ function avgScore(dates, fn){
   if(vals.length===0) return null;
   return Math.round(vals.reduce((a,b)=>a+b,0)/vals.length);
 }
-function weightTrendScore(startIso, endIso){
-  const p = state.profile; if(!p) return null;
-  const dates = datesBetween(startIso, endIso);
-  const weighed = dates.map(d=>({d, w:state.days[d]?.weightLb})).filter(x=>x.w);
-  if(weighed.length<2) return null;
-  const first = weighed[0].w, last = weighed[weighed.length-1].w;
-  const actualChange = last-first;
-  const targetChange = p.goalType==='lose' ? -p.ratePerWeekLb : p.goalType==='gain' ? p.ratePerWeekLb : 0;
-  if(p.goalType==='maintain') return clamp(100-Math.abs(actualChange)*40, 0, 100);
-  const diff = Math.abs(actualChange-targetChange);
-  return clamp(100 - diff*40, 0, 100);
-}
 
 /* =========================================================
    FEEDBACK GENERATION — heavy on positive reinforcement,
    with one concrete, achievable action to try next.
    ========================================================= */
-function buildFeedback(dates, periodLabel, weightScoreOverride){
-  periodLabel = periodLabel || 'period';
+// Four-bullet highlight block shown in the Week/Month top card: Activity and
+// Nutrition each get their own positive-contribution line (weighted the same
+// 45%/55% as dayOverallScore), Goals correlates the two into what they did for
+// the underlying weight goal, and Looking Ahead is the one data-driven thing to
+// improve — whichever of Activity/Nutrition trailed the other, with a concrete
+// nutrient shortfall tip folded in when one applies.
+function buildHighlightBullets(dates, periodLabel, oAvg){
   const p = state.profile;
   const nAvg = aggregateNutritionScore(dates);
   const aAvg = avgScore(dates, activityScore);
   const loggedDays = dates.filter(d=>getDay(d).foods.length>0).length;
   const activityDays = dates.filter(d=>{const a=getDay(d).activity; return a.steps>0||a.activeMin>0;}).length;
-  const {start:ws,end:we} = {start:dates[0], end:dates[dates.length-1]};
-  const wScore = weightScoreOverride!==undefined ? weightScoreOverride : weightTrendScore(ws,we);
 
-  // Positives: consistency (nutrition + activity tracking) plus a Top Highlight
-  // naming the single best-scoring day (week view) or best-scoring week (month
-  // view) by Total Score, rather than an averaged metric.
-  const positives = [
-    `Nutrition: You tracked ${loggedDays} day${loggedDays===1?'':'s'} this ${periodLabel}.`,
-    `Activity: You tracked data ${activityDays} day${activityDays===1?'':'s'} this ${periodLabel}.`
+  const activityText = aAvg===null
+    ? `Log steps or active minutes to start building this ${periodLabel}'s Activity score.`
+    : `Averaged ${aAvg}/100 across ${activityDays} tracked day${activityDays===1?'':'s'}, contributing about ${Math.round(aAvg*0.45)} points toward your ${oAvg===null?'--':oAvg}/100 Total Score.`;
+
+  const nutritionText = nAvg===null
+    ? `Log meals to start building this ${periodLabel}'s Nutrition score.`
+    : `Averaged ${nAvg}/100 across ${loggedDays} tracked day${loggedDays===1?'':'s'}, contributing about ${Math.round(nAvg*0.55)} points toward your ${oAvg===null?'--':oAvg}/100 Total Score.`;
+
+  const goalWord = p.goalType==='lose' ? 'weight-loss' : p.goalType==='gain' ? 'weight-gain' : 'maintenance';
+  const impactText = weightGoalImpactText(weightGoalImpact(dates), p, `this ${periodLabel}`);
+  const goalsText = impactText || (oAvg!==null
+    ? `Nutrition and Activity together produced a ${oAvg}/100 Total Score this ${periodLabel} — keep that up to stay on pace for your ${goalWord} goal.`
+    : `Log food and activity this ${periodLabel} to see how they're tracking against your ${goalWord} goal.`);
+
+  const nutrientTotals = periodNutrientTotals(dates);
+  const tips = nutrientShortfallTips(nutrientTotals);
+  let lookingAheadText;
+  if(nAvg!==null && aAvg!==null){
+    const weakerIsNutrition = nAvg<=aAvg;
+    const weakerLabel = weakerIsNutrition ? 'Nutrition' : 'Activity';
+    const weakerScore = weakerIsNutrition ? nAvg : aAvg;
+    const suggestion = weakerIsNutrition && tips.length ? tips[0] : 'keep tightening that up for the biggest jump in Total Score.';
+    lookingAheadText = `${weakerLabel} (${weakerScore}/100) trailed the other this ${periodLabel} — ${suggestion}`;
+  } else if(tips.length){
+    lookingAheadText = tips[0];
+  } else {
+    lookingAheadText = `Keep logging food and activity daily — more data this ${periodLabel} means a sharper picture of what to improve.`;
+  }
+
+  return [
+    {label:'Activity', text:activityText},
+    {label:'Nutrition', text:nutritionText},
+    {label:'Goals', text:goalsText},
+    {label:'Looking Ahead', text:lookingAheadText}
   ];
-  if(periodLabel==='week'){
-    const scored = dates.map(iso=>({iso, score:dayOverallScore(iso)})).filter(x=>x.score!==null);
-    if(scored.length){
-      const best = scored.sort((a,b)=>b.score-a.score)[0];
-      const dayName = dateFromIso(best.iso).toLocaleDateString(undefined,{weekday:'long'});
-      positives.push(`Top Highlight: Your best scoring day this week was ${dayName}, with a Total Score of ${best.score}.`);
-    }
-  } else if(periodLabel==='month'){
-    const weekBuckets = {};
-    dates.forEach(iso=>{
-      const wk = weekRange(iso).start;
-      (weekBuckets[wk] = weekBuckets[wk]||[]).push(iso);
-    });
-    const weekScores = Object.entries(weekBuckets)
-      .map(([start,ds])=>({start, score:avgScore(ds, dayOverallScore)}))
-      .filter(w=>w.score!==null);
-    if(weekScores.length){
-      const best = weekScores.sort((a,b)=>b.score-a.score)[0];
-      const label = dateFromIso(best.start).toLocaleDateString(undefined,{month:'short',day:'numeric'});
-      positives.push(`Top Highlight: Your best scoring week this month was the week of ${label}, with a Total Score of ${best.score}.`);
-    }
-  }
-
-  // Looking ahead: how Calories and Activity scores trended from the first half
-  // of the period to the second half, instead of a single-worst-metric tip.
-  const trendDelta = scoreFn=>{
-    if(dates.length<2) return null;
-    const mid = Math.floor(dates.length/2);
-    const a = avgScore(dates.slice(0,mid), scoreFn), b = avgScore(dates.slice(mid), scoreFn);
-    return (a===null || b===null) ? null : b-a;
-  };
-  const trendPhrase = delta=>{
-    if(delta===null) return null;
-    if(Math.abs(delta)<3) return 'holding steady';
-    return delta>0 ? `trending up (+${delta})` : `trending down (${delta})`;
-  };
-  const calTrendText = trendPhrase(trendDelta(nutritionScore));
-  const actTrendText = trendPhrase(trendDelta(activityScore));
-  let focus = null;
-  if(calTrendText || actTrendText){
-    const parts = [];
-    if(calTrendText) parts.push(`Calories ${calTrendText}`);
-    if(actTrendText) parts.push(`Activity ${actTrendText}`);
-    focus = {label:'Trend', tip:`${parts.join(' · ')} from the first half of this ${periodLabel} to the second.`};
-  }
-  return {positives:positives.slice(0,3), focus, nAvg, aAvg, wScore};
 }
 
 /* =========================================================
@@ -1252,6 +1251,14 @@ function openInfoModal(title, bodyHtml){
   wrap.querySelector('#info-close').addEventListener('click', close);
   wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) close(); });
 }
+// Drill-down table behind a tap on the trend chart's background (a tap on an
+// individual point still shows just that point's quick tooltip instead — see
+// the chart-mark click handler's stopPropagation in trendLineChart).
+function openChartTableModal(title, columns, rows){
+  const head = columns.map(c=>`<th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid var(--grid);">${c}</th>`).join('');
+  const body = rows.map(r=>`<tr>${r.map(cell=>`<td style="padding:7px 8px;font-size:13.5px;border-bottom:1px solid var(--grid);white-space:nowrap;">${cell}</td>`).join('')}</tr>`).join('');
+  openInfoModal(title, `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`);
+}
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
 // Day-of-week checkboxes shared by onboarding and Settings > Profile — index
 // matches JS Date.getDay() (0=Sun..6=Sat) so it lines up directly with isTrackedDay().
@@ -1273,7 +1280,7 @@ function readDayCheckboxes(root, prefix){
 }
 const INFO_CONTENT = {
   projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
-  trend: ['Score trend', `Under "This Week", your daily Activity and Nutrition scores (0-100) for the last 7 days. Under "Monthly", your daily Total Score and Weight for the month so far — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value.`],
+  trend: ['Score trend', `Under "This Week", your daily Activity and Nutrition scores (0-100) for the last 7 days. Under "Monthly", your Total Score and Weight for each of the last 12 months (labeled by month letter — a January point also shows its year so a 12-month span crossing a new year stays unambiguous) — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value, or tap elsewhere on the chart for the full data table.`],
   fitsync: ['Connect your Fitbit', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Head to Settings to connect it: finding your Fitbit's Google account, getting approved, and connecting. After you connect once, it re-syncs automatically in the background — no further action needed unless you reconnect a different account.<br><br><strong>Why do I have to wait for approval before I can connect?</strong> Everyone connects through one shared Google project the app owner controls, and Google caps how many outside accounts can use it before requiring a full verification review. Adding each person by hand keeps it under that limit — it's a one-time, ~30-second step on the app owner's end.<br><br><strong>My Fitbit's Google account isn't a Gmail address — is that right?</strong> Yes, that's normal. A Google account can be created with any email as its login, including Outlook, Hotmail, or Yahoo addresses. Use whatever email Fitbit's app shows you, even if it doesn't end in @gmail.com.<br><br><strong>I connected the wrong account.</strong> In Settings, tap "Reconnect & sync now" — Google always shows the account-chooser screen again, so just pick the correct email that time.<br><br><strong>App owner only:</strong> to approve a new person, go to <strong>console.cloud.google.com</strong> → your project → <strong>APIs & Services → OAuth consent screen → Audience</strong> → <strong>Add users</strong> under Test users, paste in the email they sent you, save. Then send them the project's <strong>Client ID</strong> and <strong>Client Secret</strong> from <strong>APIs & Services → Credentials</strong> (whatever channel you like — text, email) so they can paste them into Settings on their own device. If you haven't created the project yet, use the same Credentials/OAuth-consent-screen path to set one up, with redirect URI <strong>${location.origin}${location.pathname}</strong> and the Google Health API enabled.`],
   savefreq: ['Save frequency', `<strong>On</strong>: backup every ~30 min. <strong>Off</strong>: every ~3 min.`]
 };
@@ -1404,7 +1411,8 @@ function trendLineChart(series, labels, opts){
       if(v===null) return;
       const x = padL + stepX*i, y = H-padB-((v-min)/(max-min))*plotH;
       const c = svgEl('circle',{cx:x,cy:y,r:5,fill:s.color,class:'chart-mark'});
-      c.addEventListener('click', ev=>{ ev.stopPropagation(); showTooltip(ev.clientX, ev.clientY, `${labels[i]} · ${s.name}: ${v}`); });
+      const tipLabel = (opts.tooltipLabels && opts.tooltipLabels[i]) || labels[i];
+      c.addEventListener('click', ev=>{ ev.stopPropagation(); showTooltip(ev.clientX, ev.clientY, `${tipLabel} · ${s.name}: ${v}`); });
       svg.appendChild(c);
     });
   });
@@ -1782,8 +1790,8 @@ function screenHistory(){
   const range = historyMode==='week' ? weekRange(t) : monthRange(t);
   const rangeEnd = range.end < t ? range.end : t;
   const dates = trackedDatesBetween(range.start, rangeEnd);
-  const fb = buildFeedback(dates, historyMode);
   const oAvg = periodOverallScore(dates);
+  const bullets = buildHighlightBullets(dates, historyMode, oAvg);
   const nutrientTotals = periodNutrientTotals(dates);
   const nutrientTips = nutrientShortfallTips(nutrientTotals);
 
@@ -1805,7 +1813,6 @@ function screenHistory(){
     const curWeekDates = trackedDatesBetween(curWeekStart, t);
     const prevWeekStart = addDays(curWeekStart, -7);
     const prevWeekDates = trackedDatesBetween(prevWeekStart, addDays(prevWeekStart, 6));
-    const latestWeightIn = ds=>{ for(let i=ds.length-1;i>=0;i--){ const w=getDay(ds[i]).weightLb; if(w) return w; } return null; };
     curWeekScore = avgScore(curWeekDates, dayOverallScore);
     prevWeekScore = avgScore(prevWeekDates, dayOverallScore);
     curWeekWeight = latestWeightIn(curWeekDates);
@@ -1830,9 +1837,12 @@ function screenHistory(){
         ${infoBtnHtml('projection')}
       </div>
       ${periodComplete
-        ? `<div class="muted">See "What went well" and "Looking ahead" below for the full ${historyMode==='week'?'week':'month'}'s highlights.</div>`
+        ? ''
         : `${oAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(oAvg, historyMode) ? `<div class="muted">${paceMsg(oAvg, historyMode)}</div>` : '')}`}
       ${periodImpactText ? `<div class="feedback-item"><div class="dot" style="background:var(--critical)"></div><div>${periodImpactText}</div></div>` : ''}
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--grid);">
+        ${bullets.map((b,i)=>`<div class="feedback-item"><div class="dot" style="background:${i===3?'var(--warning)':'var(--good)'}"></div><div><strong>${b.label}:</strong> ${b.text}</div></div>`).join('')}
+      </div>
       ${historyMode==='month' ? `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--grid);">
         <div class="muted" style="font-size:12px;margin-bottom:6px;">Week over week</div>
@@ -1858,16 +1868,6 @@ function screenHistory(){
         `}
       </div>
     </div>` : ''}
-
-    <div class="card">
-      <h3>What went well</h3>
-      ${fb.positives.length===0?'<div class="muted">Log a few days to see your highlights here.</div>':
-        fb.positives.map(p=>`<div class="feedback-item"><div class="dot" style="background:var(--good)"></div><div>${p}</div></div>`).join('')}
-    </div>
-    ${fb.focus?`<div class="card">
-      <div class="card-head"><h3>Looking ahead</h3></div>
-      <div class="feedback-item"><div class="dot" style="background:var(--blue)"></div><div><strong>${fb.focus.label}</strong> · ${fb.focus.tip}</div></div>
-    </div>`:''}
 
     <div class="card">
       <h3>Nutrition</h3>
@@ -2254,33 +2254,42 @@ function mountCharts(){
   // This only needs to handle History's trend chart.
   const t = today();
   const trendEl = document.getElementById('chart-trend');
-  if(trendEl){
-    let dates, labels;
-    if(historyMode==='month'){
-      dates = datesBetween(monthRange(t).start, t); // month-to-date, not into un-lived future days
-      // ~31 points is too dense for a day-of-week label per point, so only label
-      // the 1st, every 5th day, and today.
-      labels = dates.map(d=>{
-        const day = dateFromIso(d).getDate();
-        return (day===1 || day%5===0 || d===t) ? String(day) : '';
-      });
-    }else{
-      dates = []; for(let i=6;i>=0;i--) dates.push(addDays(t,-i));
-      labels = dates.map(d=>dateFromIso(d).toLocaleDateString(undefined,{weekday:'short'}).slice(0,2));
-    }
-    if(historyMode==='month'){
-      // Total Score and Weight are unrelated units (0-100 vs lb), so this chart
-      // needs independent per-series scaling — see trendLineChart's opts.
-      trendEl.appendChild(trendLineChart([
-        {name:'Total Score', color:'var(--blue)', points: dates.map(dayOverallScore)},
-        {name:'Weight', color:'var(--orange)', points: dates.map(d=>getDay(d).weightLb)}
-      ], labels, {independentScale:true}));
-    }else{
-      trendEl.appendChild(trendLineChart([
-        {name:'Activity', color:'var(--blue)', points: dates.map(activityScore)},
-        {name:'Nutrition', color:'var(--aqua)', points: dates.map(nutritionScore)}
-      ], labels));
-    }
+  if(!trendEl) return;
+  trendEl.style.cursor = 'pointer';
+  if(historyMode==='month'){
+    // Rolling 12-month view, one point per calendar month (not day-of-month) —
+    // matches the "Monthly Trends" title as an actual month-over-month trend.
+    // Labels are single letters (JFMAMJJASOND convention); January points (and
+    // the very first point) also carry a 2-digit year so a 12-month window
+    // crossing a year boundary stays unambiguous.
+    const buckets = trailingMonthBuckets(12, t);
+    const scorePoints = buckets.map(b=>periodOverallScore(trackedDatesBetween(b.start,b.end)));
+    const weightPoints = buckets.map(b=>latestWeightIn(trackedDatesBetween(b.start,b.end)));
+    const labels = buckets.map((b,i)=>{
+      const letter = MONTH_LETTERS[b.monthIdx];
+      return (i===0 || b.monthIdx===0) ? `${letter}${String(b.year).slice(-2)}` : letter;
+    });
+    const tooltipLabels = buckets.map(b=>new Date(b.year,b.monthIdx,1).toLocaleDateString(undefined,{month:'long',year:'numeric'}));
+    // Total Score and Weight are unrelated units (0-100 vs lb), so this chart
+    // needs independent per-series scaling — see trendLineChart's opts.
+    trendEl.appendChild(trendLineChart([
+      {name:'Total Score', color:'var(--blue)', points: scorePoints},
+      {name:'Weight', color:'var(--orange)', points: weightPoints}
+    ], labels, {independentScale:true, tooltipLabels}));
+    trendEl.addEventListener('click', ()=>openChartTableModal('Monthly Trends', ['Month','Total Score','Weight'],
+      buckets.map((b,i)=>[tooltipLabels[i], scorePoints[i]===null?'--':scorePoints[i], weightPoints[i]===null?'--':weightPoints[i].toFixed(1)+' lb'])
+    ));
+  }else{
+    const dates = []; for(let i=6;i>=0;i--) dates.push(addDays(t,-i));
+    const labels = dates.map(d=>dateFromIso(d).toLocaleDateString(undefined,{weekday:'short'}).slice(0,2));
+    const actPoints = dates.map(activityScore), nutPoints = dates.map(nutritionScore);
+    trendEl.appendChild(trendLineChart([
+      {name:'Activity', color:'var(--blue)', points: actPoints},
+      {name:'Nutrition', color:'var(--aqua)', points: nutPoints}
+    ], labels));
+    trendEl.addEventListener('click', ()=>openChartTableModal('7-day trend', ['Day','Activity','Nutrition'],
+      dates.map((d,i)=>[dateFromIso(d).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}), actPoints[i]===null?'--':actPoints[i], nutPoints[i]===null?'--':nutPoints[i]])
+    ));
   }
 }
 
