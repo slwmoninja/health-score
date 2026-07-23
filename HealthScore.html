@@ -1276,9 +1276,13 @@ function openInfoModal(title, bodyHtml){
 // Drill-down table behind a tap on the trend chart's background (a tap on an
 // individual point still shows just that point's quick tooltip instead — see
 // the chart-mark click handler's stopPropagation in trendLineChart).
-function openChartTableModal(title, columns, rows){
+// colColors is parallel to columns — a CSS color for that column's cells (matching
+// its series' color on the chart above), or falsy to leave a column (e.g. the
+// leading Day/Month label) in the default text color.
+function openChartTableModal(title, columns, rows, colColors){
+  colColors = colColors || [];
   const head = columns.map(c=>`<th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid var(--grid);">${c}</th>`).join('');
-  const body = rows.map(r=>`<tr>${r.map(cell=>`<td style="padding:7px 8px;font-size:13.5px;border-bottom:1px solid var(--grid);white-space:nowrap;">${cell}</td>`).join('')}</tr>`).join('');
+  const body = rows.map(r=>`<tr>${r.map((cell,i)=>`<td style="padding:7px 8px;font-size:13.5px;border-bottom:1px solid var(--grid);white-space:nowrap;${colColors[i]?`color:${colColors[i]};font-weight:700;`:''}">${cell}</td>`).join('')}</tr>`).join('');
   openInfoModal(title, `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`);
 }
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
@@ -2298,7 +2302,8 @@ function mountCharts(){
     trendEl.addEventListener('click', ()=>openChartTableModal('Monthly Trends', ['Month','Total Score','Weight'],
       // Reversed to most-recent-first for the table — the chart itself stays
       // chronological (oldest-to-newest, left-to-right) since that's how a trend line reads.
-      buckets.map((b,i)=>[tooltipLabels[i], scorePoints[i]===null?'--':scorePoints[i], weightPoints[i]===null?'--':weightPoints[i].toFixed(1)+' lb']).reverse()
+      buckets.map((b,i)=>[tooltipLabels[i], scorePoints[i]===null?'--':scorePoints[i], weightPoints[i]===null?'--':weightPoints[i].toFixed(1)+' lb']).reverse(),
+      [null,'var(--blue)','var(--orange)']
     ));
   }else{
     const dates = []; for(let i=6;i>=0;i--) dates.push(addDays(t,-i));
@@ -2309,7 +2314,8 @@ function mountCharts(){
       {name:'Nutrition', color:'var(--aqua)', points: nutPoints}
     ], labels));
     trendEl.addEventListener('click', ()=>openChartTableModal('7-day trend', ['Day','Activity','Nutrition'],
-      dates.map((d,i)=>[dateFromIso(d).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}), actPoints[i]===null?'--':actPoints[i], nutPoints[i]===null?'--':nutPoints[i]])
+      dates.map((d,i)=>[dateFromIso(d).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}), actPoints[i]===null?'--':actPoints[i], nutPoints[i]===null?'--':nutPoints[i]]),
+      [null,'var(--blue)','var(--aqua)']
     ));
   }
 }
