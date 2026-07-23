@@ -65,11 +65,14 @@ input,select{font-family:inherit;}
 .info-btn:active{transform:translateY(1px);box-shadow:none;}
 
 /* ---- overall score ring ---- */
-.score-hero{position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;padding:22px 16px;}
+.score-hero{position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;padding:16px;}
 .sync-badge{position:absolute;top:10px;right:14px;font-size:11px;color:var(--muted);white-space:nowrap;}
 .ring-wrap{position:relative;width:158px;height:158px;margin-bottom:8px;border-radius:50%;
   background:var(--surface);
   box-shadow:0 4px 0 var(--btn-lo), inset 0 2px 2px rgba(255,255,255,.4), inset 0 -3px 5px rgba(0,0,0,.1), 0 6px 12px rgba(0,0,0,.14);}
+/* Gold outline for a day the ring's own goal was hit — layered in front of the
+   ring's existing depth shadows rather than replacing them. */
+.ring-wrap.gold-ring{box-shadow:0 0 0 3px gold, 0 4px 0 var(--btn-lo), inset 0 2px 2px rgba(255,255,255,.4), inset 0 -3px 5px rgba(0,0,0,.1), 0 6px 12px rgba(0,0,0,.14);}
 .ring-wrap svg{width:100%;height:100%;transform:rotate(-90deg);}
 .ring-label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;}
 .ring-label .num{font-size:38px;font-weight:800;line-height:1;}
@@ -193,12 +196,10 @@ input,select{font-family:inherit;}
 .card-head .inline-stat .muted{font-weight:500;}
 
 /* ---- score trio (Total/Activity/Nutrition circles, one infographic) ---- */
-/* width:100% so this actually stretches to the card's full width instead of just
-   shrink-wrapping its content (the parent's align-items:center would otherwise
-   center a content-sized row) — only then does space-evenly have room to spread
-   the three circles out instead of clumping them together. Wraps on narrow
-   phone screens instead of squeezing, since flex-wrap keeps this responsive. */
-.score-trio{display:flex;align-items:center;justify-content:space-evenly;gap:18px;flex-wrap:wrap;width:100%;}
+/* Tight dashboard-gauge cluster now that there's no label text needing spread-out
+   room — shrink-wraps to its content and centers as one group. Still wraps on
+   very narrow phone screens instead of squeezing, via flex-wrap. */
+.score-trio{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;}
 .score-circle-col{display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;}
 
 /* ---- collapsible section header ---- */
@@ -355,9 +356,10 @@ function getDay(iso){
   if(!state.days[iso].celebrated) state.days[iso].celebrated = {};
   return state.days[iso];
 }
-// Fires the confetti celebration the first time (per day) steps or active
-// minutes cross the goal — checked after every activity update, but the
-// `celebrated` flag (persisted) stops it from re-firing on every later render.
+// Fires the confetti celebration the first time (per day) steps, active minutes,
+// or a perfect Total Score cross their goal — checked after every activity/food
+// update, but the `celebrated` flag (persisted) stops it from re-firing on every
+// later render. Deliberately does not cover Calories/Nutrition on its own.
 function checkGoalsAndCelebrate(iso){
   const p = state.profile;
   const d = getDay(iso);
@@ -367,6 +369,10 @@ function checkGoalsAndCelebrate(iso){
   }
   if(p.activeMinGoal>0 && d.activity.activeMin>=p.activeMinGoal && !d.celebrated.activeMin){
     d.celebrated.activeMin = true; fired = true;
+  }
+  const overall = dayOverallScore(iso);
+  if(overall!==null && overall>=100 && !d.celebrated.totalScore){
+    d.celebrated.totalScore = true; fired = true;
   }
   if(fired){ saveState(); fireConfetti(); }
 }
@@ -1232,43 +1238,17 @@ function scoreRing(score, size, fixedColor){
 // already a plain number like the Total Score) drives the ring fill + color, so
 // Activity/Nutrition can show a real value (steps, calories) with a goal-based fill
 // instead of a second abstract score.
-function scoreCircle(displayText, size, pctForRing, color){
+// `gold` adds a gold outline ring for a day the circle's goal was hit — Total
+// Score and Activity only (checked by callers), never Calories/Nutrition.
+function scoreCircle(displayText, size, pctForRing, color, gold){
   const pct = pctForRing===undefined ? displayText : pctForRing;
   const numPx = Math.round(size*0.235);
-  return `<div class="ring-wrap" style="width:${size}px;height:${size}px;">
+  return `<div class="ring-wrap${gold?' gold-ring':''}" style="width:${size}px;height:${size}px;">
     ${scoreRing(pct, size, color)}
     <div class="ring-label">
       <div class="num" style="font-size:${numPx}px;">${displayText===null?'--':displayText}</div>
     </div>
   </div>`;
-}
-// A one-line caption that curves along the bottom of a scoreCircle() of the same
-// size instead of sitting as flat text below it — concentric with the ring (same
-// center, slightly larger radius) so it reads as an extension of the ring's own
-// curve rather than a separate label. Same fixed font size for every circle
-// regardless of its diameter, so Total Score/Steps/Calories all read as one
-// consistent label style; `gap` (radial distance outside the ring) is the one
-// thing tuned per size, since a small ring needs less clearance than a big one.
-const CAPTION_FONT_PX = 13;
-function curvedCaption(text, size, gap){
-  if(!text) return '';
-  gap = gap===undefined ? 9 : gap;
-  const strokeW = Math.max(6, Math.round(size*0.076));
-  const ringR = size/2 - strokeW;
-  const r = ringR + strokeW/2 + gap; // just outside the ring's visible outer edge
-  const halfAngleDeg = 64; // arc span either side of straight-down (90°)
-  const cx = size/2, cy = size/2;
-  const rad = deg=>deg*Math.PI/180;
-  const pt = deg=>[cx+r*Math.cos(rad(deg)), cy+r*Math.sin(rad(deg))];
-  const [x1,y1] = pt(90+halfAngleDeg), [x2,y2] = pt(90-halfAngleDeg);
-  const yTop = y1 - 6, yBottom = cy+r+CAPTION_FONT_PX+2; // crop to just the arc's own band, not the whole ring height
-  const pathId = 'cap'+Math.random().toString(36).slice(2,9);
-  return `<svg viewBox="0 ${yTop} ${size} ${yBottom-yTop}" width="${size}" style="display:block;overflow:visible;">
-    <path id="${pathId}" d="M${x1},${y1} A${r},${r} 0 0,0 ${x2},${y2}" fill="none"/>
-    <text font-size="${CAPTION_FONT_PX}" fill="#fff" text-anchor="middle">
-      <textPath href="#${pathId}" startOffset="50%">${escapeHtml(text)}</textPath>
-    </text>
-  </svg>`;
 }
 // Abbreviates large counts (steps, calories) so they still fit cleanly in a small ring.
 function formatCompact(n){
@@ -1332,6 +1312,10 @@ function screenToday(){
   const stepPct = clamp(p.stepGoal>0 ? d.activity.steps/p.stepGoal*100 : 0, 0, 100);
   const calPct = clamp(targets.kcal>0 ? totals.kcal/targets.kcal*100 : 0, 0, 100);
   const weekCal = weekCalorieProgress(t);
+  // Gold outline is Total Score / Activity only, never Calories/Nutrition — matches
+  // which goals actually trigger the confetti celebration (checkGoalsAndCelebrate).
+  const totalGoalMet = oScore!==null && oScore>=100;
+  const activityGoalMet = (p.stepGoal>0 && d.activity.steps>=p.stepGoal) || (p.activeMinGoal>0 && d.activity.activeMin>=p.activeMinGoal);
 
   return `
   <div class="topbar"><h1>Today</h1><div class="muted" id="today-date"></div></div>
@@ -1339,9 +1323,9 @@ function screenToday(){
     <div class="card score-hero">
       <div class="sync-badge">${fitbitSyncLabel()}</div>
       <div class="score-trio">
-        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, undefined, 'var(--blue)')}${curvedCaption('Total Score', 138, 9)}</div>
-        <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, stepPct, 'var(--critical)')}${curvedCaption(`${d.activity.activeMin}m · ${(d.activity.distanceMi||0).toFixed(1)}mi`, 84, 7)}</div>
-        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}${curvedCaption(`wk ${formatCompact(weekCal.consumed)}/${formatCompact(weekCal.goal)}`, 84, 7)}</div>
+        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, undefined, 'var(--blue)', totalGoalMet)}</div>
+        <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, stepPct, 'var(--critical)', activityGoalMet)}</div>
+        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}</div>
       </div>
     </div>
 
@@ -2018,6 +2002,7 @@ function attachHandlers(){
     if(rawName) state.foodMemory[name] = {qty:amount, ts:Date.now()};
     logFoodQuery=''; matchedFood=null; foodUnitFilter='any'; foodAmountValue=''; foodKcalValue='';
     saveState(); render();
+    checkGoalsAndCelebrate(today()); // logging food can be what pushes Total Score to 100
   });
   const sortBtn = document.getElementById('btn-sort-foods');
   if(sortBtn) sortBtn.addEventListener('click', ()=>{ foodSortMode = foodSortMode==='kcal'?'logged':'kcal'; render(); });
