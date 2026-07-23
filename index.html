@@ -202,9 +202,6 @@ input,select{font-family:inherit;}
    very narrow phone screens instead of squeezing, via flex-wrap. */
 .score-trio{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;}
 .score-circle-col{display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;}
-/* Nudges the Calories circle up and right, tucking it in against Steps/Total
-   instead of sitting flush on the row's shared centerline like the other two. */
-.score-circle-col.nudge-tr{transform:translate(8px,-10px);}
 
 /* ---- collapsible section header ---- */
 .section-toggle{display:flex;align-items:center;gap:6px;flex:1;cursor:pointer;}
@@ -1373,7 +1370,7 @@ function screenToday(){
       <div class="score-trio">
         <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, undefined, 'var(--blue)', totalGoalMet)}</div>
         <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, stepPct, 'var(--critical)', activityGoalMet)}</div>
-        <div class="score-circle-col nudge-tr" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}</div>
+        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}</div>
       </div>
     </div>
 
@@ -1461,7 +1458,7 @@ let foodSortMode = 'logged'; // 'logged' | 'kcal'
 // alongside the score rings, so today's log is visible without switching tabs.
 function todaysFoodsCard(){
   const d = getDay(today());
-  const foods = foodSortMode==='kcal' ? d.foods.slice().sort((a,b)=>b.kcal-a.kcal) : d.foods;
+  const foods = foodSortMode==='kcal' ? d.foods.slice().sort((a,b)=>b.kcal-a.kcal) : d.foods.slice().reverse();
   return `
     <div class="card">
       <div class="card-head"><h3>Today's foods</h3>
