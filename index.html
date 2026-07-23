@@ -67,7 +67,7 @@ input,select{font-family:inherit;}
 /* ---- overall score ring ---- */
 .score-hero{position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;padding:16px;}
 .sync-badge{position:absolute;top:10px;right:14px;font-size:11px;color:var(--muted);white-space:nowrap;}
-.ring-wrap{position:relative;width:158px;height:158px;margin-bottom:8px;border-radius:50%;
+.ring-wrap{position:relative;width:158px;height:158px;border-radius:50%;
   background:var(--surface);
   box-shadow:0 4px 0 var(--btn-lo), inset 0 2px 2px rgba(255,255,255,.4), inset 0 -3px 5px rgba(0,0,0,.1), 0 6px 12px rgba(0,0,0,.14);}
 /* Gold outline for a day the ring's own goal was hit — layered in front of the
@@ -201,6 +201,9 @@ input,select{font-family:inherit;}
    very narrow phone screens instead of squeezing, via flex-wrap. */
 .score-trio{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;}
 .score-circle-col{display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;}
+/* Nudges the Calories circle up and right, tucking it in against Steps/Total
+   instead of sitting flush on the row's shared centerline like the other two. */
+.score-circle-col.nudge-tr{transform:translate(8px,-10px);}
 
 /* ---- collapsible section header ---- */
 .section-toggle{display:flex;align-items:center;gap:6px;flex:1;cursor:pointer;}
@@ -1325,7 +1328,7 @@ function screenToday(){
       <div class="score-trio">
         <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 138, undefined, 'var(--blue)', totalGoalMet)}</div>
         <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, stepPct, 'var(--critical)', activityGoalMet)}</div>
-        <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}</div>
+        <div class="score-circle-col nudge-tr" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}</div>
       </div>
     </div>
 
