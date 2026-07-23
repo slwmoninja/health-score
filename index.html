@@ -1189,7 +1189,7 @@ const INFO_CONTENT = {
   projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
   trend: ['Score trend', `Under "This Week", your daily Activity and Nutrition scores (0-100) for the last 7 days. Under "Monthly", your daily Total Score and Weight for the month so far — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value.`],
   fitsync: ['Connect your Fitbit', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). The numbered steps under this card walk through finding your Fitbit's Google account, getting approved, and connecting. After you connect once, it re-syncs automatically in the background — no further action needed unless you reconnect a different account.<br><br><strong>Why do I have to wait for approval before I can connect?</strong> Everyone connects through one shared Google project the app owner controls, and Google caps how many outside accounts can use it before requiring a full verification review. Adding each person by hand keeps it under that limit — it's a one-time, ~30-second step on the app owner's end.<br><br><strong>My Fitbit's Google account isn't a Gmail address — is that right?</strong> Yes, that's normal. A Google account can be created with any email as its login, including Outlook, Hotmail, or Yahoo addresses. Use whatever email Fitbit's app shows you, even if it doesn't end in @gmail.com.<br><br><strong>I connected the wrong account.</strong> Click "Reconnect & sync now" on the card — Google always shows the account-chooser screen again, so just pick the correct email that time.<br><br><strong>App owner only:</strong> to approve a new person, go to <strong>console.cloud.google.com</strong> → your project → <strong>APIs & Services → OAuth consent screen → Audience</strong> → <strong>Add users</strong> under Test users, paste in the email they sent you, save. Then send them the project's <strong>Client ID</strong> and <strong>Client Secret</strong> from <strong>APIs & Services → Credentials</strong> (whatever channel you like — text, email) so they can paste them into Step 2 on their own device. If you haven't created the project yet, use the same Credentials/OAuth-consent-screen path to set one up, with redirect URI <strong>${location.origin}${location.pathname}</strong> and the Google Health API enabled.`],
-  databackup: ['Data & backups', `Everything here (profile, logged food, activity, Google Health credentials) lives only in this browser's local storage on this device — nothing is sent to a server. That's good for privacy, but it means your phone or browser's own "clear history / clear site data" action can wipe it, the same as it would for any website — there's no way for a site to opt out of that. <strong>Export data</strong> saves everything to a JSON file you can keep as a backup; <strong>Import data</strong> restores from one. Only the <strong>Reset all data</strong> button below is an in-app wipe — a browser-level clear is outside the app's control.`],
+  databackup: ['Data & backups', `Everything here (profile, logged food, activity, Google Health credentials) lives only in this browser's local storage on this device — nothing is sent to a server. That's good for privacy, but it means your phone or browser's own "clear history / clear site data" action can wipe it, the same as it would for any website — there's no way for a site to opt out of that. A backup file downloads automatically in the background while testing, so if that happens, the "Restore from backup" button on the welcome screen can recover it. <strong>Reset all data</strong> below is the only in-app wipe — a browser-level clear is outside the app's control.`],
   fdc: ['Food search', `With a free USDA FoodData Central key, search first checks the Foundation/SR Legacy datasets (generic whole foods, to keep casual searches from getting buried in brand names), then automatically falls back to FDC's ~300,000-item Branded Foods dataset if nothing generic matched. Setup: fdc.nal.usda.gov/api-key-signup → fill in the short form → the key is emailed instantly, no approval wait → paste it below. It's free with no usage cost. If a search still comes up empty — some very specific items (like a particular fat-percentage of milk) genuinely aren't in either dataset — a "Search the web" button appears so you can look it up yourself and enter your best estimate for calories/macros.`]
 };
 function wireInfoButtons(root){
@@ -1923,11 +1923,6 @@ function screenSettings(){
 
     <details class="card" data-card-key="data" ${settingsCardOpenAttr('data')}>
       <summary class="card-summary"><div class="card-head"><h3>Data</h3>${infoBtnHtml('databackup')}</div><span class="chevron">⌄</span></summary>
-      <button class="btn-secondary" id="s-export">Export data (JSON)</button>
-      <div style="height:8px"></div>
-      <button class="btn-secondary" id="s-import">Import data (JSON)</button>
-      <input type="file" id="s-import-file" accept="application/json" class="hidden">
-      <div style="height:8px"></div>
       <button class="btn-secondary" id="s-reset" style="color:var(--critical)">Reset all data</button>
     </details>
   </div>`;
@@ -2425,16 +2420,6 @@ function attachHandlers(){
     state.settings.fdcApiKey = document.getElementById('s-fdc-key').value.trim();
     saveState(); alert('Key saved.'); render();
   });
-  const exportBtn = document.getElementById('s-export');
-  if(exportBtn) exportBtn.addEventListener('click', ()=>{
-    const blob = new Blob([JSON.stringify(state,null,2)], {type:'application/json'});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = 'health-score-data.json'; a.click();
-  });
-  const importBtn = document.getElementById('s-import');
-  const importFile = document.getElementById('s-import-file');
-  if(importBtn && importFile) importBtn.addEventListener('click', ()=>importFile.click());
-  if(importFile) importFile.addEventListener('change', ()=>importDataFromFile(importFile.files[0]));
   const clearErrorsBtn = document.getElementById('s-clear-errors');
   if(clearErrorsBtn) clearErrorsBtn.addEventListener('click', e=>{
     e.preventDefault(); // stays inside a <summary> — don't also toggle the fold
