@@ -264,7 +264,7 @@ function defaultState(){
       charts: { projection:true, trend:true },
       weightTrackingEnabled: true
     },
-    googleHealth: { accessToken:null, refreshToken:null, expiresAt:0, lastSyncAt:null },
+    googleHealth: { accessToken:null, refreshToken:null, expiresAt:0, lastSyncAt:null, email:null },
     errorLog: [], // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
     pendingCelebration: false // a goal was hit but confetti hasn't played yet — shown on the next fresh page load
   };
@@ -1046,10 +1046,18 @@ function renderOnboarding(){
     saveState();
     wrap.remove();
     render();
-    // If Google Health credentials are already on file, connect right away —
-    // no separate trip to Settings needed to start the automatic sync.
-    if(state.settings.clientId && state.settings.clientSecret && !state.googleHealth.refreshToken){
+    if(state.googleHealth.refreshToken){
+      // already connected (e.g. restored from a backup) — nothing more to do
+    } else if(state.settings.clientId && state.settings.clientSecret){
+      // Credentials already on file (e.g. this device connected a Fitbit before) —
+      // connect right away, no separate trip to Settings needed.
       startGoogleHealthAuth();
+    } else{
+      // Brand-new setup, nobody's Fitbit connected on this device yet — every
+      // person has their own Fitbit and their own linked Google account, so walk
+      // them through connecting it now instead of leaving it to be discovered
+      // later in Settings.
+      renderOnboardingFitbitStep();
     }
   });
 
@@ -1057,6 +1065,22 @@ function renderOnboarding(){
   const obImportFile = wrap.querySelector('#ob-import-file');
   obImportBtn.addEventListener('click', ()=>obImportFile.click());
   obImportFile.addEventListener('change', ()=>importDataFromFile(obImportFile.files[0]));
+}
+function renderOnboardingFitbitStep(){
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+  <div class="modal-backdrop center">
+    <div class="modal">
+      <h2>Connect your Fitbit</h2>
+      <div class="sub">Optional now, but takes a few minutes — you can also do this later from Settings.</div>
+      ${connectFitbitStepsHtml('ob2')}
+      <div style="height:8px"></div>
+      <button class="btn-secondary" id="ob2-skip">Skip for now — I'll connect later in Settings</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+  wireConnectFitbitCard(wrap, 'ob2');
+  wrap.querySelector('#ob2-skip').addEventListener('click', ()=>wrap.remove());
 }
 
 /* =========================================================
@@ -1123,7 +1147,7 @@ function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</
 const INFO_CONTENT = {
   projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
   trend: ['Score trend', `Under "This Week", your daily Activity and Nutrition scores (0-100) for the last 7 days. Under "Monthly", your daily Total Score and Weight for the month so far — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value.`],
-  fitsync: ['Google Health sync', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Setup, one time: console.cloud.google.com → new project → OAuth consent screen → publishing status <strong>"In Production"</strong> (fine for personal use — Google only requires review past 100 users) → Credentials → OAuth client ID → type <strong>Web application</strong> → Authorized redirect URI: <strong>${location.origin}${location.pathname}</strong> → enable the "Google Health API" and add the activity/fitness and health-metrics scopes → paste the resulting Client ID and Client Secret below. After you connect once, it re-syncs automatically in the background — no further action needed.`],
+  fitsync: ['Connect your Fitbit', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). The numbered steps under this card walk through finding your Fitbit's Google account, getting approved, and connecting. After you connect once, it re-syncs automatically in the background — no further action needed unless you reconnect a different account.<br><br><strong>Why do I have to wait for approval before I can connect?</strong> Everyone connects through one shared Google project the app owner controls, and Google caps how many outside accounts can use it before requiring a full verification review. Adding each person by hand keeps it under that limit — it's a one-time, ~30-second step on the app owner's end.<br><br><strong>My Fitbit's Google account isn't a Gmail address — is that right?</strong> Yes, that's normal. A Google account can be created with any email as its login, including Outlook, Hotmail, or Yahoo addresses. Use whatever email Fitbit's app shows you, even if it doesn't end in @gmail.com.<br><br><strong>I connected the wrong account.</strong> Click "Reconnect & sync now" on the card — Google always shows the account-chooser screen again, so just pick the correct email that time.<br><br><strong>App owner only:</strong> to approve a new person, go to <strong>console.cloud.google.com</strong> → your project → <strong>APIs & Services → OAuth consent screen → Audience</strong> → <strong>Add users</strong> under Test users, paste in the email they sent you, save. Then send them the project's <strong>Client ID</strong> and <strong>Client Secret</strong> from <strong>APIs & Services → Credentials</strong> (whatever channel you like — text, email) so they can paste them into Step 2 on their own device. If you haven't created the project yet, use the same Credentials/OAuth-consent-screen path to set one up, with redirect URI <strong>${location.origin}${location.pathname}</strong> and the Google Health API enabled.`],
   databackup: ['Data & backups', `Everything here (profile, logged food, activity, Google Health credentials) lives only in this browser's local storage on this device — nothing is sent to a server. That's good for privacy, but it means your phone or browser's own "clear history / clear site data" action can wipe it, the same as it would for any website — there's no way for a site to opt out of that. <strong>Export data</strong> saves everything to a JSON file you can keep as a backup; <strong>Import data</strong> restores from one. Only the <strong>Reset all data</strong> button below is an in-app wipe — a browser-level clear is outside the app's control.`],
   fdc: ['Food search', `With a free USDA FoodData Central key, search first checks the Foundation/SR Legacy datasets (generic whole foods, to keep casual searches from getting buried in brand names), then automatically falls back to FDC's ~300,000-item Branded Foods dataset if nothing generic matched. Setup: fdc.nal.usda.gov/api-key-signup → fill in the short form → the key is emailed instantly, no approval wait → paste it below. It's free with no usage cost. If a search still comes up empty — some very specific items (like a particular fat-percentage of milk) genuinely aren't in either dataset — a "Search the web" button appears so you can look it up yourself and enter your best estimate for calories/macros.`]
 };
@@ -1718,6 +1742,61 @@ function screenHistory(){
   </div>`;
 }
 
+/* ---------- CONNECT YOUR FITBIT (shared by Settings and first-time setup) ----------
+   Every person who uses this app has their own Fitbit account, and each Fitbit
+   account is tied to its own Google account — one that's frequently NOT the
+   person's everyday Google login, and doesn't even have to be a @gmail.com
+   address (Fitbit lets you link any email that has a Google Account behind it,
+   including Outlook/Hotmail/Yahoo addresses). This walks a non-technical person
+   through finding that account and connecting it, step by step. `prefix` keeps
+   element ids unique between the Settings card and the first-run onboarding step.
+   By design, everyone connects through ONE shared Google Cloud project that the
+   app owner controls (see ADMIN_NOTE in INFO_CONTENT.fitsync) — so nobody else
+   ever needs to set up their own Google Cloud project or touch a developer
+   console. The only manual step left is the app owner approving each new
+   person once, out of band. */
+function connectFitbitStepsHtml(prefix){
+  const gh = state.googleHealth;
+  const connected = !!gh.refreshToken;
+  return `
+    <div class="muted" style="margin-bottom:12px;">Since 2026, Fitbit stores your activity data through a Google account instead of a separate Fitbit login. Follow these steps in order — Step 1 especially, since guessing the wrong account is the most common snag.</div>
+    ${connected ? `<div class="row" style="margin-bottom:12px;"><span class="badge good">Connected${gh.email ? ' as '+escapeHtml(gh.email) : ''} — auto-syncing</span></div>` : ''}
+
+    <div style="margin-bottom:14px;">
+      <div style="font-weight:600;margin-bottom:4px;">Step 1 — Find out which Google account your Fitbit uses</div>
+      <div class="muted" style="margin-bottom:6px;">Open the <strong>Fitbit app</strong> on your phone → tap your profile photo (top-left) → <strong>Account settings</strong> → look for <strong>Google account</strong> or <strong>Linked accounts</strong>. It shows the exact email your Fitbit data is tied to. Write it down — you'll need to send it in Step 2 and pick this <em>exact</em> account in Step 3. It doesn't have to end in @gmail.com; any email can be the login for a Google account.</div>
+      <div class="muted">If it says nothing is linked yet, tap <strong>Link Google Account</strong> right there and follow Fitbit's prompts before continuing.</div>
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <div style="font-weight:600;margin-bottom:4px;">Step 2 — Get approved and get your connection key</div>
+      <div class="muted" style="margin-bottom:6px;">Send the app owner the email address from Step 1 and ask to be added. They'll approve it on their end and send you back two pieces of text — a <strong>Client ID</strong> and a <strong>Client Secret</strong>. Paste those into the two boxes below, then tap <strong>Save credentials</strong>. This only needs doing once per device.</div>
+    </div>
+    <div class="field"><label>Google Client ID</label><input type="text" id="${prefix}-fit-client" placeholder="paste what the app owner sent you" value="${state.settings.clientId}"></div>
+    <div class="field"><label>Google Client Secret</label><input type="text" id="${prefix}-fit-secret" placeholder="paste what the app owner sent you" value="${state.settings.clientSecret}"></div>
+    <button class="btn-secondary" id="${prefix}-fit-save">Save credentials</button>
+    <div style="height:14px"></div>
+
+    <div style="margin-bottom:10px;">
+      <div style="font-weight:600;margin-bottom:4px;">Step 3 — Connect, and pick the right account</div>
+      <div class="muted">Tap the button below. Google always shows an account-chooser screen, even if you're already signed in somewhere — pick the <strong>exact email from Step 1</strong>, not whichever account looks familiar. Then tap <strong>Allow</strong> to grant access to your activity and health data.</div>
+      <div class="muted" style="margin-top:6px;">If Google shows a page saying the app is <strong>blocked</strong> or <strong>hasn't completed verification</strong> instead of the Allow screen, the app owner hasn't approved your email yet (or approved a different one than you're signing in with) — double-check with them and try again.</div>
+    </div>
+    <button class="btn-primary" id="${prefix}-fit-connect">${connected ? 'Reconnect & sync now' : 'Connect & sync today'}</button>
+    ${connected ? `<div class="muted" style="margin-top:8px;">Connected the wrong account by mistake? Tap "Reconnect & sync now" above and choose the correct email this time.</div>` : ''}
+  `;
+}
+function wireConnectFitbitCard(root, prefix){
+  const save = root.querySelector('#'+prefix+'-fit-save');
+  if(save) save.addEventListener('click', ()=>{
+    state.settings.clientId = root.querySelector('#'+prefix+'-fit-client').value.trim();
+    state.settings.clientSecret = root.querySelector('#'+prefix+'-fit-secret').value.trim();
+    saveState(); alert('Credentials saved.');
+  });
+  const connect = root.querySelector('#'+prefix+'-fit-connect');
+  if(connect) connect.addEventListener('click', startGoogleHealthAuth);
+}
+
 /* ---------- SETTINGS ---------- */
 function screenSettings(){
   const p = state.profile;
@@ -1771,13 +1850,8 @@ function screenSettings(){
     </div>
 
     <div class="card">
-      <div class="card-head"><h3>Google Health sync</h3>${infoBtnHtml('fitsync')}</div>
-      ${state.googleHealth.refreshToken ? `<div class="row" style="margin-bottom:12px;"><span class="badge good">Connected — auto-syncing</span></div>` : ''}
-      <div class="field"><label>Google Client ID</label><input type="text" id="s-fit-client" placeholder="xxxx.apps.googleusercontent.com" value="${state.settings.clientId}"></div>
-      <div class="field"><label>Google Client Secret</label><input type="text" id="s-fit-secret" placeholder="GOCSPX-..." value="${state.settings.clientSecret}"></div>
-      <button class="btn-secondary" id="s-fit-save">Save credentials</button>
-      <div style="height:8px"></div>
-      <button class="btn-primary" id="s-fit-connect">${state.googleHealth.refreshToken ? 'Reconnect & sync now' : 'Connect & sync today'}</button>
+      <div class="card-head"><h3>Connect your Fitbit</h3>${infoBtnHtml('fitsync')}</div>
+      ${connectFitbitStepsHtml('s')}
     </div>
 
     <div class="card">
@@ -1815,17 +1889,34 @@ function dashToggleRow(key, label){
    offline gets a refresh token) so sync runs silently forever
    once connected — no popups, no repeated consent.
    ========================================================= */
-const GH_SCOPES = 'https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly '
+const GH_SCOPES = 'openid email '
+  + 'https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly '
   + 'https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly';
 
 function ghRedirectUri(){ return location.origin + location.pathname; }
 
+// Decodes the email out of Google's id_token (a JWT) so the app can show which
+// Google account actually got connected — the account tied to someone's Fitbit
+// is frequently not their everyday/default one, so surfacing it lets a mismatch
+// get caught immediately instead of silently syncing the wrong person's data.
+function decodeJwtEmail(idToken){
+  try{
+    const payload = idToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
+    const json = decodeURIComponent(atob(payload).split('').map(c=>'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+    return JSON.parse(json).email || null;
+  }catch(e){ return null; }
+}
+
 async function startGoogleHealthAuth(){
   const {clientId} = state.settings;
-  if(!clientId){ alert('Add your Google Client ID first (see instructions below the button).'); return; }
+  if(!clientId){ alert('Add your Google Client ID first (see Step 2 below the button).'); return; }
   const params = new URLSearchParams({
     client_id: clientId, response_type:'code', redirect_uri: ghRedirectUri(),
-    scope: GH_SCOPES, access_type:'offline', prompt:'consent', include_granted_scopes:'true'
+    // select_account forces Google's account-chooser screen every single time,
+    // even if the browser already has an active Google session — without it,
+    // "Reconnect" can silently reuse whatever account is currently signed in
+    // instead of letting the person pick the one their Fitbit actually uses.
+    scope: GH_SCOPES, access_type:'offline', prompt:'consent select_account', include_granted_scopes:'true'
   });
   // Regular navigation (not location.replace) — replace() turned out to destroy the
   // app's own history entry too (since Google's return redirect collapses into the
@@ -1854,12 +1945,13 @@ async function handleGoogleHealthRedirect(){
       throw new Error(`Token exchange HTTP ${res.status}: ${bodyText.slice(0,300)}`);
     }
     const data = await res.json();
-    state.googleHealth = {accessToken:data.access_token, refreshToken:data.refresh_token, expiresAt: Date.now()+data.expires_in*1000};
+    const email = data.id_token ? decodeJwtEmail(data.id_token) : null;
+    state.googleHealth = {accessToken:data.access_token, refreshToken:data.refresh_token, expiresAt: Date.now()+data.expires_in*1000, email};
     saveState();
     await fetchGoogleHealthToday(false);
   }catch(e){
     logError('Connect failed: '+e.message);
-    alert('Google Health connection failed:\n\n'+e.message+'\n\nDouble check the Client ID/Secret and that this exact URL is registered as a redirect URI on that OAuth client.');
+    alert('Google Health connection failed:\n\n'+e.message+'\n\nMost common causes: the app owner hasn\'t approved your email as a test user yet, or the Client ID/Secret was mistyped when you pasted it in Step 2. Check with the app owner if it keeps failing.');
   }
 }
 async function ensureGoogleHealthToken(){
@@ -2272,14 +2364,7 @@ function attachHandlers(){
     };
     saveState(); alert('Profile saved.'); render();
   });
-  const fitSave = document.getElementById('s-fit-save');
-  if(fitSave) fitSave.addEventListener('click', ()=>{
-    state.settings.clientId = document.getElementById('s-fit-client').value.trim();
-    state.settings.clientSecret = document.getElementById('s-fit-secret').value.trim();
-    saveState(); alert('Credentials saved.');
-  });
-  const fitConnect = document.getElementById('s-fit-connect');
-  if(fitConnect) fitConnect.addEventListener('click', startGoogleHealthAuth);
+  wireConnectFitbitCard(document, 's');
   const fdcSave = document.getElementById('s-fdc-save');
   if(fdcSave) fdcSave.addEventListener('click', ()=>{
     state.settings.fdcApiKey = document.getElementById('s-fdc-key').value.trim();
