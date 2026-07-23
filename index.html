@@ -1454,7 +1454,7 @@ function screenLog(){
       </div>
       ${showWebSearch && !matchedFood ? `<button class="btn-secondary" id="btn-web-search-food" type="button" style="margin-top:2px;">Search the web for "${logFoodQuery}"</button>` : ''}
       <div class="field" style="margin-top:2px;"><label>Calories</label><input type="number" id="food-kcal" placeholder="0" value="${foodKcalValue}"></div>
-      <button class="btn-primary" id="btn-add-food" style="margin-top:4px;">Add to today</button>
+      <button class="btn-primary" id="btn-add-food" style="margin-top:4px;">Log item</button>
     </div>
 
     ${todaysFoodsCard()}` : ''}
@@ -1969,15 +1969,27 @@ function attachHandlers(){
     if(kcalEl) kcalEl.value = foodKcalValue;
   });
   const kcalInputEl = document.getElementById('food-kcal');
-  if(kcalInputEl) kcalInputEl.addEventListener('input', ()=>{ foodKcalValue = kcalInputEl.value; });
+  if(kcalInputEl){
+    kcalInputEl.addEventListener('input', ()=>{ foodKcalValue = kcalInputEl.value; });
+    // Enter here submits directly — the quick path is "type a calorie number, hit
+    // Enter", with food name/amount/unit left untouched and defaulted.
+    kcalInputEl.addEventListener('keydown', e=>{
+      if(e.key!=='Enter') return;
+      e.preventDefault();
+      const btn = document.getElementById('btn-add-food');
+      if(btn) btn.click();
+    });
+  }
   const addFoodBtn = document.getElementById('btn-add-food');
   if(addFoodBtn) addFoodBtn.addEventListener('click', ()=>{
-    const name = document.getElementById('food-search').value.trim();
-    if(!name){ alert('Enter a food name.'); return; }
+    // Food name is optional — this also covers "just log some calories" with
+    // nothing matched and no name typed, defaulting to "Generic food".
+    const rawName = document.getElementById('food-search').value.trim();
+    const name = rawName || 'Generic food';
     const amount = Number(document.getElementById('food-amount').value) || 1;
     const kcal = Number(document.getElementById('food-kcal').value) || 0;
     if(!(matchedFood && matchedFood.n===name) && kcal===0){
-      alert(`"${name}" isn't a recognized food, so calories can't be estimated automatically — enter your best estimate in the Calories field before adding.`);
+      alert('Enter calories before logging — or pick a match from the search results to fill it in automatically.');
       const kcalEl = document.getElementById('food-kcal');
       if(kcalEl) kcalEl.focus();
       return;
@@ -1993,10 +2005,13 @@ function attachHandlers(){
       // unmatched name just gets the entered calories with macros/micros at 0.
       const unitLabel = foodUnitSelect ? foodUnitSelect.selectedOptions[0].textContent : 'serving';
       qtyLabel = `${amount} ${unitLabel}`;
-      state.myFoods.push({n:name, per:amount, u:unitLabel, k:kcal, p:0, c:0, f:0, ir:0, ca:0});
+      // Don't cache a blank/"Generic food" entry as a reusable food — every such
+      // entry can have completely different calories, so remembering it would
+      // pollute search suggestions and "last amount used" with meaningless data.
+      if(rawName) state.myFoods.push({n:name, per:amount, u:unitLabel, k:kcal, p:0, c:0, f:0, ir:0, ca:0});
     }
     getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel, kcal, protein, carbs, fat, iron, calcium});
-    state.foodMemory[name] = {qty:amount, ts:Date.now()};
+    if(rawName) state.foodMemory[name] = {qty:amount, ts:Date.now()};
     logFoodQuery=''; matchedFood=null; foodUnitFilter='any'; foodAmountValue=''; foodKcalValue='';
     saveState(); render();
   });
