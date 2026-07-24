@@ -161,6 +161,17 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
   box-shadow:0 3px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);
   transition:transform .08s, box-shadow .08s;}
 .btn-primary:active{transform:translateY(2px);box-shadow:0 1px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.3);}
+
+/* ---- topbar Install button — deliberately loud (var(--good) green, not the
+   everyday blue) so it reads as a call to action next to the heading, on
+   every screen, until installed ---- */
+.topbar-install-btn{flex-shrink:0;border:none;border-radius:20px;padding:7px 14px;font-size:13px;font-weight:700;
+  color:#fff;background:linear-gradient(180deg, color-mix(in srgb, var(--good) 100%, white 15%), var(--good));
+  box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);
+  transition:transform .08s, box-shadow .08s;}
+.topbar-install-btn:active{transform:translateY(1px);box-shadow:0 1px 0 var(--btn-lo);}
+.topbar-install-btn.installed{background:var(--surface);color:var(--muted);border:1px solid var(--border);
+  box-shadow:none;font-weight:600;}
 .btn-secondary{width:100%;padding:13px;border:1px solid var(--border);border-radius:11px;background:var(--surface);
   color:var(--text);font-size:15px;font-weight:600;
   box-shadow:0 3px 0 var(--btn-lo), inset 0 1px 0 var(--btn-hi);
@@ -303,7 +314,14 @@ function defaultState(){
     settings: {
       clientId:'', clientSecret:'', fdcApiKey:'', useMetric:false,
       charts: { projection:true },
-      weightTrackingEnabled: true
+      weightTrackingEnabled: true,
+      // Set once the native install prompt resolves "accepted" (see
+      // isInstalled()) — a regular browser tab that just walked through
+      // installing doesn't itself switch to display-mode:standalone, so
+      // that check alone would keep showing "Install" until the user
+      // actually relaunches from the Home Screen icon. This remembers it
+      // across reloads of the SAME tab in the meantime.
+      installPromptAccepted: false
     },
     googleHealth: { accessToken:null, refreshToken:null, expiresAt:0, lastSyncAt:null, email:null },
     errorLog: [], // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
@@ -1447,6 +1465,15 @@ function openChartTableModal(title, columns, rows, colColors){
   openInfoModal(title, `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`);
 }
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
+// Shown top-right on every screen's topbar, same row as the heading, so it's
+// visible immediately no matter where the user lands — not just tucked into
+// Settings. Stays visible after installing too (rather than disappearing),
+// just switched to an inert "Installed" state, so it doubles as a status
+// check rather than only ever being a call to action.
+function installTopbarBtnHtml(){
+  const installed = isInstalled();
+  return `<button class="topbar-install-btn${installed?' installed':''}" id="s-install"${installed?' disabled':''}>${installed?'Installed':'Install'}</button>`;
+}
 // Day-of-week checkboxes shared by onboarding and Settings > Profile — index
 // matches JS Date.getDay() (0=Sun..6=Sat) so it lines up directly with isTrackedDay().
 const DAY_LABELS = ['S','M','T','W','T','F','S'];
@@ -1469,8 +1496,7 @@ const INFO_CONTENT = {
   projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
   trend: ['Score trend', `Under "This Week", your daily Activity and Nutrition scores (0-100) for the last 7 days. Under "Monthly", your Total Score and Weight for each of the last 12 months (labeled by month letter — a January point also shows its year so a 12-month span crossing a new year stays unambiguous) — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value, or tap elsewhere on the chart for the full data table.`],
   fitsync: ['Connect your Fitbit', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Head to Settings to connect it: finding your Fitbit's Google account, getting approved, and connecting. After you connect once, it re-syncs automatically in the background — no further action needed unless you reconnect a different account.<br><br><strong>Why do I have to wait for approval before I can connect?</strong> Everyone connects through one shared Google project the app owner controls, and Google caps how many outside accounts can use it before requiring a full verification review. Adding each person by hand keeps it under that limit — it's a one-time, ~30-second step on the app owner's end.<br><br><strong>My Fitbit's Google account isn't a Gmail address — is that right?</strong> Yes, that's normal. A Google account can be created with any email as its login, including Outlook, Hotmail, or Yahoo addresses. Use whatever email Fitbit's app shows you, even if it doesn't end in @gmail.com.<br><br><strong>I connected the wrong account.</strong> In Settings, tap "Reconnect & sync now" — Google always shows the account-chooser screen again, so just pick the correct email that time.<br><br><strong>App owner only:</strong> to approve a new person, go to <strong>console.cloud.google.com</strong> → your project → <strong>APIs & Services → OAuth consent screen → Audience</strong> → <strong>Add users</strong> under Test users, paste in the email they sent you, save. Then send them the project's <strong>Client ID</strong> and <strong>Client Secret</strong> from <strong>APIs & Services → Credentials</strong> (whatever channel you like — text, email) so they can paste them into Settings on their own device. If you haven't created the project yet, use the same Credentials/OAuth-consent-screen path to set one up, with redirect URI <strong>${location.origin}${location.pathname}</strong> and the Google Health API enabled.`],
-  backupfile: ['Back up now', `Your data is already safely auto-saved as you go — one continuously-updated save, same idea as any other app, never a pile of files. This button makes a separate exportable copy for the one thing that auto-save can't survive: deliberately clearing your browser's history/site data.<br><br>On browsers that let a page choose a save location, the very first tap asks where to save once, then every tap after that overwrites that same file — a real single save file, no extra notification each time. Elsewhere, each tap creates a new dated file and triggers your browser's own "Download complete" notification, which no page can silence — that's the browser, not Health Score.`],
-  installhome: ['Install on Home Screen', `A bookmarked tab sits below the bar your browser uses to decide a site's data is worth protecting from cleanup — installed apps get treated as far more durable, so installing is the single biggest thing that reduces the odds of ever seeing the data disappear on its own between opens.<br><br>This is separate from "Back up now": installing protects the live save from being silently cleared in the first place; backing up is a manual export for the one thing nothing can prevent — you deliberately clearing your browser's history.<br><br>On Chrome/Edge and most Android browsers, tapping this button installs it directly. On iPhone/iPad, Safari doesn't allow a page to trigger installation — tap the Share icon, then "Add to Home Screen".`]
+  backupfile: ['Back up now', `Your data is already safely auto-saved as you go — one continuously-updated save, same idea as any other app, never a pile of files. This button makes a separate exportable copy for the one thing that auto-save can't survive: deliberately clearing your browser's history/site data.<br><br>On browsers that let a page choose a save location, the very first tap asks where to save once, then every tap after that overwrites that same file — a real single save file, no extra notification each time. Elsewhere, each tap creates a new dated file and triggers your browser's own "Download complete" notification, which no page can silence — that's the browser, not Health Score.`]
 };
 function wireInfoButtons(root){
   (root||document).querySelectorAll('[data-info]').forEach(b=>{
@@ -1779,9 +1805,12 @@ function screenToday(){
 
   return `
   <div class="topbar"><h1>Today</h1>
-    <div style="text-align:right;">
-      <div class="muted" id="today-date"></div>
-      <div class="muted" style="font-size:11px;">${fitbitSyncLabel()}</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div style="text-align:right;">
+        <div class="muted" id="today-date"></div>
+        <div class="muted" style="font-size:11px;">${fitbitSyncLabel()}</div>
+      </div>
+      ${installTopbarBtnHtml()}
     </div>
   </div>
   <div class="screen">
@@ -1900,7 +1929,7 @@ function screenLog(){
   const showNutrition = logFocus!=='activity';
   const showActivity = logFocus!=='nutrition';
   return `
-  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1></div>
+  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1>${installTopbarBtnHtml()}</div>
   <div class="screen">
     ${showNutrition ? `<div class="card">
       <h3>Add food</h3>
@@ -2006,7 +2035,7 @@ function screenHistory(){
   }
 
   return `
-  <div class="topbar"><h1>Trends</h1></div>
+  <div class="topbar"><h1>Trends</h1>${installTopbarBtnHtml()}</div>
   <div class="screen">
     <div class="seg" id="history-seg">
       <button data-v="week" class="${historyMode==='week'?'active':''}">This Week</button>
@@ -2123,14 +2152,8 @@ function settingsCardOpenAttr(key){ return openSettingsCards.has(key) ? 'open' :
 function screenSettings(){
   const p = state.profile;
   return `
-  <div class="topbar"><h1>Settings</h1></div>
+  <div class="topbar"><h1>Settings</h1>${installTopbarBtnHtml()}</div>
   <div class="screen">
-    ${isStandaloneApp() ? '' : `
-    <div class="card">
-      <div class="row" style="margin-bottom:8px;"><span class="muted" style="display:flex;align-items:center;gap:6px;">Installed apps are far less likely to have their data silently cleared${infoBtnHtml('installhome')}</span></div>
-      <button class="btn-primary" id="s-install">Install on Home Screen</button>
-    </div>
-    `}
     <details class="card" data-card-key="profile" ${settingsCardOpenAttr('profile')}>
       <summary class="card-summary"><h3>Profile</h3><span class="chevron">⌄</span></summary>
       <div class="field-row">
@@ -2720,20 +2743,32 @@ function attachHandlers(){
     state.errorLog = []; saveState(); render();
   });
   const installBtn = document.getElementById('s-install');
+  // Guarded by isInstalled() in installTopbarBtnHtml() too (button renders
+  // disabled), but re-checking here means a leftover click from just before
+  // installing can't slip through into a second prompt.
   if(installBtn) installBtn.addEventListener('click', async ()=>{
+    if(isInstalled()) return;
     if(deferredInstallPrompt){
       const promptEvent = deferredInstallPrompt;
       deferredInstallPrompt = null; // one-shot — the browser invalidates it after a single use either way
       promptEvent.prompt();
       const choice = await promptEvent.userChoice;
+      if(choice.outcome==='accepted'){
+        state.settings.installPromptAccepted = true;
+        saveState();
+        showToast('Installed — look for it on your Home Screen.', 'good');
+      }
       render();
-      if(choice.outcome==='accepted') showToast('Installed — look for it on your Home Screen.', 'good');
     } else {
       // No captured browser-native prompt — either this browser doesn't
       // support triggering install from a page at all (iOS Safari, plain
       // Firefox), or Chrome/Edge just hasn't fired beforeinstallprompt yet
       // (it can take a few visits). Either way, the manual path always works.
+      // There's no signal a page can detect for "user actually finished the
+      // manual steps", so this can't flip the button to Installed on its own
+      // — only relaunching from the real Home Screen icon can do that.
       openInfoModal('Install on Home Screen', `
+        A bookmarked tab sits below the bar browsers use to decide a site's data is worth protecting from cleanup — installing is the single biggest thing that reduces the odds of your data disappearing on its own between opens. (Separate from "Back up now" below, which only covers you deliberately clearing your browser's history — nothing can protect against that one.)<br><br>
         <strong>iPhone/iPad (Safari):</strong> tap the Share icon (square with an arrow), then "Add to Home Screen".<br><br>
         <strong>Android (Chrome), if this button didn't just install it directly:</strong> tap the ⋮ menu in the top right, then "Add to Home Screen" or "Install app".<br><br>
         <strong>Desktop Chrome/Edge:</strong> look for an install icon at the right edge of the address bar, or use the ⋮ menu → "Install Health Score".
@@ -2838,29 +2873,34 @@ if(navigator.serviceWorker && navigator.serviceWorker.register) navigator.servic
 // True once actually running as the installed/home-screen app rather than a
 // regular browser tab — display-mode covers Chrome/Edge/Android,
 // navigator.standalone is Safari's own (non-standard, iOS-only) equivalent.
-// Used to hide the "Install on Home Screen" button once there's nothing left
-// to install.
 function isStandaloneApp(){
   return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+}
+// What the topbar button actually checks — see the settings.installPromptAccepted
+// comment in defaultState() for why this isn't just isStandaloneApp() alone.
+function isInstalled(){
+  return isStandaloneApp() || state.settings.installPromptAccepted;
 }
 // Chrome/Edge/Android fire this instead of installing immediately, handing
 // over an event whose .prompt() shows the native install UI on demand — so
 // it has to be captured up front (page load) and held onto until the user
-// actually taps "Install on Home Screen" in Settings, which is the only
-// place it's used. preventDefault() stops the browser's own separate
-// install mini-infobar so this button is the one path in, avoiding two
-// different install prompts fighting for attention. Re-renders Settings if
-// it's the visible tab so the button appears/disappears live rather than
-// only after switching tabs — this can fire well after initial page load.
+// actually taps the topbar Install button, which is the only place it's
+// used. preventDefault() stops the browser's own separate install
+// mini-infobar so this button is the one path in, avoiding two different
+// install prompts fighting for attention. Re-renders so the button's
+// label/state updates live rather than only after switching tabs — this can
+// fire well after initial page load.
 let deferredInstallPrompt = null;
 window.addEventListener('beforeinstallprompt', (e)=>{
   e.preventDefault();
   deferredInstallPrompt = e;
-  if(activeTab==='settings') render();
+  render();
 });
 window.addEventListener('appinstalled', ()=>{
   deferredInstallPrompt = null;
-  if(activeTab==='settings') render();
+  state.settings.installPromptAccepted = true;
+  saveState();
+  render();
 });
 // Best-effort ask not to auto-evict this site's storage under low-disk
 // pressure. Chrome auto-grants/denies this based on its own heuristics (site
