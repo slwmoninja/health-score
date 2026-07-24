@@ -137,6 +137,41 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
 /* ---- routine builder exercise rows ---- */
 .routine-exercise-row{padding:10px 0;border-top:1px solid var(--grid);}
 .routine-exercise-row:first-child{border-top:none;}
+/* ---- live-session set table (SET / PREV / value / check / delete) ---- */
+.set-table-head{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid var(--grid);padding-bottom:6px;margin-bottom:4px;}
+.set-table-head span{text-align:center;}
+.set-table-row{display:flex;align-items:center;gap:6px;padding:4px 0;}
+.set-table-row input{width:100%;padding:7px 2px;text-align:center;border-radius:8px;border:1px solid var(--border);
+  background:var(--page);color:var(--text);font-size:13.5px;}
+.set-check{height:30px;border-radius:8px;border:1px solid var(--border);background:var(--page);
+  color:var(--muted);font-size:14px;font-weight:700;padding:0;}
+.set-check.checked{background:var(--good);color:#fff;border-color:var(--good);}
+.exercise-notes-input{width:100%;border:none;background:none;color:var(--muted);font-size:12.5px;
+  padding:2px 0 8px;font-family:inherit;}
+/* ---- routine tiles (Activity screen) — compact so several fit on screen ---- */
+.routine-tile-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
+.routine-tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:12px;box-shadow:var(--shadow);position:relative;transition:box-shadow .15s, opacity .15s;}
+.routine-tile-head{display:flex;align-items:center;gap:6px;margin-bottom:6px;}
+.routine-tile-head h4{margin:0;font-size:14px;font-weight:700;color:var(--text);flex:1;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.routine-tile .sub{font-size:11px;color:var(--muted);display:-webkit-box;
+  -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.routine-go-btn{flex:0 0 auto;border:none;border-radius:10px;min-width:36px;height:36px;padding:0 8px;
+  background:linear-gradient(180deg, color-mix(in srgb, var(--critical) 100%, white 15%), var(--critical));
+  color:#fff;font-weight:800;font-size:12px;box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);
+  transition:transform .08s, box-shadow .08s;}
+.routine-go-btn:active{transform:translateY(1px);box-shadow:0 1px 0 var(--btn-lo);}
+/* Drag handle for reordering tiles — touch-action:none stops the page from
+   also trying to scroll while a drag is in progress from this handle. */
+.drag-handle{flex:0 0 auto;color:var(--muted);font-size:15px;padding:2px 4px;touch-action:none;line-height:1;}
+/* Reactive "picked up" feedback the instant a drag starts, and a "landing
+   here" highlight on whichever tile is currently under the finger — both
+   applied as direct style/class changes during the gesture (see the
+   ROUTINE TILE REORDER script), not via render(), so dragging stays smooth. */
+.routine-tile.dragging{box-shadow:0 10px 24px rgba(0,0,0,.35);z-index:5;opacity:.96;}
+.routine-tile.drop-target{outline:2px dashed var(--blue);outline-offset:2px;}
 
 /* ---- forms ---- */
 .field{margin-bottom:14px;}
@@ -200,6 +235,9 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
 .search-item:first-child{border-top:none;}
 .search-item .n{font-weight:600;}
 .search-item .m{font-size:11.5px;color:var(--muted);}
+/* exercise-search thumbnail slot — see exerciseThumbHtml */
+.exercise-thumb{width:34px;height:34px;border-radius:50%;flex:0 0 auto;display:flex;
+  align-items:center;justify-content:center;color:#fff;font-size:10.5px;font-weight:800;letter-spacing:.02em;}
 
 /* ---- modal ---- */
 .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center;}
@@ -332,6 +370,7 @@ function defaultState(){
     exerciseMemory: {}, // { exerciseId: {weightLb, reps, durationSec, distanceMi, ts} } — mirrors foodMemory
     routines: [],        // named templates: "Leg day", "Cardio", etc. — see EXERCISE_DB/allExercises()
     activeWorkoutSession: null, // the single in-progress/paused session, or null — see startWorkoutSession()
+    recentQuickStartTypes: [], // last 5 Quick Start activity types, most-recent-first — see recordQuickStartType()
     settings: {
       clientId:'', clientSecret:'', fdcApiKey:'', useMetric:false,
       charts: { projection:true },
@@ -956,18 +995,42 @@ function formatElapsed(ms){
   const mm = String(m).padStart(2,'0'), ss = String(s).padStart(2,'0');
   return h>0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
 }
-function startWorkoutSession(routine){
+// Pre-populates each exercise with its planned number of set rows (target, or
+// the last time's rep/weight values, or a plain default of 3) — matching
+// Hevy's own "Log Workout" screen, where you check off/edit pre-filled rows
+// rather than typing a fresh set from scratch each time. Unchecked rows are
+// dropped when the session is finished (see finishWorkoutSession).
+function plannedSetRows(re){
+  const remembered = state.exerciseMemory[re.exerciseId];
+  const count = re.targetSets || 3;
+  const rows = [];
+  for(let i=0;i<count;i++){
+    rows.push({
+      index:i, setType:'normal',
+      weightLb: re.targetWeightLb!=null ? re.targetWeightLb : (remembered ? remembered.weightLb : null),
+      reps: re.targetReps!=null ? re.targetReps : (remembered ? remembered.reps : null),
+      distanceMi: re.targetDistanceMi!=null ? re.targetDistanceMi : (remembered ? remembered.distanceMi : null),
+      durationSec: re.targetDurationSec!=null ? re.targetDurationSec : (remembered ? remembered.durationSec : null),
+      rpe:null, completed:false
+    });
+  }
+  return rows;
+}
+// freeformTitle names a Quick Start session (e.g. "Walking") when there's no
+// routine — ignored if routine is set, since the routine's own name wins.
+function startWorkoutSession(routine, freeformTitle){
   const exercises = routine ? routine.exercises.map((re,i)=>{
     const ex = exerciseById(re.exerciseId);
     return {id:Date.now()+Math.random()+i, exerciseId:re.exerciseId, exerciseTitle:ex?ex.name:'',
-      supersetId:null, notes:re.notes||'', order:i, sets:[]};
+      supersetId:null, notes:re.notes||'', order:i, sets:plannedSetRows(re)};
   }) : [];
   state.activeWorkoutSession = {
     id: Date.now()+Math.random(),
-    title: routine ? routine.name : 'Workout',
+    title: routine ? routine.name : (freeformTitle || 'Workout'),
     routineId: routine ? routine.id : null,
     startTime: Date.now(), endTime: null, description:'',
     status:'running', pausedAccumMs:0, pausedAt:null,
+    caloriesBurnedOverride: null, // null = show the live auto-estimate; a number once the user edits it — see estimateWorkoutCalories
     exercises
   };
   saveState(); render();
@@ -990,6 +1053,17 @@ function finishWorkoutSession(discard){
   if(discard){ state.activeWorkoutSession=null; saveState(); render(); return; }
   if(s.status==='paused'){ s.pausedAccumMs += Date.now()-s.pausedAt; s.pausedAt=null; }
   s.endTime = Date.now(); s.status = 'completed';
+  // Finalize whichever the user was actually looking at — their own typed
+  // override if they edited it, otherwise the live auto-estimate — into the
+  // permanent caloriesBurned field, then drop the live-only override field.
+  s.caloriesBurned = s.caloriesBurnedOverride!=null ? s.caloriesBurnedOverride : estimateWorkoutCalories(s);
+  delete s.caloriesBurnedOverride;
+  // Drop any set rows never actually checked off — pre-populated planned rows
+  // (see plannedSetRows) or an extra "+ Add Set" row left blank — so an
+  // unfinished plan doesn't get recorded as if it happened; same for an
+  // exercise added but never actually performed.
+  s.exercises.forEach(ex=>{ ex.sets = ex.sets.filter(set=>set.completed); ex.sets.forEach((set,i)=>set.index=i); });
+  s.exercises = s.exercises.filter(ex=>ex.sets.length>0);
   const iso = isoDate(new Date(s.startTime));
   getDay(iso).workouts.push(s);
   state.activeWorkoutSession = null;
@@ -999,29 +1073,51 @@ function finishWorkoutSession(discard){
 function addExerciseToActiveSession(exerciseId){
   const s = state.activeWorkoutSession; if(!s) return;
   const ex = exerciseById(exerciseId); if(!ex) return;
-  s.exercises.push({id:Date.now()+Math.random(), exerciseId, exerciseTitle:ex.name, supersetId:null, notes:'', order:s.exercises.length, sets:[]});
+  s.exercises.push({id:Date.now()+Math.random(), exerciseId, exerciseTitle:ex.name, supersetId:null, notes:'', order:s.exercises.length,
+    sets:plannedSetRows({exerciseId, targetSets:1, targetReps:null, targetWeightLb:null, targetDurationSec:null, targetDistanceMi:null})});
   saveState(); render();
 }
-// setData fields are all optional — whatever wasn't relevant for this
-// exercise/set (e.g. no distance on a weight_reps lift) stays null, never 0,
-// consistent with how CSV-imported sets treat a blank field (see parseHevyCsv).
-function addSetToExercise(sessionExerciseId, setData){
+// Duplicates the previous row's values as a starting point for the new one —
+// matching Hevy's own "+ Add Set" behavior — rather than starting blank.
+function addSetToExercise(sessionExerciseId){
   const s = state.activeWorkoutSession; if(!s) return;
   const ex = s.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
-  const set = {
-    index: ex.sets.length, setType: setData.setType||'normal',
-    weightLb: setData.weightLb!=null && setData.weightLb!=='' ? Number(setData.weightLb) : null,
-    reps: setData.reps!=null && setData.reps!=='' ? Number(setData.reps) : null,
-    distanceMi: setData.distanceMi!=null && setData.distanceMi!=='' ? Number(setData.distanceMi) : null,
-    durationSec: setData.durationSec!=null && setData.durationSec!=='' ? Number(setData.durationSec) : null,
-    rpe: setData.rpe!=null && setData.rpe!=='' ? Number(setData.rpe) : null,
-    completed: true
-  };
-  ex.sets.push(set);
-  // Recalled as the default next time this exercise is logged (in the set-entry
-  // form), the same way selectFoodIntoForm() recalls foodMemory — never
-  // clobbering something the user's already typed.
-  state.exerciseMemory[ex.exerciseId] = {weightLb:set.weightLb, reps:set.reps, durationSec:set.durationSec, distanceMi:set.distanceMi, ts:Date.now()};
+  const last = ex.sets[ex.sets.length-1];
+  ex.sets.push({
+    index: ex.sets.length, setType:'normal',
+    weightLb: last?last.weightLb:null, reps: last?last.reps:null,
+    distanceMi: last?last.distanceMi:null, durationSec: last?last.durationSec:null,
+    rpe:null, completed:false
+  });
+  saveState(); render();
+}
+// Fired on every keystroke in a set's input cells — deliberately does NOT
+// render(), so typing doesn't fight re-render/focus loss (see the food-search
+// input's own comment on that); the row's values just live-update in state,
+// visible again once something else (checking a set, adding one) re-renders.
+function updateSetField(sessionExerciseId, setIndex, field, value){
+  const s = state.activeWorkoutSession; if(!s) return;
+  const ex = s.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
+  const set = ex.sets[setIndex]; if(!set) return;
+  set[field] = (value===''||value==null) ? null : Number(value);
+  saveState();
+}
+// Checking a set is what "counts" it — captures exerciseMemory (recalled as
+// the default for this exercise's next planned row/session, same as
+// selectFoodIntoForm recalls foodMemory) and is what finishWorkoutSession
+// uses to decide which rows actually happened.
+function toggleSetComplete(sessionExerciseId, setIndex){
+  const s = state.activeWorkoutSession; if(!s) return;
+  const ex = s.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
+  const set = ex.sets[setIndex]; if(!set) return;
+  set.completed = !set.completed;
+  if(set.completed) state.exerciseMemory[ex.exerciseId] = {weightLb:set.weightLb, reps:set.reps, durationSec:set.durationSec, distanceMi:set.distanceMi, ts:Date.now()};
+  saveState(); render();
+}
+function removeExerciseFromActiveSession(idx){
+  const s = state.activeWorkoutSession; if(!s) return;
+  s.exercises.splice(idx,1);
+  s.exercises.forEach((ex,i)=>ex.order=i);
   saveState(); render();
 }
 function removeSetFromExercise(sessionExerciseId, setIndex){
@@ -1030,6 +1126,16 @@ function removeSetFromExercise(sessionExerciseId, setIndex){
   ex.sets.splice(setIndex,1);
   ex.sets.forEach((st,i)=>st.index=i); // keep index contiguous after a mid-list delete
   saveState(); render();
+}
+function volumeLbForSession(s){
+  let total = 0;
+  s.exercises.forEach(ex=>ex.sets.forEach(set=>{
+    if(set.completed && set.weightLb!=null && set.reps!=null) total += set.weightLb*set.reps;
+  }));
+  return Math.round(total);
+}
+function completedSetCountForSession(s){
+  return s.exercises.reduce((sum,ex)=>sum+ex.sets.filter(set=>set.completed).length, 0);
 }
 // Codebase's first setInterval — deliberately scoped to a single textContent
 // write, never triggering its own render(), since render() is a full innerHTML
@@ -1055,14 +1161,40 @@ function wireWorkoutTimer(){
    top-level screen — bounded/linear (name -> add exercises -> set
    targets -> save) fits a modal, unlike the live session below.
    ========================================================= */
+// Mirrors recentFoods() exactly — sourced from exerciseMemory (last-used
+// timestamp per exercise), so "Recent Exercises" reflects what's actually
+// been logged, not just added to a routine.
+function recentExercises(limit){
+  return Object.entries(state.exerciseMemory)
+    .sort((a,b)=>(b[1].ts||0)-(a[1].ts||0))
+    .map(([id])=>exerciseById(id))
+    .filter(Boolean)
+    .slice(0, limit||5);
+}
+// Empty query shows Recent Exercises (matching Hevy's own "Add Exercise"
+// screen default, and this app's existing food-search convention) instead of
+// an empty list requiring the user to already know what to type.
 function getExerciseResults(query){
-  if(!query || !query.trim()) return [];
+  if(!query || !query.trim()) return recentExercises(8);
   const q = query.trim().toLowerCase();
   return allExercises().filter(e=>e.name.toLowerCase().includes(q)).slice(0,8);
 }
+// Small colored initials badge standing in for a real per-exercise
+// illustration — those are proprietary to apps like Hevy and not something
+// to reproduce; this is a deliberately simple, reliable substitute (no image
+// assets to bundle or fetch) rather than a real per-exercise graphic.
+const CATEGORY_BADGE = {
+  'Chest':['CH','var(--red)'], 'Back':['BK','var(--blue)'], 'Shoulders':['SH','var(--violet)'],
+  'Arms':['AR','var(--orange)'], 'Legs':['LG','var(--good)'], 'Core':['CO','var(--yellow)'],
+  'Cardio':['CD','var(--magenta)'], 'Full Body':['FB','var(--aqua)'], 'Other':['?','var(--muted)']
+};
+function exerciseThumbHtml(category){
+  const [label,color] = CATEGORY_BADGE[category] || CATEGORY_BADGE['Other'];
+  return `<div class="exercise-thumb" style="background:${color};">${label}</div>`;
+}
 // Which target-KPI fields make sense for a given exercise's metricType — a UI
-// hint only (see the EXERCISE_DB comment); logSetFieldsHtml (live session)
-// mirrors this same field selection for the actual set-entry form.
+// hint only (see the EXERCISE_DB comment); setFieldsForMetricType (live
+// session set table) mirrors this same field selection for actual set entry.
 function targetFieldsForMetricType(mt){
   const fields = [];
   if(mt==='weight_reps'||mt==='reps_only') fields.push('targetReps');
@@ -1117,12 +1249,11 @@ function renderRoutineBuilderDom(){
         <label>Add exercise</label>
         <input type="text" id="rb-search" placeholder="Search exercises…" value="${escapeHtml(routineBuilderQuery)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
       </div>
-      ${routineBuilderQuery ? `
-        <div class="search-list ${results.length?'':'hidden'}" id="rb-results">
-          ${results.map((e,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${escapeHtml(e.name)}</div><div class="m">${escapeHtml(e.category)}</div></div>`).join('')}
-        </div>
-        ${results.length===0 ? `<button class="btn-secondary" id="rb-add-custom" type="button" style="margin-top:6px;">+ Add "${escapeHtml(routineBuilderQuery.trim())}" as custom exercise</button>` : ''}
-      ` : ''}
+      ${!routineBuilderQuery && results.length ? `<div class="muted" style="margin:6px 0 -2px;">Recent Exercises</div>` : ''}
+      <div class="search-list ${results.length?'':'hidden'}" id="rb-results">
+        ${results.map((e,i)=>`<div class="search-item" data-idx="${i}" style="display:flex;align-items:center;gap:10px;">${exerciseThumbHtml(e.category)}<div><div class="n">${escapeHtml(e.name)}</div><div class="m">${escapeHtml(e.category)}</div></div></div>`).join('')}
+      </div>
+      ${routineBuilderQuery && results.length===0 ? `<button class="btn-secondary" id="rb-add-custom" type="button" style="margin-top:6px;">+ Add "${escapeHtml(routineBuilderQuery.trim())}" as custom exercise</button>` : ''}
       ${draft.exercises.length ? `
         <div style="margin-top:14px;">
           ${draft.exercises.map((re,i)=>{
@@ -1207,6 +1338,17 @@ function deleteRoutine(id){
   state.routines = state.routines.filter(r=>r.id!==id);
   saveState(); render();
 }
+// Moves draggedId to sit where targetId currently is — called once at the end
+// of a drag gesture (see the ROUTINE TILE REORDER script near the bottom of
+// the file), not live during the drag itself.
+function reorderRoutines(draggedId, targetId){
+  const fromIdx = state.routines.findIndex(r=>r.id===draggedId);
+  const toIdx = state.routines.findIndex(r=>r.id===targetId);
+  if(fromIdx<0 || toIdx<0 || fromIdx===toIdx) return;
+  const [moved] = state.routines.splice(fromIdx,1);
+  state.routines.splice(toIdx,0,moved);
+  saveState(); render();
+}
 
 /* =========================================================
    WORKOUT SCREEN UI — lives inside the Log screen's Activity
@@ -1214,36 +1356,144 @@ function deleteRoutine(id){
    every OTHER screen keeps an in-progress session reachable "at any
    time" without needing its own nav-level screen.
    ========================================================= */
-// One full card per routine — name, a comma-joined list of its exercises as a
-// subtitle (clamped to 2 lines), and a full-width Start button, matching how
-// Hevy's own Workout tab shows routines. Edit/delete live in Settings >
-// Workouts rather than duplicated here as a per-card menu.
-function routineCardHtml(r){
+// Compact tile per routine (2-up grid) rather than one full-width card each,
+// so several routines fit on screen at once — name + a small red "Go!"
+// button (easy to associate with "start", per feedback) instead of a
+// full-width Start button, and a clamped exercise-list subtitle. Edit/delete
+// live in Settings > Workouts rather than duplicated here as a per-tile menu.
+// data-routine-tile is the reorder script's drop-target lookup key; the grip
+// (data-drag-handle) is what actually starts a drag, so tapping the rest of
+// the tile (Go!, the name) never gets mistaken for a reorder gesture.
+function routineTileHtml(r){
   const exerciseNames = r.exercises.map(re=>{
     const ex = exerciseById(re.exerciseId);
     return ex ? ex.name : re.exerciseId;
   }).join(', ');
-  return `<div class="card">
-    <h3 style="text-transform:none;letter-spacing:0;color:var(--text);font-size:17px;margin-bottom:4px;">${escapeHtml(r.name)}</h3>
-    <div class="muted" style="margin-bottom:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${exerciseNames ? escapeHtml(exerciseNames) : 'No exercises yet'}</div>
-    <button class="btn-primary" data-start-routine="${r.id}" type="button">Start Routine</button>
+  return `<div class="routine-tile" data-routine-tile="${r.id}">
+    <div class="routine-tile-head">
+      <button class="routine-go-btn" data-start-routine="${r.id}" type="button" title="Start routine">Go!</button>
+      <h4>${escapeHtml(r.name)}</h4>
+      <span class="drag-handle" data-drag-handle="${r.id}">⠿</span>
+    </div>
+    <div class="sub">${exerciseNames ? escapeHtml(exerciseNames) : 'No exercises yet'}</div>
   </div>`;
 }
-// No routine started yet — pick a routine to start, or start freeform.
+// Routine tiles only — the merged Quick Start popup (timed general activity
+// + manual steps/min/distance entry) is a separate modal (renderQuickStartModal),
+// since it's shown regardless of whether any routines exist.
 function workoutsQuickCard(){
-  return `
-    ${state.routines.map(routineCardHtml).join('')}
-    <div class="card">
-      <div class="card-head"><h3>${state.routines.length ? 'More' : 'Workouts'}</h3><button class="iconbtn" id="btn-new-routine" title="New routine">+</button></div>
-      ${state.routines.length===0 ? `<div class="muted" style="margin-bottom:10px;">No routines yet — import from Hevy in Settings, or build one.</div>` : ''}
-      <button class="btn-secondary" id="btn-quick-start-workout">Quick start (freeform)</button>
-    </div>
-  `;
+  if(state.routines.length===0) return '';
+  return `<div class="routine-tile-grid">${state.routines.map(routineTileHtml).join('')}</div>`;
 }
-// Which set-entry fields make sense for a given exercise's metricType — the
-// live-logging counterpart to routineTargetFieldsHtml's target-KPI fields
-// (a "number of sets" field doesn't apply to logging ONE set, so this is a
-// deliberately different field list, not a reuse of targetFieldsForMetricType).
+// Common activity types for a timed Quick Start session (no routine/exercise
+// breakdown, just elapsed time — a brisk walk, a bike ride, a yoga class).
+// "Other" is a catch-all rather than free text, keeping this a fixed pick
+// list like the rest of the app's Log Activity form.
+const QUICK_START_TYPES = ['Walking','Indoor Bike','Outdoor Bike','Running','Weight Routine','Pilates/Yoga','Hiking','Swimming','Elliptical','Rowing','Stairmaster','Other'];
+// Last 5 picks float to the top of the dropdown, most-recent-first, followed
+// by the rest of the fixed list in its normal order — so a repeat choice is
+// one tap away without hiding the full list.
+function orderedQuickStartTypes(){
+  const recent = state.recentQuickStartTypes.filter(t=>QUICK_START_TYPES.includes(t));
+  return [...recent, ...QUICK_START_TYPES.filter(t=>!recent.includes(t))];
+}
+function recordQuickStartType(type){
+  state.recentQuickStartTypes = [type, ...state.recentQuickStartTypes.filter(t=>t!==type)].slice(0,5);
+}
+let quickStartMode = 'timer'; // 'timer' | 'manual' — which half of the modal shows
+let quickStartWrap = null;    // the modal's own wrapper element, while open
+// Replaces the old separate "More" (freeform start) and "Activity" (manual
+// steps/min/distance) cards with a single popup offering both, via a seg
+// toggle, opened from the lightning-bolt topbar button — timed Quick Start
+// sessions count toward the Activity goal through the normal workout path
+// (effectiveActiveMin), manual entry still writes straight into d.activity
+// exactly as it always has. Follows the routine-builder modal's own pattern:
+// a self-contained wrapper appended to document.body with its own
+// re-render/handler-wiring loop, rather than reusing the main render()/
+// attachHandlers() pipeline (which is scoped to #app and would double-bind
+// listeners on unrelated on-screen elements if called again for a popup).
+function renderQuickStartModal(){
+  quickStartMode = 'timer'; // always opens on the timer tab
+  quickStartWrap = document.createElement('div');
+  document.body.appendChild(quickStartWrap);
+  renderQuickStartDom();
+}
+function closeQuickStartModal(){
+  if(quickStartWrap){ quickStartWrap.remove(); quickStartWrap=null; }
+}
+function renderQuickStartDom(){
+  const types = orderedQuickStartTypes();
+  quickStartWrap.innerHTML = `
+  <div class="modal-backdrop center">
+    <div class="modal">
+      <div class="row" style="margin-bottom:10px;"><h2 style="margin:0;">Quick Start</h2><button class="iconbtn" id="qs-close">✕</button></div>
+      <div class="seg" id="qs-mode-seg">
+        <button data-v="timer" class="${quickStartMode==='timer'?'active':''}">Time a workout</button>
+        <button data-v="manual" class="${quickStartMode==='manual'?'active':''}">Enter manually</button>
+      </div>
+      ${quickStartMode==='timer' ? `
+        <div class="field" style="margin-top:14px;">
+          <label>Activity type</label>
+          <select id="qs-type-select">${types.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select>
+        </div>
+        <button class="btn-primary" id="btn-quickstart-start" type="button">Start</button>
+      ` : `
+        <div class="field-row" style="margin-top:14px;">
+          <div class="field"><label>Steps</label><input type="number" id="act-steps" placeholder="Not entered"></div>
+          <div class="field"><label>Active minutes</label><input type="number" id="act-min" placeholder="Not entered"></div>
+        </div>
+        <div class="field"><label>Distance (mi)</label><input type="number" step="0.1" id="act-dist" placeholder="Not entered"></div>
+        <button class="btn-primary" id="btn-save-activity" type="button">Log activity</button>
+        <div style="height:8px"></div>
+        ${state.googleHealth.refreshToken
+          ? `<div class="row"><span class="muted">Google Health connected — syncs automatically</span><button class="iconbtn" id="btn-connect-fit" title="Sync now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg></button></div>`
+          : `<button class="btn-secondary" id="btn-connect-fit" type="button">Connect Google Health (optional)</button>`}
+      `}
+    </div>
+  </div>`;
+  wireQuickStartHandlers();
+}
+function wireQuickStartHandlers(){
+  const wrap = quickStartWrap;
+  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeQuickStartModal(); });
+  wrap.querySelector('#qs-close').addEventListener('click', closeQuickStartModal);
+  wrap.querySelector('#qs-mode-seg').querySelectorAll('button').forEach(b=>{
+    b.addEventListener('click', ()=>{ quickStartMode=b.dataset.v; renderQuickStartDom(); });
+  });
+  const startBtn = wrap.querySelector('#btn-quickstart-start');
+  if(startBtn) startBtn.addEventListener('click', ()=>{
+    const type = wrap.querySelector('#qs-type-select').value;
+    recordQuickStartType(type);
+    closeQuickStartModal();
+    startWorkoutSession(null, type);
+  });
+  const saveActBtn = wrap.querySelector('#btn-save-activity');
+  if(saveActBtn) saveActBtn.addEventListener('click', ()=>{
+    // Same additive logic as the main Log Activity form's save handler
+    // (index.html's other #btn-save-activity, in attachHandlers) — kept as
+    // its own small copy here rather than shared, since this one operates
+    // within the modal's own wrap rather than the global #app tree.
+    const d = getDay(today());
+    const stepsRaw = wrap.querySelector('#act-steps').value;
+    const minRaw = wrap.querySelector('#act-min').value;
+    const distRaw = wrap.querySelector('#act-dist').value;
+    if(stepsRaw===''&&minRaw===''&&distRaw===''){ alert('Enter at least one value.'); return; }
+    const steps = stepsRaw!=='' ? Number(stepsRaw) : d.activity.steps;
+    const activeMin = minRaw!=='' ? Number(minRaw) : d.activity.activeMin;
+    const distanceMi = distRaw!=='' ? Number(distRaw) : d.activity.distanceMi;
+    d.activity = {steps, activeMin, distanceMi, kcal: estimateActivityKcal(steps, activeMin), source:'manual'};
+    saveState();
+    closeQuickStartModal();
+    render();
+    checkGoalsAndCelebrate(today());
+  });
+  const connectFit = wrap.querySelector('#btn-connect-fit');
+  if(connectFit) connectFit.addEventListener('click', ()=>{
+    state.googleHealth.refreshToken ? fetchGoogleHealthToday(false) : startGoogleHealthAuth();
+  });
+}
+// Which value fields a set row shows, per exercise metricType — shared by the
+// live set table here and target-KPI inference elsewhere.
 function setFieldsForMetricType(mt){
   if(mt==='weight_reps') return ['weightLb','reps'];
   if(mt==='reps_only') return ['reps'];
@@ -1252,56 +1502,77 @@ function setFieldsForMetricType(mt){
   if(mt==='weight_distance') return ['weightLb','distanceMi'];
   return ['weightLb','reps'];
 }
-const SET_FIELD_LABELS = {weightLb:['Weight (lb)','45'], reps:['Reps','10'], durationSec:['Seconds','60'], distanceMi:['Miles','1']};
-// Prefills from exerciseMemory (last logged values for this exercise) the same
-// way selectFoodIntoForm() recalls foodMemory — a starting point, not locked.
-function logSetFieldsHtml(idx, mt, remembered){
-  const fields = setFieldsForMetricType(mt);
-  return `<div class="field-row" style="flex-wrap:wrap;">${fields.map(f=>{
-    const [label,placeholder] = SET_FIELD_LABELS[f];
-    const step = f==='distanceMi' ? ' step="0.1"' : '';
-    const remVal = remembered && remembered[f]!=null ? remembered[f] : '';
-    return `<div class="field" style="flex:1;min-width:90px;"><label>${label}</label><input type="number"${step} id="ws-set-${idx}-${f}" placeholder="${placeholder}" value="${remVal}"></div>`;
-  }).join('')}</div>`;
-}
+const SET_FIELD_COL_LABELS = {weightLb:'LBS', reps:'REPS', durationSec:'SEC', distanceMi:'MI'};
+// A Hevy-style "Log Workout" set table: SET / PREV / [value columns] / check
+// / delete. Rows are pre-populated (see plannedSetRows) rather than typed
+// fresh each time — editing a cell live-updates state (updateSetField, no
+// re-render, so typing doesn't fight focus); the checkmark is what "counts"
+// a row (toggleSetComplete) and is what finishWorkoutSession keeps.
 function activeSessionExerciseHtml(ex, idx){
   const template = exerciseById(ex.exerciseId);
   const mt = template ? template.metricType : 'weight_reps';
+  const fields = setFieldsForMetricType(mt);
   const remembered = state.exerciseMemory[ex.exerciseId];
+  const prevLabel = remembered
+    ? (fields.length===1 ? `x ${remembered[fields[0]]??'—'}` : `${remembered[fields[0]]??'—'} x ${remembered[fields[1]]??'—'}`)
+    : '—';
   return `<div class="routine-exercise-row">
-    <div class="list-row" style="padding-bottom:4px;"><span class="name" data-exercise-history="${ex.exerciseId}" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;">${escapeHtml(ex.exerciseTitle)}</span></div>
-    ${ex.sets.map((set,si)=>`<div class="row" style="font-size:13px;padding:4px 0;">
-      <span class="muted">Set ${si+1}${set.setType!=='normal'?' ('+set.setType+')':''}</span>
-      <span>${[set.weightLb!=null?set.weightLb+' lb':null, set.reps!=null?set.reps+' reps':null, set.durationSec!=null?formatElapsed(set.durationSec*1000)+' min':null, set.distanceMi!=null?set.distanceMi+' mi':null].filter(Boolean).join(' · ')}</span>
-      <button class="del" data-rm-set="${idx}:${si}" type="button">×</button>
+    <div class="list-row" style="padding-bottom:2px;">
+      <span class="name" data-exercise-history="${ex.exerciseId}" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;">${escapeHtml(ex.exerciseTitle)}</span>
+      <button class="del" data-rm-exercise-session="${idx}" type="button" title="Remove exercise">×</button>
+    </div>
+    <input type="text" class="exercise-notes-input" placeholder="Add notes here…" data-exercise-notes="${idx}" value="${escapeHtml(ex.notes||'')}">
+    <div class="set-table-head">
+      <span style="flex:0 0 22px;">SET</span><span style="flex:0 0 48px;">PREV</span>
+      ${fields.map(f=>`<span style="flex:1;">${SET_FIELD_COL_LABELS[f]}</span>`).join('')}
+      <span style="flex:0 0 28px;">✓</span><span style="flex:0 0 16px;"></span>
+    </div>
+    ${ex.sets.map((set,si)=>`
+    <div class="set-table-row">
+      <span style="flex:0 0 22px;font-weight:700;text-align:center;">${si+1}</span>
+      <span class="muted" style="flex:0 0 48px;font-size:11.5px;text-align:center;">${prevLabel}</span>
+      ${fields.map(f=>`<input type="number" ${f==='distanceMi'?'step="0.1"':''} data-set-field="${idx}:${si}:${f}" value="${set[f]!=null?set[f]:''}">`).join('')}
+      <button class="set-check${set.completed?' checked':''}" data-toggle-set="${idx}:${si}" type="button" style="flex:0 0 28px;">✓</button>
+      <button class="del" data-rm-set="${idx}:${si}" type="button" style="flex:0 0 16px;font-size:14px;padding:0;">×</button>
     </div>`).join('')}
-    ${logSetFieldsHtml(idx, mt, remembered)}
-    <button class="btn-secondary" data-log-set="${idx}" type="button" style="margin-top:2px;">+ Log set</button>
+    <button class="btn-secondary" data-add-set="${idx}" type="button" style="margin-top:8px;">+ Add Set</button>
   </div>`;
 }
 let workoutSessionSearchQuery = ''; // exercise search box inside an active session card
 function activeWorkoutSessionCard(){
   const s = state.activeWorkoutSession;
   const wsResults = getExerciseResults(workoutSessionSearchQuery);
+  const volume = volumeLbForSession(s), setCount = completedSetCountForSession(s);
+  // Live auto-estimate (recomputed every render, so it tracks a growing
+  // duration) unless the user's typed their own override — see
+  // estimateWorkoutCalories's own comment for the formula and its limits.
+  const displayCal = s.caloriesBurnedOverride!=null ? s.caloriesBurnedOverride : estimateWorkoutCalories(s);
   return `<div class="card">
-    <div class="card-head"><h3>${escapeHtml(s.title)}</h3>
-      <span class="inline-stat">${s.status==='paused' ? 'Paused' : `<span id="workout-elapsed">${formatElapsed(workoutDurationMs(s))}</span>`}</span>
+    <div class="card-head">
+      <h3 style="text-transform:none;letter-spacing:0;color:var(--text);font-size:17px;">${escapeHtml(s.title)}</h3>
+      <div style="display:flex;gap:6px;align-items:center;">
+        ${s.status==='running'
+          ? `<button class="iconbtn" id="btn-pause-workout" title="Pause" type="button">⏸</button>`
+          : `<button class="iconbtn" id="btn-resume-workout" title="Resume" type="button">▶</button>`}
+        <button class="iconbtn" id="btn-discard-workout" title="Discard workout" type="button">✕</button>
+        <button class="btn-primary" id="btn-finish-workout" style="width:auto;padding:8px 16px;" type="button">Finish</button>
+      </div>
     </div>
-    <div class="row" style="margin-bottom:10px;gap:10px;">
-      ${s.status==='running'
-        ? `<button class="btn-secondary" id="btn-pause-workout" style="width:auto;flex:1;" type="button">Pause</button>`
-        : `<button class="btn-secondary" id="btn-resume-workout" style="width:auto;flex:1;" type="button">Resume</button>`}
-      <button class="btn-primary" id="btn-finish-workout" style="width:auto;flex:1;" type="button">Finish & Save</button>
+    <div class="row" style="margin-bottom:14px;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+      <div><div class="muted" style="font-size:11px;">Duration</div><div style="font-weight:700;color:var(--blue);">${s.status==='paused'?'Paused':`<span id="workout-elapsed">${formatElapsed(workoutDurationMs(s))}</span>`}</div></div>
+      <div><div class="muted" style="font-size:11px;">Volume</div><div style="font-weight:700;">${volume.toLocaleString()} lbs</div></div>
+      <div><div class="muted" style="font-size:11px;">Sets</div><div style="font-weight:700;">${setCount}</div></div>
+      <div><div class="muted" style="font-size:11px;">Calories (est.)</div><input type="number" id="workout-calories-input" value="${displayCal}" style="width:56px;padding:4px 2px;text-align:center;border-radius:6px;border:1px solid var(--border);background:var(--page);color:var(--text);font-size:14px;font-weight:700;"></div>
     </div>
     ${s.exercises.map((ex,i)=>activeSessionExerciseHtml(ex,i)).join('')}
     <div class="field" style="margin-top:10px;">
       <label>Add exercise</label>
       <input type="text" id="ws-search" placeholder="Search exercises…" value="${escapeHtml(workoutSessionSearchQuery)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
     </div>
-    ${workoutSessionSearchQuery ? `<div class="search-list ${wsResults.length?'':'hidden'}" id="ws-results">
-      ${wsResults.map((e,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${escapeHtml(e.name)}</div><div class="m">${escapeHtml(e.category)}</div></div>`).join('')}
-    </div>` : ''}
-    <button class="btn-secondary" id="btn-discard-workout" style="margin-top:14px;color:var(--critical);" type="button">Discard workout</button>
+    ${!workoutSessionSearchQuery && wsResults.length ? `<div class="muted" style="margin:6px 0 -2px;">Recent Exercises</div>` : ''}
+    <div class="search-list ${wsResults.length?'':'hidden'}" id="ws-results">
+      ${wsResults.map((e,i)=>`<div class="search-item" data-idx="${i}" style="display:flex;align-items:center;gap:10px;">${exerciseThumbHtml(e.category)}<div><div class="n">${escapeHtml(e.name)}</div><div class="m">${escapeHtml(e.category)}</div></div></div>`).join('')}
+    </div>
   </div>`;
 }
 // Today's already-finished sessions — same "shown alongside the log form, delete
@@ -1311,7 +1582,7 @@ function todaysWorkoutsCard(){
   if(workouts.length===0) return '';
   return `<div class="card">
     <h3>Today's workouts</h3>
-    ${workouts.map(w=>`<div class="list-row"><div><div class="name">${escapeHtml(w.title)}</div><div class="sub">${w.exercises.length} exercise${w.exercises.length===1?'':'s'} · ${formatElapsed(workoutDurationMs(w))}</div></div><button class="del" data-del-workout="${w.id}" type="button">×</button></div>`).join('')}
+    ${workouts.map(w=>`<div class="list-row"><div><div class="name">${escapeHtml(w.title)}</div><div class="sub">${w.exercises.length} exercise${w.exercises.length===1?'':'s'} · ${formatElapsed(workoutDurationMs(w))} · ${(w.caloriesBurned||0).toLocaleString()} kcal</div></div><button class="del" data-del-workout="${w.id}" type="button">×</button></div>`).join('')}
   </div>`;
 }
 // Shown top-right on every OTHER screen (not the Activity log itself, where
@@ -1449,6 +1720,10 @@ function parseHevyCsv(text){
   // Resolved after all sets are collected, since metricType inference needs
   // the full set list for each exercise.
   workouts.forEach(w=>w.exercises.forEach(ex=>{ ex.exerciseId = reconcileImportedExercise(ex.exerciseTitle, ex.sets); }));
+  // Estimated the same way a live session's is (see estimateWorkoutCalories)
+  // — after exerciseId resolution, since metForSession needs each exercise's
+  // real metricType, not just its imported title.
+  workouts.forEach(w=>{ w.caloriesBurned = estimateWorkoutCalories(w); });
   return workouts;
 }
 // Hevy's CSV has no separate "routines" concept — what Hevy's own Workout tab
@@ -1714,17 +1989,54 @@ function estimateCaloriesBurned(p, steps, activeMinutes, distanceMi){
   const activeExtraKcal = (deltaMET*3.5*weightKg/200) * (activeMinutes||0);
   return Math.round(baseKcal + activeExtraKcal);
 }
-// Canonical "calories burned" for a day — prefers Google Health's own device-reported
-// figure when available (real, source-specific data), falling back to the combined
-// estimate above for manually-entered days. Used both for display and for the
-// weight-goal-impact math, so both stay consistent with each other.
-function caloriesBurnedForDay(iso){
+// The steps/active-minutes/distance-only portion of a day's calorie burn —
+// prefers Google Health's own device-reported figure when available (real,
+// source-specific data), falling back to the combined estimate above for
+// manually-entered days. Split out from caloriesBurnedForDay (which adds
+// workoutCaloriesForDay on top) so callers that want the breakdown
+// separately — see openActivityModal — can show each term.
+function activityOnlyCaloriesForDay(iso){
   const d = getDay(iso);
   if(d.activity.source==='googlehealth' && d.activity.kcal>0) return d.activity.kcal;
   return estimateCaloriesBurned(state.profile, d.activity.steps, d.activity.activeMin, d.activity.distanceMi);
-  // Deliberately does NOT fold in workout-session time — only the Activity
-  // GOAL was asked to count workouts (see effectiveActiveMin below), not
-  // calorie-burn estimation. Revisit if that scope ever expands.
+}
+// Rough MET (Metabolic Equivalent of Task) values per Quick Start activity
+// type, Compendium-of-Physical-Activities ballpark figures — precise pace/
+// intensity isn't tracked, so these are deliberately conservative middle-of-
+// the-range estimates, editable per session (see estimateWorkoutCalories).
+const ACTIVITY_MET = {
+  'Walking':3.5, 'Indoor Bike':7, 'Outdoor Bike':8, 'Running':9.8, 'Weight Routine':5,
+  'Pilates/Yoga':3, 'Hiking':6, 'Swimming':7, 'Elliptical':5, 'Rowing':7, 'Stairmaster':8, 'Other':4
+};
+// A routine/imported session has no single Quick Start type — infer a MET
+// from what its exercises actually are: mostly cardio-type (distance/
+// duration-based) exercises get a cardio MET, otherwise general resistance
+// training. Deliberately one MET per whole session rather than per exercise,
+// since individual exercises within a session don't have their own tracked
+// time segments, only the session's overall duration.
+function metForSession(s){
+  if(ACTIVITY_MET[s.title]) return ACTIVITY_MET[s.title];
+  const types = s.exercises.map(ex=>{ const t = exerciseById(ex.exerciseId); return t ? t.metricType : 'weight_reps'; });
+  const cardioCount = types.filter(mt=>mt==='distance_duration'||mt==='duration').length;
+  return types.length && cardioCount > types.length/2 ? 6 : 5;
+}
+// Standard MET formula: kcal = MET x bodyweight(kg) x duration(hours). This
+// is the AUTOMATIC estimate — the user can override it (session.caloriesBurnedOverride
+// while live, finalized into session.caloriesBurned at finish; see
+// finishWorkoutSession/activeWorkoutSessionCard).
+function estimateWorkoutCalories(s){
+  const p = state.profile; if(!p) return 0;
+  return Math.round(metForSession(s) * lbToKg(p.weightLb) * (workoutDurationMs(s)/3600000));
+}
+function workoutCaloriesForDay(iso){
+  return getDay(iso).workouts.reduce((sum,w)=>sum+(w.caloriesBurned||0), 0);
+}
+// Canonical "calories burned" for a day — activity (steps/minutes/distance)
+// plus every completed workout session's own (auto-estimated or
+// user-edited) calorie figure. Used both for display and for the
+// weight-goal-impact math, so both stay consistent with each other.
+function caloriesBurnedForDay(iso){
+  return activityOnlyCaloriesForDay(iso) + workoutCaloriesForDay(iso);
 }
 // Workout minutes are kept OUT of d.activity entirely (see startWorkoutSession)
 // because both existing writers of d.activity — the manual Log Activity save
@@ -2332,8 +2644,10 @@ function bigStatRow(value, label, sub){
 }
 function openActivityModal(){
   const t = today(), p = state.profile, d = getDay(t);
-  const fromActivity = caloriesBurnedForDay(t);
+  const fromActivity = activityOnlyCaloriesForDay(t);
+  const fromWorkouts = workoutCaloriesForDay(t);
   const resting = Math.round(bmr(p)*1.2); // sedentary baseline — burned just by being alive, before any tracked activity
+  const total = fromActivity + fromWorkouts + resting;
   const impact = weightGoalImpact([t]);
   const impactText = weightGoalImpactText(impact, p, 'today');
   openInfoModal('Activity', `
@@ -2341,7 +2655,7 @@ function openActivityModal(){
     ${bigStatRow(effectiveActiveMin(t), 'Active minutes', `/ ${p.activeMinGoal} goal`)}
     ${bigStatRow((d.activity.distanceMi||0).toFixed(1), 'Miles')}
     <div class="popup-stat">
-      <div class="v" style="font-size:19px;line-height:1.5;">${fromActivity.toLocaleString()} <span class="l" style="display:inline;">(Activity)</span> <span class="muted">+</span> ${resting.toLocaleString()} <span class="l" style="display:inline;">(Resting)</span> <span class="muted">=</span> ${(resting+fromActivity).toLocaleString()} <span class="l" style="display:inline;">(Total Calories Burned)</span></div>
+      <div class="v" style="font-size:17px;line-height:1.6;">${fromActivity.toLocaleString()} <span class="l" style="display:inline;">(Activity)</span> <span class="muted">+</span> ${fromWorkouts.toLocaleString()} <span class="l" style="display:inline;">(Workouts)</span> <span class="muted">+</span> ${resting.toLocaleString()} <span class="l" style="display:inline;">(Resting)</span> <span class="muted">=</span> ${total.toLocaleString()} <span class="l" style="display:inline;">(Total Calories Burned)</span></div>
     </div>
     ${impactText ? `<div class="feedback-item" style="margin-top:10px;"><div class="dot" style="background:var(--good)"></div><div>${impactText}</div></div>` : ''}
   `);
@@ -2724,7 +3038,7 @@ function screenLog(){
   const showNutrition = logFocus!=='activity';
   const showActivity = logFocus!=='nutrition';
   return `
-  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1>${activeSessionBannerHtml()}${installTopbarBtnHtml()}</div>
+  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1>${activeSessionBannerHtml()}${showActivity && !state.activeWorkoutSession ? `<button class="workout-banner-btn" id="btn-new-routine-topbar" type="button">New Routine</button><button class="workout-banner-btn" id="btn-quickstart-topbar" type="button" title="Quick Start" style="padding:7px 12px;">⚡</button>` : ''}${installTopbarBtnHtml()}</div>
   <div class="screen">
     ${showNutrition ? `<div class="card">
       <h3>Add food</h3>
@@ -2757,19 +3071,7 @@ function screenLog(){
     ${showActivity ? `
     ${state.activeWorkoutSession ? activeWorkoutSessionCard() : workoutsQuickCard()}
     ${todaysWorkoutsCard()}
-    <div class="card">
-      <div class="card-head"><h3>Activity</h3>${infoBtnHtml('fitsync')}</div>
-      <div class="field-row">
-        <div class="field"><label>Steps</label><input type="number" id="act-steps" placeholder="Not entered"></div>
-        <div class="field"><label>Active minutes</label><input type="number" id="act-min" placeholder="Not entered"></div>
-      </div>
-      <div class="field"><label>Distance (mi)</label><input type="number" step="0.1" id="act-dist" placeholder="Not entered"></div>
-      <button class="btn-primary" id="btn-save-activity">Log activity</button>
-      <div style="height:8px"></div>
-      ${state.googleHealth.refreshToken
-        ? `<div class="row"><span class="muted">Google Health connected — syncs automatically</span><button class="iconbtn" id="btn-connect-fit" title="Sync now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg></button></div>`
-        : `<button class="btn-secondary" id="btn-connect-fit">Connect Google Health (optional)</button>`}
-    </div>` : ''}
+    ` : ''}
   </div>`;
 }
 
@@ -3489,16 +3791,16 @@ function attachHandlers(){
     });
   });
   // WORKOUTS — routine picker / active session card, see screenLog's Activity section
-  const newRoutineBtn = document.getElementById('btn-new-routine');
+  const newRoutineBtn = document.getElementById('btn-new-routine-topbar');
   if(newRoutineBtn) newRoutineBtn.addEventListener('click', ()=>renderRoutineBuilderModal(null));
+  const quickStartTopbarBtn = document.getElementById('btn-quickstart-topbar');
+  if(quickStartTopbarBtn) quickStartTopbarBtn.addEventListener('click', renderQuickStartModal);
   document.querySelectorAll('[data-start-routine]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const routine = state.routines.find(r=>r.id===Number(btn.dataset.startRoutine));
       if(routine) startWorkoutSession(routine);
     });
   });
-  const quickStartBtn = document.getElementById('btn-quick-start-workout');
-  if(quickStartBtn) quickStartBtn.addEventListener('click', ()=>startWorkoutSession(null));
 
   const pauseBtn = document.getElementById('btn-pause-workout');
   if(pauseBtn) pauseBtn.addEventListener('click', pauseWorkoutSession);
@@ -3512,19 +3814,41 @@ function attachHandlers(){
   if(discardWorkoutBtn) discardWorkoutBtn.addEventListener('click', ()=>{
     if(confirm('Discard this workout? This cannot be undone.')) finishWorkoutSession(true);
   });
+  const calInput = document.getElementById('workout-calories-input');
+  if(calInput) calInput.addEventListener('input', ()=>{
+    state.activeWorkoutSession.caloriesBurnedOverride = calInput.value===''? null : Number(calInput.value);
+    saveState(); // no render() — avoid disrupting typing, same reasoning as updateSetField
+  });
 
-  document.querySelectorAll('[data-log-set]').forEach(btn=>{
+  document.querySelectorAll('[data-add-set]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      const idx = Number(btn.dataset.logSet);
-      const sessionEx = state.activeWorkoutSession.exercises[idx];
-      const template = exerciseById(sessionEx.exerciseId);
-      const mt = template ? template.metricType : 'weight_reps';
-      const setData = {};
-      setFieldsForMetricType(mt).forEach(f=>{
-        const el = document.getElementById(`ws-set-${idx}-${f}`);
-        setData[f] = el ? el.value : '';
-      });
-      addSetToExercise(sessionEx.id, setData);
+      const sessionEx = state.activeWorkoutSession.exercises[Number(btn.dataset.addSet)];
+      addSetToExercise(sessionEx.id);
+    });
+  });
+  document.querySelectorAll('[data-toggle-set]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [exIdx, setIdx] = btn.dataset.toggleSet.split(':').map(Number);
+      const sessionEx = state.activeWorkoutSession.exercises[exIdx];
+      toggleSetComplete(sessionEx.id, setIdx);
+    });
+  });
+  document.querySelectorAll('[data-set-field]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const [exIdx, setIdx, field] = inp.dataset.setField.split(':');
+      const sessionEx = state.activeWorkoutSession.exercises[Number(exIdx)];
+      updateSetField(sessionEx.id, Number(setIdx), field, inp.value);
+    });
+  });
+  document.querySelectorAll('[data-exercise-notes]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      state.activeWorkoutSession.exercises[Number(inp.dataset.exerciseNotes)].notes = inp.value;
+      saveState(); // no render() — avoid disrupting typing, same reasoning as updateSetField
+    });
+  });
+  document.querySelectorAll('[data-rm-exercise-session]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      if(confirm('Remove this exercise from the workout?')) removeExerciseFromActiveSession(Number(btn.dataset.rmExerciseSession));
     });
   });
   document.querySelectorAll('[data-rm-set]').forEach(btn=>{
@@ -3563,29 +3887,11 @@ function attachHandlers(){
     });
   });
 
-  // Fields start blank every time (see screenLog) rather than showing today's current
-  // totals, and are additive: leaving a field blank keeps whatever's already stored for
-  // that metric instead of zeroing it out, so you can log just steps, just active
-  // minutes, just distance, or any combination without clobbering the others (e.g. a
-  // Google Health sync's step count survives if you only fill in distance by hand).
-  const saveActBtn = document.getElementById('btn-save-activity');
-  if(saveActBtn) saveActBtn.addEventListener('click', ()=>{
-    const d = getDay(today());
-    const stepsRaw = document.getElementById('act-steps').value;
-    const minRaw = document.getElementById('act-min').value;
-    const distRaw = document.getElementById('act-dist').value;
-    if(stepsRaw===''&&minRaw===''&&distRaw===''){ alert('Enter at least one value.'); return; }
-    const steps = stepsRaw!=='' ? Number(stepsRaw) : d.activity.steps;
-    const activeMin = minRaw!=='' ? Number(minRaw) : d.activity.activeMin;
-    const distanceMi = distRaw!=='' ? Number(distRaw) : d.activity.distanceMi;
-    d.activity = {steps, activeMin, distanceMi, kcal: estimateActivityKcal(steps, activeMin), source:'manual'};
-    saveState(); render();
-    checkGoalsAndCelebrate(today());
-  });
-  const connectFit = document.getElementById('btn-connect-fit');
-  if(connectFit) connectFit.addEventListener('click', ()=>{
-    state.googleHealth.refreshToken ? fetchGoogleHealthToday(false) : startGoogleHealthAuth();
-  });
+  // Manual activity entry (Steps/Active minutes/Distance) and the Google
+  // Health connect button now live only inside the Quick Start popup — see
+  // wireQuickStartHandlers() for their handlers, which mirror the additive
+  // "blank field keeps whatever's already stored" logic this block used to
+  // have (removed here since #act-steps etc. no longer render in #app at all).
 
   // HISTORY tab
   const histSeg = document.getElementById('history-seg');
@@ -3903,6 +4209,51 @@ window.addEventListener('appinstalled', ()=>{
       indicator.classList.add('hidden');
     }
     startY = null;
+  });
+})();
+
+/* =========================================================
+   ROUTINE TILE REORDER — touch-drag on each tile's grip handle
+   (data-drag-handle). Mirrors the pull-to-refresh gesture above: direct
+   style/class changes during the drag itself (no render(), so it stays
+   smooth and doesn't fight the gesture mid-motion), one committed
+   reorderRoutines() + render() at touchend. The .dragging class applied the
+   instant touchstart fires is the "reactive pick-up" feedback — the tile
+   visibly lifts (shadow, slight fade) the moment a finger presses the
+   handle, before any movement has even happened.
+   ========================================================= */
+(function(){
+  let draggingId = null, draggingEl = null, startX = 0, startY = 0, dropTargetEl = null;
+  document.addEventListener('touchstart', e=>{
+    const handle = e.target.closest('[data-drag-handle]');
+    if(!handle) return;
+    const tile = handle.closest('.routine-tile');
+    if(!tile) return;
+    draggingId = Number(handle.dataset.dragHandle);
+    draggingEl = tile;
+    const touch = e.touches[0];
+    startX = touch.clientX; startY = touch.clientY;
+    draggingEl.classList.add('dragging');
+  }, {passive:true});
+  document.addEventListener('touchmove', e=>{
+    if(!draggingEl) return;
+    const touch = e.touches[0];
+    draggingEl.style.transform = `translate(${touch.clientX-startX}px, ${touch.clientY-startY}px)`;
+    if(dropTargetEl) dropTargetEl.classList.remove('drop-target');
+    const under = document.elementFromPoint(touch.clientX, touch.clientY);
+    const overTile = under && under.closest('.routine-tile');
+    dropTargetEl = (overTile && overTile!==draggingEl) ? overTile : null;
+    if(dropTargetEl) dropTargetEl.classList.add('drop-target');
+  }, {passive:true});
+  document.addEventListener('touchend', ()=>{
+    if(!draggingEl) return;
+    draggingEl.classList.remove('dragging');
+    draggingEl.style.transform = '';
+    if(dropTargetEl){
+      dropTargetEl.classList.remove('drop-target');
+      reorderRoutines(draggingId, Number(dropTargetEl.dataset.routineTile));
+    }
+    draggingEl = null; draggingId = null; dropTargetEl = null;
   });
 })();
 </script>
