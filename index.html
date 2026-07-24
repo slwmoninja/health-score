@@ -158,18 +158,19 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .routine-tile .sub{font-size:11px;color:var(--muted);display:-webkit-box;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
-.routine-go-btn{flex:0 0 auto;border:none;border-radius:10px;min-width:36px;height:36px;padding:0 8px;
-  background:linear-gradient(180deg, color-mix(in srgb, var(--critical) 100%, white 15%), var(--critical));
-  color:#fff;font-weight:800;font-size:12px;box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);
+.routine-go-btn{flex:0 0 auto;border:none;border-radius:9px;min-width:30px;height:30px;padding:0 6px;
+  background:linear-gradient(180deg, color-mix(in srgb, var(--good) 100%, white 15%), var(--good));
+  color:#fff;font-weight:800;font-size:10.5px;box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);
   transition:transform .08s, box-shadow .08s;}
 .routine-go-btn:active{transform:translateY(1px);box-shadow:0 1px 0 var(--btn-lo);}
-/* Drag handle for reordering tiles — touch-action:none stops the page from
-   also trying to scroll while a drag is in progress from this handle. */
-.drag-handle{flex:0 0 auto;color:var(--muted);font-size:15px;padding:2px 4px;touch-action:none;line-height:1;}
-/* Reactive "picked up" feedback the instant a drag starts, and a "landing
-   here" highlight on whichever tile is currently under the finger — both
-   applied as direct style/class changes during the gesture (see the
-   ROUTINE TILE REORDER script), not via render(), so dragging stays smooth. */
+.routine-delete-btn{position:absolute;top:4px;right:6px;border:none;background:none;color:var(--muted);
+  font-size:17px;line-height:1;padding:4px 6px;border-radius:6px;}
+.routine-delete-btn:active{color:var(--critical);}
+/* Reactive "picked up" feedback the instant a press starts anywhere on the
+   card, and a "landing here" highlight on whichever tile is currently under
+   the finger during a drag — applied as direct style/class changes during
+   the gesture (see the ROUTINE TILE REORDER script), not via render(), so
+   the interaction stays smooth. */
 .routine-tile.dragging{box-shadow:0 10px 24px rgba(0,0,0,.35);z-index:5;opacity:.96;}
 .routine-tile.drop-target{outline:2px dashed var(--blue);outline-offset:2px;}
 
@@ -224,6 +225,9 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
   box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);
   transition:transform .08s, box-shadow .08s;}
 .workout-banner-btn:active{transform:translateY(1px);box-shadow:0 1px 0 var(--btn-lo);}
+/* "New Routine" specifically — green, not the banner's usual urgent red
+   (that stays reserved for the "workout in progress" banner's own meaning) */
+.workout-banner-btn.green{background:linear-gradient(180deg, color-mix(in srgb, var(--good) 100%, white 15%), var(--good));}
 .btn-secondary{width:100%;padding:13px;border:1px solid var(--border);border-radius:11px;background:var(--surface);
   color:var(--text);font-size:15px;font-weight:600;
   box-shadow:0 3px 0 var(--btn-lo), inset 0 1px 0 var(--btn-hi);
@@ -1359,21 +1363,23 @@ function reorderRoutines(draggedId, targetId){
 // Compact tile per routine (2-up grid) rather than one full-width card each,
 // so several routines fit on screen at once — name + a small red "Go!"
 // button (easy to associate with "start", per feedback) instead of a
-// full-width Start button, and a clamped exercise-list subtitle. Edit/delete
-// live in Settings > Workouts rather than duplicated here as a per-tile menu.
-// data-routine-tile is the reorder script's drop-target lookup key; the grip
-// (data-drag-handle) is what actually starts a drag, so tapping the rest of
-// the tile (Go!, the name) never gets mistaken for a reorder gesture.
+// full-width Start button, and a clamped exercise-list subtitle.
+// data-routine-tile is the reorder script's lookup key (see the
+// ROUTINE TILE REORDER script) — the ENTIRE tile is the drag surface (press
+// and drag to reorder), with the "Go!" button and the small "x" delete
+// button as the two explicit exceptions (a plain confirm()-gated delete was
+// simpler and more reliable than a long-press gesture). Edit still lives in
+// Settings > Workouts.
 function routineTileHtml(r){
   const exerciseNames = r.exercises.map(re=>{
     const ex = exerciseById(re.exerciseId);
     return ex ? ex.name : re.exerciseId;
   }).join(', ');
   return `<div class="routine-tile" data-routine-tile="${r.id}">
+    <button class="routine-delete-btn" data-delete-routine="${r.id}" type="button" title="Delete routine" aria-label="Delete routine">&times;</button>
     <div class="routine-tile-head">
       <button class="routine-go-btn" data-start-routine="${r.id}" type="button" title="Start routine">Go!</button>
       <h4>${escapeHtml(r.name)}</h4>
-      <span class="drag-handle" data-drag-handle="${r.id}">⠿</span>
     </div>
     <div class="sub">${exerciseNames ? escapeHtml(exerciseNames) : 'No exercises yet'}</div>
   </div>`;
@@ -3038,7 +3044,7 @@ function screenLog(){
   const showNutrition = logFocus!=='activity';
   const showActivity = logFocus!=='nutrition';
   return `
-  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1>${activeSessionBannerHtml()}${showActivity && !state.activeWorkoutSession ? `<button class="workout-banner-btn" id="btn-new-routine-topbar" type="button">New Routine</button><button class="workout-banner-btn" id="btn-quickstart-topbar" type="button" title="Quick Start" style="padding:7px 12px;">⚡</button>` : ''}${installTopbarBtnHtml()}</div>
+  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1>${activeSessionBannerHtml()}${showActivity && !state.activeWorkoutSession ? `<button class="workout-banner-btn green" id="btn-new-routine-topbar" type="button">New Routine</button><button class="workout-banner-btn" id="btn-quickstart-topbar" type="button" title="Quick Start" style="padding:7px 10px;display:flex;align-items:center;"><svg viewBox="0 0 24 24" width="15" height="15" fill="#fff"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-8z"/></svg></button>` : ''}${installTopbarBtnHtml()}</div>
   <div class="screen">
     ${showNutrition ? `<div class="card">
       <h3>Add food</h3>
@@ -3801,6 +3807,9 @@ function attachHandlers(){
       if(routine) startWorkoutSession(routine);
     });
   });
+  document.querySelectorAll('[data-delete-routine]').forEach(btn=>{
+    btn.addEventListener('click', ()=>deleteRoutine(Number(btn.dataset.deleteRoutine)));
+  });
 
   const pauseBtn = document.getElementById('btn-pause-workout');
   if(pauseBtn) pauseBtn.addEventListener('click', pauseWorkoutSession);
@@ -4213,47 +4222,59 @@ window.addEventListener('appinstalled', ()=>{
 })();
 
 /* =========================================================
-   ROUTINE TILE REORDER — touch-drag on each tile's grip handle
-   (data-drag-handle). Mirrors the pull-to-refresh gesture above: direct
-   style/class changes during the drag itself (no render(), so it stays
-   smooth and doesn't fight the gesture mid-motion), one committed
-   reorderRoutines() + render() at touchend. The .dragging class applied the
-   instant touchstart fires is the "reactive pick-up" feedback — the tile
-   visibly lifts (shadow, slight fade) the moment a finger presses the
-   handle, before any movement has even happened.
+   ROUTINE TILE REORDER — the whole tile is the drag surface (except the
+   "Go!" and "x" delete buttons, excluded by touchstart's closest() check).
+   Mirrors the pull-to-refresh gesture above: direct style/class changes
+   during the drag itself (no render(), so it stays smooth and doesn't
+   fight the gesture mid-motion), one committed reorderRoutines() + render()
+   at touchend. Since the drag zone is now the entire card — not a small
+   grip icon — a small movement threshold gates when a touch actually
+   becomes a drag (only then do we add the .dragging "picked up" feedback
+   and preventDefault()), so an ordinary vertical swipe to scroll the page
+   over a tile still scrolls normally instead of being hijacked.
    ========================================================= */
 (function(){
-  let draggingId = null, draggingEl = null, startX = 0, startY = 0, dropTargetEl = null;
+  const DRAG_THRESHOLD = 10;
+  let candidateId = null, candidateEl = null, startX = 0, startY = 0;
+  let draggingId = null, draggingEl = null, dropTargetEl = null, isDragging = false;
   document.addEventListener('touchstart', e=>{
-    const handle = e.target.closest('[data-drag-handle]');
-    if(!handle) return;
-    const tile = handle.closest('.routine-tile');
+    if(e.target.closest('[data-start-routine], [data-delete-routine]')) return;
+    const tile = e.target.closest('.routine-tile');
     if(!tile) return;
-    draggingId = Number(handle.dataset.dragHandle);
-    draggingEl = tile;
+    candidateId = Number(tile.dataset.routineTile);
+    candidateEl = tile;
     const touch = e.touches[0];
     startX = touch.clientX; startY = touch.clientY;
-    draggingEl.classList.add('dragging');
+    isDragging = false;
   }, {passive:true});
   document.addEventListener('touchmove', e=>{
-    if(!draggingEl) return;
+    if(!candidateEl) return;
     const touch = e.touches[0];
-    draggingEl.style.transform = `translate(${touch.clientX-startX}px, ${touch.clientY-startY}px)`;
+    const dx = touch.clientX-startX, dy = touch.clientY-startY;
+    if(!isDragging){
+      if(Math.hypot(dx,dy) < DRAG_THRESHOLD) return;
+      isDragging = true;
+      draggingId = candidateId; draggingEl = candidateEl;
+      draggingEl.classList.add('dragging');
+    }
+    e.preventDefault();
+    draggingEl.style.transform = `translate(${dx}px, ${dy}px)`;
     if(dropTargetEl) dropTargetEl.classList.remove('drop-target');
     const under = document.elementFromPoint(touch.clientX, touch.clientY);
     const overTile = under && under.closest('.routine-tile');
     dropTargetEl = (overTile && overTile!==draggingEl) ? overTile : null;
     if(dropTargetEl) dropTargetEl.classList.add('drop-target');
-  }, {passive:true});
+  }, {passive:false});
   document.addEventListener('touchend', ()=>{
-    if(!draggingEl) return;
-    draggingEl.classList.remove('dragging');
-    draggingEl.style.transform = '';
-    if(dropTargetEl){
-      dropTargetEl.classList.remove('drop-target');
-      reorderRoutines(draggingId, Number(dropTargetEl.dataset.routineTile));
+    if(draggingEl){
+      draggingEl.classList.remove('dragging');
+      draggingEl.style.transform = '';
+      if(dropTargetEl){
+        dropTargetEl.classList.remove('drop-target');
+        reorderRoutines(draggingId, Number(dropTargetEl.dataset.routineTile));
+      }
     }
-    draggingEl = null; draggingId = null; dropTargetEl = null;
+    candidateId = null; candidateEl = null; draggingId = null; draggingEl = null; dropTargetEl = null; isDragging = false;
   });
 })();
 </script>
