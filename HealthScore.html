@@ -371,20 +371,28 @@ function saveState(){
 // action in the app already calls synchronously from its own click handler —
 // no separate gesture needed, it rides along on whatever the user just tapped.
 //
-// Throttled to roughly once every few minutes of activity rather than every
-// single save: browsers can't overwrite an existing download (confirmed
-// on-device as a hard "file already exists" error, not a silent rename), so
-// firing on every field save would flood Downloads with one new file each
-// time. The "Back up now" button in Settings' Data card bypasses the throttle
-// for an on-demand fresh copy right before going to clear history.
+// Throttled well beyond "every field save" for a second reason on top of the
+// filename-collision one: every successful download triggers the browser's
+// own "Download complete"/"File saved" notification, which — same as
+// alert()/confirm() — is UI this page cannot suppress or make silent no
+// matter what; that's deliberate on the browser's part so a site can never
+// silently drop files on a device. With the manifest/service-worker install
+// path and the verified navigator.storage.persist() request (see below) now
+// doing the primary job of keeping data from being silently evicted, this
+// download is a rare fallback rather than the main defense, so it's fine for
+// it to be infrequent — a much longer throttle trades a slightly wider
+// worst-case data-loss window for far fewer of those unsuppressable
+// notifications during normal use. The "Back up now" button in Settings'
+// Data card bypasses the throttle for an on-demand fresh copy right before
+// going to clear history.
 //
 // Flip this off before a production rollout and evaluate a real solution then
 // (e.g. cloud-backed sync, which trades this privacy property for true
 // zero-touch restore) — this is a testing-phase shortcut, not something to
 // ship broadly.
 const AUTO_BACKUP_DOWNLOAD_ENABLED = true;
-const AUTO_BACKUP_THROTTLE_MS = 3*60*1000;        // when "Reduce backup files" is off
-const AUTO_BACKUP_THROTTLE_MS_MINIMIZED = 30*60*1000; // when it's on (default)
+const AUTO_BACKUP_THROTTLE_MS = 20*60*1000;         // when "Reduce backup files" is off
+const AUTO_BACKUP_THROTTLE_MS_MINIMIZED = 4*60*60*1000; // when it's on (default)
 let lastAutoBackupJson = null;
 let lastAutoBackupAttemptAt = 0;
 function runAutoBackupDownload(force){
@@ -1390,7 +1398,7 @@ const INFO_CONTENT = {
   projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
   trend: ['Score trend', `Under "This Week", your daily Activity and Nutrition scores (0-100) for the last 7 days. Under "Monthly", your Total Score and Weight for each of the last 12 months (labeled by month letter — a January point also shows its year so a 12-month span crossing a new year stays unambiguous) — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value, or tap elsewhere on the chart for the full data table.`],
   fitsync: ['Connect your Fitbit', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Head to Settings to connect it: finding your Fitbit's Google account, getting approved, and connecting. After you connect once, it re-syncs automatically in the background — no further action needed unless you reconnect a different account.<br><br><strong>Why do I have to wait for approval before I can connect?</strong> Everyone connects through one shared Google project the app owner controls, and Google caps how many outside accounts can use it before requiring a full verification review. Adding each person by hand keeps it under that limit — it's a one-time, ~30-second step on the app owner's end.<br><br><strong>My Fitbit's Google account isn't a Gmail address — is that right?</strong> Yes, that's normal. A Google account can be created with any email as its login, including Outlook, Hotmail, or Yahoo addresses. Use whatever email Fitbit's app shows you, even if it doesn't end in @gmail.com.<br><br><strong>I connected the wrong account.</strong> In Settings, tap "Reconnect & sync now" — Google always shows the account-chooser screen again, so just pick the correct email that time.<br><br><strong>App owner only:</strong> to approve a new person, go to <strong>console.cloud.google.com</strong> → your project → <strong>APIs & Services → OAuth consent screen → Audience</strong> → <strong>Add users</strong> under Test users, paste in the email they sent you, save. Then send them the project's <strong>Client ID</strong> and <strong>Client Secret</strong> from <strong>APIs & Services → Credentials</strong> (whatever channel you like — text, email) so they can paste them into Settings on their own device. If you haven't created the project yet, use the same Credentials/OAuth-consent-screen path to set one up, with redirect URI <strong>${location.origin}${location.pathname}</strong> and the Google Health API enabled.`],
-  savefreq: ['Save frequency', `<strong>On</strong>: backup every ~30 min. <strong>Off</strong>: every ~3 min.`]
+  savefreq: ['Save frequency', `<strong>On</strong>: backup every ~4 hours. <strong>Off</strong>: every ~20 min. Either way, each backup triggers your browser's own "Download complete" notification — that's the browser, not Health Score, and can't be silenced from here.`]
 };
 function wireInfoButtons(root){
   (root||document).querySelectorAll('[data-info]').forEach(b=>{
