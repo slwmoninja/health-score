@@ -1366,10 +1366,10 @@ function reorderRoutines(draggedId, targetId){
 // full-width Start button, and a clamped exercise-list subtitle.
 // data-routine-tile is the reorder script's lookup key (see the
 // ROUTINE TILE REORDER script) — the ENTIRE tile is the drag surface (press
-// and drag to reorder), with the "Go!" button and the small "x" delete
-// button as the two explicit exceptions (a plain confirm()-gated delete was
-// simpler and more reliable than a long-press gesture). Edit still lives in
-// Settings > Workouts.
+// and drag to reorder) and also the tap target to open the editor, with the
+// "Go!" button and the small "x" delete button as the two explicit
+// exceptions (a plain confirm()-gated delete was simpler and more reliable
+// than a long-press gesture).
 function routineTileHtml(r){
   const exerciseNames = r.exercises.map(re=>{
     const ex = exerciseById(re.exerciseId);
@@ -3321,19 +3321,9 @@ function screenSettings(){
 
     <details class="card" data-card-key="workouts" ${settingsCardOpenAttr('workouts')}>
       <summary class="card-summary"><h3>Workouts</h3><span class="chevron">⌄</span></summary>
-      <button class="btn-secondary" id="s-import-hevy">Import from Hevy (CSV)</button>
+      <button class="btn-secondary" id="s-import-hevy">Import from Hevy.csv</button>
       <input type="file" id="s-import-hevy-input" accept=".csv,text/csv" class="hidden">
-      <div class="muted" style="margin-top:8px;">Export "workout_data.csv" from Hevy's app settings, then pick it here — matched exercises reuse the built-in library, anything new becomes a custom exercise below. Re-importing an updated export only adds what's new.</div>
-      ${state.routines.length ? `
-      <div style="height:14px"></div>
-      <h3 style="font-size:13px;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">Routines</h3>
-      ${state.routines.map(r=>`<div class="list-row"><span class="name">${escapeHtml(r.name)}</span><div style="display:flex;align-items:center;gap:10px;"><button class="btn-secondary" style="width:auto;padding:6px 12px;font-size:13px;" data-edit-routine="${r.id}" type="button">Edit</button><button class="del" data-del-routine="${r.id}" type="button">×</button></div></div>`).join('')}
-      ` : ''}
-      ${state.myExercises.length ? `
-      <div style="height:14px"></div>
-      <h3 style="font-size:13px;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">Custom exercises</h3>
-      ${state.myExercises.map(e=>`<div class="list-row"><span class="name" data-exercise-history="${e.id}" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;">${escapeHtml(e.name)}</span><button class="del" data-del-exercise="${e.id}" type="button">×</button></div>`).join('')}
-      ` : ''}
+      <div class="muted" style="margin-top:8px;">Export "workout_data.csv" from Hevy's app settings, then pick it here — matched exercises reuse the built-in library, anything new becomes a custom exercise. Re-importing an updated export only adds what's new.</div>
     </details>
 
     ${state.errorLog.length ? `<details class="card" data-card-key="errors" ${settingsCardOpenAttr('errors')}>
@@ -3810,6 +3800,17 @@ function attachHandlers(){
   document.querySelectorAll('[data-delete-routine]').forEach(btn=>{
     btn.addEventListener('click', ()=>deleteRoutine(Number(btn.dataset.deleteRoutine)));
   });
+  // Tapping the tile body (not Go!/delete) opens the editor — the browser only
+  // fires this synthetic click for a genuine tap, since the drag script above
+  // only calls preventDefault() once a real drag is confirmed past the
+  // movement threshold, so it never fires mid-reorder.
+  document.querySelectorAll('.routine-tile').forEach(tile=>{
+    tile.addEventListener('click', e=>{
+      if(e.target.closest('[data-start-routine], [data-delete-routine]')) return;
+      const routine = state.routines.find(r=>r.id===Number(tile.dataset.routineTile));
+      if(routine) renderRoutineBuilderModal(routine);
+    });
+  });
 
   const pauseBtn = document.getElementById('btn-pause-workout');
   if(pauseBtn) pauseBtn.addEventListener('click', pauseWorkoutSession);
@@ -3958,22 +3959,6 @@ function attachHandlers(){
   if(importHevyInput) importHevyInput.addEventListener('change', ()=>{
     importHevyCsv(importHevyInput.files[0]);
     importHevyInput.value = ''; // allow re-selecting the same filename later without a no-op change event
-  });
-  document.querySelectorAll('[data-edit-routine]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const routine = state.routines.find(r=>r.id===Number(btn.dataset.editRoutine));
-      if(routine) renderRoutineBuilderModal(routine);
-    });
-  });
-  document.querySelectorAll('[data-del-routine]').forEach(btn=>{
-    btn.addEventListener('click', ()=>deleteRoutine(Number(btn.dataset.delRoutine)));
-  });
-  document.querySelectorAll('[data-del-exercise]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      if(!confirm('Delete this custom exercise? Any routines or history using it will keep showing its name but lose the link to it.')) return;
-      state.myExercises = state.myExercises.filter(e=>e.id!==btn.dataset.delExercise);
-      saveState(); render();
-    });
   });
   document.querySelectorAll('[data-exercise-history]').forEach(el=>{
     el.addEventListener('click', ()=>openExerciseTrendModal(el.dataset.exerciseHistory));
