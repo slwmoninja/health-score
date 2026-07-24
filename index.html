@@ -7,7 +7,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#2a78d6">
 <title>Health Score</title>
+<link rel="manifest" href="manifest.json">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%232a78d6'/%3E%3Cpath d='M20 55 L38 55 L45 40 L55 68 L62 50 L80 50' stroke='white' stroke-width='7' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="icon-192.png">
 <style>
 :root{
   --surface:#fcfcfb;--page:#f9f9f7;--text:#0b0b0b;--text2:#52514e;--muted:#898781;
@@ -2648,17 +2650,19 @@ if(state.pendingCelebration){
   saveState();
   fireConfetti();
 }
-// This is a plain static page with no service worker, so a phone that already has it
-// open (installed as a home-screen "web clip" or just left in a background tab) will
-// otherwise keep running whatever version it loaded — potentially for days — since
-// simply switching back to an already-open tab/webview doesn't re-fetch anything on
-// its own. A no-store HEAD request bypasses both the browser's HTTP cache and GitHub
-// Pages' CDN cache (Cache-Control: max-age=600) to always see the truly-latest
-// deploy, so a push shows up next time the app is reopened, without anyone needing
-// to know to manually refresh. Skips the reload while a field is focused so an
-// update never clobbers whatever's mid-typing; localStorage data itself is
-// untouched by a reload either way, since every change is already saved as it
-// happens (see saveState() calls throughout).
+// sw.js is registered further down purely to make the site properly
+// installable (for storage-durability purposes, see the persist() block
+// below) — it deliberately caches nothing, so a phone that already has the
+// page open (installed as a home-screen app or just left in a background
+// tab) still won't re-fetch anything on its own just by switching back to an
+// already-open tab/webview. A no-store HEAD request bypasses both the
+// browser's HTTP cache and GitHub Pages' CDN cache (Cache-Control: max-age=600)
+// to always see the truly-latest deploy, so a push shows up next time the app
+// is reopened, without anyone needing to know to manually refresh. Skips the
+// reload while a field is focused so an update never clobbers whatever's
+// mid-typing; localStorage data itself is untouched by a reload either way,
+// since every change is already saved as it happens (see saveState() calls
+// throughout).
 let deployedVersionTag = null;
 // Returns a status string so callers that want feedback (pull-to-refresh) can
 // react — existing callers (the interval below, visibilitychange) just ignore it.
@@ -2683,10 +2687,38 @@ document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='hidden'){ autoSyncGoogleHealthIfDue(); runAutoBackupDownload(); }
   if(document.visibilityState==='visible') checkForUpdate();
 });
-// Best-effort: asks the browser not to auto-evict this site's storage under
-// low-disk pressure. Does NOT protect against the user explicitly clearing
-// history/site data — no web API can opt out of that.
-if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+// Registering a (deliberately no-op/no-cache, see sw.js) service worker is
+// what lets Chrome on Android offer a real "Install app" rather than a plain
+// bookmark shortcut — installed apps get Chrome's strongest guarantee against
+// silently evicting a site's storage under disk pressure, which is the most
+// likely cause of data disappearing on an ordinary close/reopen (as opposed
+// to the user deliberately clearing history — no web API can opt out of that
+// one, install or not).
+if(navigator.serviceWorker && navigator.serviceWorker.register) navigator.serviceWorker.register('sw.js').catch(()=>{});
+// Best-effort ask not to auto-evict this site's storage under low-disk
+// pressure. Chrome auto-grants/denies this based on its own heuristics (site
+// engagement, bookmarked, installed) with no user-visible prompt — this code
+// can't force a grant, only ask and then check what actually happened.
+// Logged (not just swallowed) specifically because there's no way to test
+// eviction behavior on someone else's actual phone from here — if data keeps
+// vanishing on ordinary close/reopen, Settings > Error log is the place to
+// see whether the browser is actually granting persistence, rather than
+// continuing to guess.
+(async function checkStoragePersistence(){
+  if(!(navigator.storage && navigator.storage.persist)) return;
+  try{
+    let persisted = await (navigator.storage.persisted ? navigator.storage.persisted() : Promise.resolve(false));
+    if(!persisted) persisted = await navigator.storage.persist();
+    if(!persisted){
+      let detail = '';
+      try{
+        const est = await navigator.storage.estimate();
+        if(est && est.quota) detail = ` (using ~${Math.round((est.usage||0)/1048576)}MB of ~${Math.round(est.quota/1048576)}MB available to this browser)`;
+      }catch(e){}
+      logError(`Storage is NOT persisted${detail} — this browser may silently evict Health Score's data under storage pressure, even without you clearing history. Try Add to Home Screen / Install app for the strongest protection.`);
+    }
+  }catch(e){ /* best effort */ }
+})();
 
 /* =========================================================
    PULL-TO-REFRESH — forces an update check on demand instead of
