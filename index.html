@@ -3410,7 +3410,6 @@ function screenSettings(){
       <summary class="card-summary"><h3>Workouts</h3><span class="chevron">⌄</span></summary>
       <button class="btn-secondary" id="s-import-hevy">Import from Hevy.csv</button>
       <input type="file" id="s-import-hevy-input" accept=".csv,text/csv" class="hidden">
-      <div class="muted" style="margin-top:8px;">Export "workout_data.csv" from Hevy's app settings, then pick it here — matched exercises reuse the built-in library, anything new becomes a custom exercise. Re-importing an updated export only adds what's new.</div>
     </details>
 
     ${state.errorLog.length ? `<details class="card" data-card-key="errors" ${settingsCardOpenAttr('errors')}>
