@@ -392,8 +392,14 @@ let state = loadState();
 
 // Profiles saved before the "days to track" feature existed have no trackedDays
 // field — default them to every day on, matching a brand-new onboarding's default.
-function normalizeProfile(profile){
+// Profiles saved before "startedAt" existed likewise get backfilled, from the
+// earliest logged day if there is one (otherwise today) — see isWithinFirstWeek().
+function normalizeProfile(profile, days){
   if(profile && !profile.trackedDays) profile.trackedDays = [true,true,true,true,true,true,true];
+  if(profile && !profile.startedAt){
+    const dayKeys = days ? Object.keys(days).sort() : [];
+    profile.startedAt = dayKeys.length ? dayKeys[0] : today();
+  }
   return profile;
 }
 function loadState(){
@@ -404,7 +410,7 @@ function loadState(){
     const merged = Object.assign(defaultState(), parsed);
     merged.settings = Object.assign(defaultState().settings, parsed.settings);
     merged.settings.charts = Object.assign(defaultState().settings.charts, parsed.settings && parsed.settings.charts);
-    normalizeProfile(merged.profile);
+    normalizeProfile(merged.profile, merged.days);
     return merged;
   }catch(e){ return defaultState(); }
 }
@@ -603,7 +609,7 @@ async function importDataFromFile(file){
     state = Object.assign(defaultState(), parsed);
     state.settings = Object.assign(defaultState().settings, parsed.settings);
     state.settings.charts = Object.assign(defaultState().settings.charts, parsed.settings && parsed.settings.charts);
-    normalizeProfile(state.profile);
+    normalizeProfile(state.profile, state.days);
     saveState();
     document.querySelectorAll('.modal-backdrop').forEach(m=>m.remove()); // close onboarding if open
     render();
@@ -723,6 +729,27 @@ function trackedDatesBetween(startIso, endIso){
 function latestWeightIn(dates){
   for(let i=dates.length-1;i>=0;i--){ const w=getDay(dates[i]).weightLb; if(w) return w; }
   return null;
+}
+// True through the 7th day (inclusive) after profile.startedAt — the window in
+// which a weight/profile correction still backfills onto that week's day logs
+// via backfillFirstWeekWeight, since those early logs were seeded from (or
+// meant to match) the original weight rather than being independent weigh-ins.
+function isWithinFirstWeek(){
+  return !!(state.profile && state.profile.startedAt && today() <= addDays(state.profile.startedAt, 6));
+}
+// Corrects the current week's day logs to match a just-edited weight, so History,
+// the Trends chart, and CSV export don't keep showing the old (wrong) starting
+// weight alongside the now-corrected profile. Only touches day entries that still
+// hold the exact old value — a distinct real weigh-in logged that week is left alone.
+function backfillFirstWeekWeight(oldWeight, newWeight){
+  if(!state.profile || !state.profile.startedAt) return;
+  if(oldWeight==null || newWeight==null || oldWeight===newWeight) return;
+  for(let i=0;i<7;i++){
+    const iso = addDays(state.profile.startedAt, i);
+    if(iso>today()) break;
+    const d = state.days[iso];
+    if(d && d.weightLb===oldWeight) d.weightLb = newWeight;
+  }
 }
 const MONTH_LETTERS = 'JFMAMJJASOND';
 // A calendar month's date range, capped at `today` so the current (in-progress)
@@ -2515,7 +2542,7 @@ function renderOnboarding(){
     state.profile = {
       age, sex, heightIn: height, weightLb: weight,
       goalType, ratePerWeekLb: goalType==='maintain'?0:rate, stepGoal:steps, activeMinGoal:min, calorieGoal: calGoal,
-      trackedDays: readDayCheckboxes(wrap, 'ob')
+      trackedDays: readDayCheckboxes(wrap, 'ob'), startedAt: today()
     };
     getDay(today()).weightLb = weight;
     saveState();
@@ -3990,18 +4017,25 @@ function attachHandlers(){
   const sSave = document.getElementById('s-save');
   if(sSave) sSave.addEventListener('click', ()=>{
     const goalType = sGoal.querySelector('.active').dataset.v;
+    // Captured before the overwrite below, and only acted on if we're still within
+    // the first week — see backfillFirstWeekWeight for why.
+    const wasWithinFirstWeek = isWithinFirstWeek();
+    const oldWeight = state.profile.weightLb;
+    const newWeight = Number(document.getElementById('s-weight').value);
     state.profile = {
       age: Number(document.getElementById('s-age').value),
       sex: document.getElementById('s-sex').value,
       heightIn: Number(document.getElementById('s-height').value),
-      weightLb: Number(document.getElementById('s-weight').value),
+      weightLb: newWeight,
       goalType,
       ratePerWeekLb: goalType==='maintain'?0:Number(document.getElementById('s-rate').value)||0,
       stepGoal: Number(document.getElementById('s-steps').value)||8000,
       activeMinGoal: Number(document.getElementById('s-min').value)||30,
       calorieGoal: Number(document.getElementById('s-calgoal').value)||null,
-      trackedDays: readDayCheckboxes(document, 's')
+      trackedDays: readDayCheckboxes(document, 's'),
+      startedAt: state.profile.startedAt
     };
+    if(wasWithinFirstWeek) backfillFirstWeekWeight(oldWeight, newWeight);
     saveState(); alert('Profile saved.'); render();
   });
   wireConnectFitbitCard(document, 's');
