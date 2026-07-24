@@ -207,6 +207,15 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
   box-shadow:0 4px 10px rgba(0,0,0,.25);}
 .chart-mark{cursor:pointer;}
 
+/* ---- toast (silent backup save/restore feedback — never blocks input) ---- */
+#toast{position:fixed;left:50%;bottom:92px;transform:translate(-50%,12px);max-width:calc(100% - 32px);
+  background:var(--text);color:var(--page);font-size:13px;font-weight:600;text-align:center;
+  padding:10px 16px;border-radius:12px;box-shadow:0 4px 14px rgba(0,0,0,.3);
+  z-index:70;pointer-events:none;opacity:0;transition:opacity .2s ease, transform .2s ease;}
+#toast.show{opacity:1;transform:translate(-50%,0);}
+#toast.toast-good{background:var(--good);color:#fff;}
+#toast.toast-critical{background:var(--critical);color:#fff;}
+
 /* ---- dashboard toggle rows (Settings) ---- */
 .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid var(--grid);}
 .toggle-row:first-child{border-top:none;}
@@ -403,6 +412,24 @@ function escapeHtml(s){
 // Highlights a data point value (a score, a count, a gap) within the succinct
 // Trends analysis bullets/tips, so the numbers driving each line stand out.
 function hl(v){ return `<span style="color:var(--yellow);font-weight:700;">${v}</span>`; }
+// Non-blocking, self-dismissing feedback for routine backup save/restore
+// events — unlike alert(), it never freezes the page waiting for a tap, and
+// pointer-events:none means it can't intercept a touch even while visible, so
+// it can't get in the way of whatever the user does right after tapping
+// Back up now / Restore / Import.
+let toastTimer = null;
+function showToast(message, tone){
+  let el = document.getElementById('toast');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  el.className = 'toast show' + (tone ? ' toast-'+tone : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>{ el.classList.remove('show'); }, 3200);
+}
 function logError(message){
   state.errorLog.unshift({ts: Date.now(), message});
   state.errorLog = state.errorLog.slice(0, 3);
@@ -423,10 +450,10 @@ async function importDataFromFile(file){
     normalizeProfile(state.profile);
     saveState();
     document.querySelectorAll('.modal-backdrop').forEach(m=>m.remove()); // close onboarding if open
-    alert('Data imported.');
     render();
+    showToast('Data imported.', 'good');
   }catch(e){
-    alert('Could not import that file: '+e.message);
+    showToast('Could not import that file: '+e.message, 'critical');
   }
 }
 // Picks the newest Health Score backup out of one or more selected files, so
@@ -458,7 +485,7 @@ function pickLatestBackupFile(files){
 }
 function importLatestBackupFromFiles(files){
   const latest = pickLatestBackupFile(files);
-  if(!latest){ if(files && files.length) alert('No .json or .js backup file found in what you selected.'); return; }
+  if(!latest){ if(files && files.length) showToast('No .json or .js backup file found in what you selected.', 'critical'); return; }
   importDataFromFile(latest);
 }
 // On browsers that support it (desktop Chrome/Edge; some Android Chrome
@@ -2610,7 +2637,7 @@ function attachHandlers(){
   const backupNowBtn = document.getElementById('s-backup-now');
   if(backupNowBtn) backupNowBtn.addEventListener('click', ()=>{
     runAutoBackupDownload(true); // bypasses the throttle and the unchanged-data skip
-    alert('Backup saved to your Downloads/Files.');
+    showToast('Backup saved to your Downloads/Files.', 'good');
   });
   // No browser lets a webpage list or delete files it doesn't have a handle to —
   // opening the native file picker is the closest a page can get to "show me my
