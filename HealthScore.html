@@ -1002,7 +1002,12 @@ function formatElapsed(ms){
 // dropped when the session is finished (see finishWorkoutSession).
 function plannedSetRows(re){
   const remembered = state.exerciseMemory[re.exerciseId];
-  const count = re.targetSets || 3;
+  const template = exerciseById(re.exerciseId);
+  // A pure-time exercise (Spinning, a duration/distance_duration type) has
+  // no "sets" concept at all — one continuous entry, not the usual
+  // multi-set default — so an incidental checkbox tick doesn't inflate the
+  // session's Sets stat with sets the user never saw or chose.
+  const count = usesSetsCount(template ? template.metricType : 'weight_reps') ? (re.targetSets || 3) : 1;
   const rows = [];
   for(let i=0;i<count;i++){
     rows.push({
@@ -1214,6 +1219,13 @@ function exerciseThumbHtml(category){
   const [label,color] = CATEGORY_BADGE[category] || CATEGORY_BADGE['Other'];
   return `<div class="exercise-thumb" style="background:${color};">${label}</div>`;
 }
+// Sets/reps/weight are opt-IN — shown only for exercise types that are
+// clearly a weights/reps/sets activity (weight_reps, reps_only,
+// weight_distance) — rather than opt-out, so a pure-time cardio type like
+// Spinning (metricType 'duration' or 'distance_duration') never picks them
+// up by accident. Shared by both the routine builder's targetFieldsForMetricType
+// below and the live session's liveFieldsForExercise.
+function usesSetsCount(mt){ return mt==='weight_reps'||mt==='reps_only'||mt==='weight_distance'; }
 // Which target-KPI fields make sense for a given exercise's metricType — a UI
 // hint only (see the EXERCISE_DB comment); setFieldsForMetricType (live
 // session set table) mirrors this same field selection for actual set entry.
@@ -1221,7 +1233,7 @@ function targetFieldsForMetricType(mt){
   const fields = [];
   if(mt==='weight_reps'||mt==='reps_only') fields.push('targetReps');
   if(mt==='weight_reps'||mt==='weight_distance') fields.push('targetWeightLb');
-  if(mt==='weight_reps'||mt==='weight_distance'||mt==='reps_only') fields.push('targetSets');
+  if(usesSetsCount(mt)) fields.push('targetSets');
   if(mt==='distance_duration'||mt==='weight_distance') fields.push('targetDistanceMi');
   return fields;
 }
@@ -1537,7 +1549,8 @@ function setFieldsForMetricType(mt){
 const LIVE_FIELD_LABELS = {sets:'SETS', reps:'REPS', weightLb:'LBS', distanceMi:'MI'};
 const LIVE_FIELD_ORDER = ['sets','reps','weightLb','distanceMi'];
 function liveFieldsForExercise(template){
-  return ['sets', ...setFieldsForMetricType(template ? template.metricType : 'weight_reps')];
+  const mt = template ? template.metricType : 'weight_reps';
+  return [...(usesSetsCount(mt) ? ['sets'] : []), ...setFieldsForMetricType(mt)];
 }
 // Which value columns to show across the WHOLE table — the union of what
 // each individual exercise needs, in one canonical order, so mixed-type
