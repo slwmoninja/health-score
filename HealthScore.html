@@ -1074,6 +1074,24 @@ function finishWorkoutSession(discard){
   saveState(); render();
   checkGoalsAndCelebrate(iso);
 }
+// Logs a Quick Start session after the fact — no live timer was ever run, so
+// startTime is simply backdated by the entered minutes. Otherwise identical
+// to what finishWorkoutSession produces (same shape, same calorie estimate
+// via estimateWorkoutCalories/metForSession), since a manually-timed session
+// is a completed workout like any other, just never live.
+function logQuickStartManualTime(type, minutes){
+  const now = Date.now();
+  const s = {
+    id: now+Math.random(), title: type, routineId: null,
+    startTime: now - minutes*60000, endTime: now, description:'',
+    status:'completed', pausedAccumMs:0, exercises:[]
+  };
+  s.caloriesBurned = estimateWorkoutCalories(s);
+  const iso = isoDate(new Date(s.startTime));
+  getDay(iso).workouts.push(s);
+  saveState(); render();
+  checkGoalsAndCelebrate(iso);
+}
 function addExerciseToActiveSession(exerciseId){
   const s = state.activeWorkoutSession; if(!s) return;
   const ex = exerciseById(exerciseId); if(!ex) return;
@@ -1406,20 +1424,20 @@ function orderedQuickStartTypes(){
 function recordQuickStartType(type){
   state.recentQuickStartTypes = [type, ...state.recentQuickStartTypes.filter(t=>t!==type)].slice(0,5);
 }
-let quickStartMode = 'timer'; // 'timer' | 'manual' — which half of the modal shows
 let quickStartWrap = null;    // the modal's own wrapper element, while open
-// Replaces the old separate "More" (freeform start) and "Activity" (manual
-// steps/min/distance) cards with a single popup offering both, via a seg
-// toggle, opened from the lightning-bolt topbar button — timed Quick Start
-// sessions count toward the Activity goal through the normal workout path
-// (effectiveActiveMin), manual entry still writes straight into d.activity
-// exactly as it always has. Follows the routine-builder modal's own pattern:
-// a self-contained wrapper appended to document.body with its own
-// re-render/handler-wiring loop, rather than reusing the main render()/
-// attachHandlers() pipeline (which is scoped to #app and would double-bind
-// listeners on unrelated on-screen elements if called again for a popup).
+// A single popup — pick an activity type, then either Start a live-timed
+// session or Log one that already happened by typing its elapsed minutes.
+// Both paths count toward the Activity goal through the normal workout path
+// (effectiveActiveMin) and estimate calories the same way (profile weight +
+// the type's MET + duration — see estimateWorkoutCalories/metForSession),
+// since a manually-logged session is just a completed one with no live
+// timer, not a different kind of record. Follows the routine-builder
+// modal's own pattern: a self-contained wrapper appended to document.body
+// with its own re-render/handler-wiring loop, rather than reusing the main
+// render()/attachHandlers() pipeline (which is scoped to #app and would
+// double-bind listeners on unrelated on-screen elements if called again
+// for a popup).
 function renderQuickStartModal(){
-  quickStartMode = 'timer'; // always opens on the timer tab
   quickStartWrap = document.createElement('div');
   document.body.appendChild(quickStartWrap);
   renderQuickStartDom();
@@ -1433,28 +1451,13 @@ function renderQuickStartDom(){
   <div class="modal-backdrop center">
     <div class="modal">
       <div class="row" style="margin-bottom:10px;"><h2 style="margin:0;">Quick Start</h2><button class="iconbtn" id="qs-close">✕</button></div>
-      <div class="seg" id="qs-mode-seg">
-        <button data-v="timer" class="${quickStartMode==='timer'?'active':''}">Time a workout</button>
-        <button data-v="manual" class="${quickStartMode==='manual'?'active':''}">Enter manually</button>
+      <div class="field">
+        <select id="qs-type-select" aria-label="Activity type">${types.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select>
       </div>
-      ${quickStartMode==='timer' ? `
-        <div class="field" style="margin-top:14px;">
-          <label>Activity type</label>
-          <select id="qs-type-select">${types.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select>
-        </div>
-        <button class="btn-primary" id="btn-quickstart-start" type="button">Start</button>
-      ` : `
-        <div class="field-row" style="margin-top:14px;">
-          <div class="field"><label>Steps</label><input type="number" id="act-steps" placeholder="Not entered"></div>
-          <div class="field"><label>Active minutes</label><input type="number" id="act-min" placeholder="Not entered"></div>
-        </div>
-        <div class="field"><label>Distance (mi)</label><input type="number" step="0.1" id="act-dist" placeholder="Not entered"></div>
-        <button class="btn-primary" id="btn-save-activity" type="button">Log activity</button>
-        <div style="height:8px"></div>
-        ${state.googleHealth.refreshToken
-          ? `<div class="row"><span class="muted">Google Health connected — syncs automatically</span><button class="iconbtn" id="btn-connect-fit" title="Sync now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg></button></div>`
-          : `<button class="btn-secondary" id="btn-connect-fit" type="button">Connect Google Health (optional)</button>`}
-      `}
+      <button class="btn-primary" id="btn-quickstart-start" type="button">Start</button>
+      <div class="row" style="margin:16px 0 8px;"><span class="muted" style="font-size:12px;">or log a session that already happened</span></div>
+      <div class="field"><label>Minutes</label><input type="number" id="qs-manual-min" placeholder="e.g. 30"></div>
+      <button class="btn-secondary" id="btn-quickstart-log-manual" type="button">Log</button>
     </div>
   </div>`;
   wireQuickStartHandlers();
@@ -1463,39 +1466,19 @@ function wireQuickStartHandlers(){
   const wrap = quickStartWrap;
   wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeQuickStartModal(); });
   wrap.querySelector('#qs-close').addEventListener('click', closeQuickStartModal);
-  wrap.querySelector('#qs-mode-seg').querySelectorAll('button').forEach(b=>{
-    b.addEventListener('click', ()=>{ quickStartMode=b.dataset.v; renderQuickStartDom(); });
-  });
-  const startBtn = wrap.querySelector('#btn-quickstart-start');
-  if(startBtn) startBtn.addEventListener('click', ()=>{
+  wrap.querySelector('#btn-quickstart-start').addEventListener('click', ()=>{
     const type = wrap.querySelector('#qs-type-select').value;
     recordQuickStartType(type);
     closeQuickStartModal();
     startWorkoutSession(null, type);
   });
-  const saveActBtn = wrap.querySelector('#btn-save-activity');
-  if(saveActBtn) saveActBtn.addEventListener('click', ()=>{
-    // Same additive logic as the main Log Activity form's save handler
-    // (index.html's other #btn-save-activity, in attachHandlers) — kept as
-    // its own small copy here rather than shared, since this one operates
-    // within the modal's own wrap rather than the global #app tree.
-    const d = getDay(today());
-    const stepsRaw = wrap.querySelector('#act-steps').value;
-    const minRaw = wrap.querySelector('#act-min').value;
-    const distRaw = wrap.querySelector('#act-dist').value;
-    if(stepsRaw===''&&minRaw===''&&distRaw===''){ alert('Enter at least one value.'); return; }
-    const steps = stepsRaw!=='' ? Number(stepsRaw) : d.activity.steps;
-    const activeMin = minRaw!=='' ? Number(minRaw) : d.activity.activeMin;
-    const distanceMi = distRaw!=='' ? Number(distRaw) : d.activity.distanceMi;
-    d.activity = {steps, activeMin, distanceMi, kcal: estimateActivityKcal(steps, activeMin), source:'manual'};
-    saveState();
+  wrap.querySelector('#btn-quickstart-log-manual').addEventListener('click', ()=>{
+    const type = wrap.querySelector('#qs-type-select').value;
+    const minutes = Number(wrap.querySelector('#qs-manual-min').value);
+    if(!(minutes>0)){ alert('Enter minutes.'); return; }
+    recordQuickStartType(type);
     closeQuickStartModal();
-    render();
-    checkGoalsAndCelebrate(today());
-  });
-  const connectFit = wrap.querySelector('#btn-connect-fit');
-  if(connectFit) connectFit.addEventListener('click', ()=>{
-    state.googleHealth.refreshToken ? fetchGoogleHealthToday(false) : startGoogleHealthAuth();
+    logQuickStartManualTime(type, minutes);
   });
 }
 // Which value fields a set row shows, per exercise metricType — shared by the
@@ -1547,7 +1530,11 @@ function activeSessionExerciseHtml(ex, idx){
 let workoutSessionSearchQuery = ''; // exercise search box inside an active session card
 function activeWorkoutSessionCard(){
   const s = state.activeWorkoutSession;
-  const wsResults = getExerciseResults(workoutSessionSearchQuery);
+  // Quick Start sessions (routineId null — see startWorkoutSession) are a
+  // freeform timer for a named activity type, not an exercise log — no
+  // Volume/Sets stats or Add exercise search, just Duration + Calories.
+  const isQuickStart = s.routineId===null;
+  const wsResults = isQuickStart ? [] : getExerciseResults(workoutSessionSearchQuery);
   const volume = volumeLbForSession(s), setCount = completedSetCountForSession(s);
   // Live auto-estimate (recomputed every render, so it tracks a growing
   // duration) unless the user's typed their own override — see
@@ -1566,10 +1553,12 @@ function activeWorkoutSessionCard(){
     </div>
     <div class="row" style="margin-bottom:14px;align-items:flex-start;flex-wrap:wrap;gap:10px;">
       <div><div class="muted" style="font-size:11px;">Duration</div><div style="font-weight:700;color:var(--blue);">${s.status==='paused'?'Paused':`<span id="workout-elapsed">${formatElapsed(workoutDurationMs(s))}</span>`}</div></div>
+      ${isQuickStart ? '' : `
       <div><div class="muted" style="font-size:11px;">Volume</div><div style="font-weight:700;">${volume.toLocaleString()} lbs</div></div>
-      <div><div class="muted" style="font-size:11px;">Sets</div><div style="font-weight:700;">${setCount}</div></div>
+      <div><div class="muted" style="font-size:11px;">Sets</div><div style="font-weight:700;">${setCount}</div></div>`}
       <div><div class="muted" style="font-size:11px;">Calories (est.)</div><input type="number" id="workout-calories-input" value="${displayCal}" style="width:56px;padding:4px 2px;text-align:center;border-radius:6px;border:1px solid var(--border);background:var(--page);color:var(--text);font-size:14px;font-weight:700;"></div>
     </div>
+    ${isQuickStart ? '' : `
     ${s.exercises.map((ex,i)=>activeSessionExerciseHtml(ex,i)).join('')}
     <div class="field" style="margin-top:10px;">
       <label>Add exercise</label>
@@ -1578,7 +1567,7 @@ function activeWorkoutSessionCard(){
     ${!workoutSessionSearchQuery && wsResults.length ? `<div class="muted" style="margin:6px 0 -2px;">Recent Exercises</div>` : ''}
     <div class="search-list ${wsResults.length?'':'hidden'}" id="ws-results">
       ${wsResults.map((e,i)=>`<div class="search-item" data-idx="${i}" style="display:flex;align-items:center;gap:10px;">${exerciseThumbHtml(e.category)}<div><div class="n">${escapeHtml(e.name)}</div><div class="m">${escapeHtml(e.category)}</div></div></div>`).join('')}
-    </div>
+    </div>`}
   </div>`;
 }
 // Today's already-finished sessions — same "shown alongside the log form, delete
@@ -1962,10 +1951,6 @@ function bmr(p){
   const kg = lbToKg(p.weightLb), cm = inToCm(p.heightIn);
   const base = 10*kg + 6.25*cm - 5*p.age;
   return p.sex==='male' ? base+5 : base-161;
-}
-// Rough calorie burn estimate for manually-entered activity (used when no synced kcal is available)
-function estimateActivityKcal(steps, activeMin){
-  return Math.round(steps*0.04 + activeMin*4);
 }
 // "Est. calories burned" for the Activity drill-down — the standard MET (Metabolic
 // Equivalent of Task) method from the Compendium of Physical Activities (Ainsworth
