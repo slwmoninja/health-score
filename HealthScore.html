@@ -106,6 +106,7 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
 .chart{width:100%;}
 .chart svg{width:100%;height:auto;display:block;overflow:visible;}
 .bar-label{font-size:11px;fill:var(--text2);}
+.axis-tick{font-size:9.5px;}
 .bar-value{font-size:12px;font-weight:700;fill:var(--text);}
 .axis-line{stroke:var(--axis);stroke-width:1;}
 .goal-line{stroke:var(--muted);stroke-width:1.5;stroke-dasharray:3 3;}
@@ -2689,9 +2690,19 @@ function svgEl(tag, attrs){
 // (e.g. Total Score 0-100 vs Weight in lb), where a shared scale would flatten
 // whichever series has the smaller range. Default (falsy) keeps the original
 // shared-scale behavior, unaffected, for same-unit series like Activity/Nutrition.
+// Two series with independentScale (e.g. Total Score 0-100 vs Weight in lb)
+// get a dual axis — left for series[0], right for series[1] — each labeled
+// in that series' own color, since one shared axis would be meaningless
+// when the lines aren't even in the same units. A single series (also
+// independentScale) gets one axis in its own color. Multiple series on a
+// SHARED scale (e.g. Calories Burned vs Calories In, both kcal) get one
+// neutral-colored axis instead, since the scale belongs equally to both
+// lines and tinting it to either one's color would misattribute it.
 function trendLineChart(series, labels, opts){
   opts = opts || {};
-  const W=320,H=120,padL=6,padR=6,padT=14,padB=20;
+  const dualAxis = opts.independentScale && series.length>=2;
+  const W=320,H=120,padT=14,padB=20;
+  const padL=26, padR = dualAxis ? 30 : 6;
   const plotW=W-padL-padR, plotH=H-padT-padB;
   const sharedMax = Math.max(100, ...series.flatMap(s=>s.points.filter(v=>v!==null)));
   const scaleFor = s=>{
@@ -2701,11 +2712,12 @@ function trendLineChart(series, labels, opts){
     const lo = Math.min(...vals), hi = Math.max(...vals);
     return hi>lo ? {min:lo, max:hi} : {min:lo-1, max:hi+1}; // avoid divide-by-zero on a flat line
   };
+  const fmtTick = v => Math.abs(v)>=1000 ? (Math.round(v/100)/10)+'k' : (Number.isInteger(v)?v:v.toFixed(1));
   const n = labels.length;
   const svg = svgEl('svg',{viewBox:`0 0 ${W} ${H}`});
   svg.appendChild(svgEl('line',{x1:padL,y1:H-padB,x2:W-padR,y2:H-padB,class:'axis-line'}));
   const stepX = n>1 ? plotW/(n-1) : 0;
-  series.forEach(s=>{
+  series.forEach((s,si)=>{
     const {min,max} = scaleFor(s);
     let d = '';
     s.points.forEach((v,i)=>{
@@ -2722,6 +2734,18 @@ function trendLineChart(series, labels, opts){
       c.addEventListener('click', ev=>{ ev.stopPropagation(); showTooltip(ev.clientX, ev.clientY, `${tipLabel} · ${s.name}: ${v.toLocaleString()}${s.unit||''}`); });
       svg.appendChild(c);
     });
+    const isRightAxis = dualAxis && si===1;
+    const drawsOwnAxis = si===0 || isRightAxis;
+    if(drawsOwnAxis){
+      const axisColor = dualAxis ? s.color : (series.length===1 ? s.color : 'var(--muted)');
+      const axisX = isRightAxis ? W-padR+4 : padL-4;
+      const anchor = isRightAxis ? 'start' : 'end';
+      [{v:max,y:padT+3},{v:min,y:H-padB+2}].forEach(tick=>{
+        const t = svgEl('text',{x:axisX, y:tick.y, class:'axis-tick', 'text-anchor':anchor, fill:axisColor});
+        t.textContent = fmtTick(tick.v);
+        svg.appendChild(t);
+      });
+    }
   });
   labels.forEach((l,i)=>{
     const x = padL + stepX*i;
