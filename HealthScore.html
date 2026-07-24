@@ -1222,16 +1222,18 @@ function targetFieldsForMetricType(mt){
   if(mt==='weight_reps'||mt==='reps_only') fields.push('targetReps');
   if(mt==='weight_reps'||mt==='weight_distance') fields.push('targetWeightLb');
   if(mt==='weight_reps'||mt==='weight_distance'||mt==='reps_only') fields.push('targetSets');
-  if(mt==='duration'||mt==='distance_duration') fields.push('targetDurationSec');
   if(mt==='distance_duration'||mt==='weight_distance') fields.push('targetDistanceMi');
   return fields;
 }
-const TARGET_FIELD_LABELS = {targetSets:'SETS', targetReps:'REPS', targetWeightLb:'LBS', targetDurationSec:'MIN', targetDistanceMi:'MI'};
-const TARGET_FIELD_ORDER = ['targetSets','targetReps','targetWeightLb','targetDurationSec','targetDistanceMi'];
+const TARGET_FIELD_LABELS = {targetSets:'SETS', targetReps:'REPS', targetWeightLb:'LBS', targetDistanceMi:'MI'};
+const TARGET_FIELD_ORDER = ['targetSets','targetReps','targetWeightLb','targetDistanceMi'];
 // Union of columns needed across every exercise currently in the draft, in
 // one canonical order — lets a mixed-type routine (a lift plus a plank)
 // share ONE header row instead of each exercise repeating its own field
-// labels, which is what made the old per-exercise layout tall.
+// labels, which is what made the old per-exercise layout tall. Time is NOT
+// part of this union — every exercise gets an optional time goal
+// regardless of type (a lift can have a rest/time cap too), so its
+// Min/Sec columns are always shown, appended separately below.
 function routineTargetColumns(draft){
   const cols = new Set();
   draft.exercises.forEach(re=>{
@@ -1240,15 +1242,23 @@ function routineTargetColumns(draft){
   });
   return TARGET_FIELD_ORDER.filter(f=>cols.has(f));
 }
+// Time goal is entered as separate Min/Sec fields (e.g. "1 min 30 sec")
+// rather than a single unit-toggle field — simpler than a toggle control
+// and it directly supports a combined value, not just whole minutes or
+// whole seconds. Stored internally as one targetDurationSec (min*60+sec),
+// matching every other duration field in the app.
 function routineExerciseRowHtml(re, idx, ex, columns){
   const exFields = targetFieldsForMetricType(ex ? ex.metricType : 'weight_reps');
+  const totalSec = re.targetDurationSec || 0;
   return `<div class="set-table-row">
     <span style="flex:1;min-width:0;text-align:left;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(ex?ex.name:re.exerciseId)}</span>
     ${columns.map(f=>{
       if(!exFields.includes(f)) return `<span style="flex:0 0 44px;text-align:center;color:var(--muted);">—</span>`;
-      const val = f==='targetDurationSec' ? secToMin(re.targetDurationSec) : (re[f]!=null ? re[f] : '');
-      return `<input type="number"${f==='targetDistanceMi'||f==='targetDurationSec'?' step="0.1"':''} style="flex:0 0 44px;" data-target="${f}" data-idx="${idx}" value="${val}">`;
+      const val = re[f]!=null ? re[f] : '';
+      return `<input type="number"${f==='targetDistanceMi'?' step="0.1"':''} style="flex:0 0 44px;" data-target="${f}" data-idx="${idx}" value="${val}">`;
     }).join('')}
+    <input type="number" style="flex:0 0 32px;" data-target-time="${idx}:min" value="${totalSec?Math.floor(totalSec/60):''}" placeholder="0">
+    <input type="number" style="flex:0 0 32px;" data-target-time="${idx}:sec" value="${totalSec?totalSec%60:''}" placeholder="0">
     <button class="del" data-rm-exercise="${idx}" type="button" style="flex:0 0 16px;">×</button>
   </div>`;
 }
@@ -1299,6 +1309,7 @@ function renderRoutineBuilderDom(){
           <div class="set-table-head">
             <span style="flex:1;text-align:left;">Exercise</span>
             ${columns.map(f=>`<span style="flex:0 0 44px;">${TARGET_FIELD_LABELS[f]}</span>`).join('')}
+            <span style="flex:0 0 32px;">MIN</span><span style="flex:0 0 32px;">SEC</span>
             <span style="flex:0 0 16px;"></span>
           </div>
           ${draft.exercises.map((re,i)=>routineExerciseRowHtml(re, i, exerciseById(re.exerciseId), columns)).join('')}
@@ -1354,9 +1365,18 @@ function wireRoutineBuilderHandlers(){
     inp.addEventListener('input', ()=>{
       const idx = Number(inp.dataset.idx);
       const field = inp.dataset.target;
-      routineBuilderDraft.exercises[idx][field] = field==='targetDurationSec'
-        ? minToSec(inp.value)
-        : (inp.value===''?null:Number(inp.value));
+      routineBuilderDraft.exercises[idx][field] = inp.value===''?null:Number(inp.value);
+    });
+  });
+  wrap.querySelectorAll('[data-target-time]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const [idxStr] = inp.dataset.targetTime.split(':');
+      const idx = Number(idxStr);
+      const row = inp.closest('.set-table-row');
+      const min = Number(row.querySelector(`[data-target-time="${idx}:min"]`).value)||0;
+      const sec = Number(row.querySelector(`[data-target-time="${idx}:sec"]`).value)||0;
+      const total = min*60+sec;
+      routineBuilderDraft.exercises[idx].targetDurationSec = total>0 ? total : null;
     });
   });
   const saveBtn = wrap.querySelector('#rb-save');
@@ -1502,24 +1522,20 @@ function wireQuickStartHandlers(){
   });
 }
 // Which value fields a set row shows, per exercise metricType — shared by the
-// live set table here and target-KPI inference elsewhere.
+// live set table here and target-KPI inference elsewhere. Time is NOT part
+// of this — every exercise gets an optional time goal regardless of type
+// (see liveFieldsForExercise/activeSessionExerciseHtml), so it's handled as
+// its own always-present Min/Sec pair rather than a metricType-gated field.
 function setFieldsForMetricType(mt){
   if(mt==='weight_reps') return ['weightLb','reps'];
   if(mt==='reps_only') return ['reps'];
-  if(mt==='duration') return ['durationSec'];
-  if(mt==='distance_duration') return ['distanceMi','durationSec'];
+  if(mt==='duration') return [];
+  if(mt==='distance_duration') return ['distanceMi'];
   if(mt==='weight_distance') return ['weightLb','distanceMi'];
   return ['weightLb','reps'];
 }
-// Duration is stored internally as seconds (durationSec — matches Hevy's own
-// CSV column and every other duration field in the app), but a routine's
-// planned exercise time reads far more naturally in minutes than raw
-// seconds, so these compact tables display/edit minutes and convert at the
-// boundary rather than changing the underlying field.
-function secToMin(sec){ return sec==null ? '' : Math.round((sec/60)*10)/10; }
-function minToSec(min){ return (min===''||min==null) ? null : Math.round(Number(min)*60); }
-const LIVE_FIELD_LABELS = {sets:'SETS', reps:'REPS', weightLb:'LBS', durationSec:'MIN', distanceMi:'MI'};
-const LIVE_FIELD_ORDER = ['sets','reps','weightLb','durationSec','distanceMi'];
+const LIVE_FIELD_LABELS = {sets:'SETS', reps:'REPS', weightLb:'LBS', distanceMi:'MI'};
+const LIVE_FIELD_ORDER = ['sets','reps','weightLb','distanceMi'];
 function liveFieldsForExercise(template){
   return ['sets', ...setFieldsForMetricType(template ? template.metricType : 'weight_reps')];
 }
@@ -1538,20 +1554,25 @@ function liveTargetColumns(s){
 // still fits on one screen. Sets/Reps/Weight/etc. are editable and apply to
 // every set in the exercise uniformly (see updateExerciseField/
 // updateExerciseSetCount) — a deliberate trade of per-set precision for
-// speed, since checking off a whole exercise at a glance was the ask.
+// speed, since checking off a whole exercise at a glance was the ask. Time
+// goal is separate Min/Sec fields (e.g. "1 min 30 sec"), stored internally
+// as one durationSec (min*60+sec) like every other duration field.
 function activeSessionExerciseHtml(ex, idx, columns){
   const template = exerciseById(ex.exerciseId);
   const fields = liveFieldsForExercise(template);
   const allCompleted = ex.sets.length>0 && ex.sets.every(set=>set.completed);
   const first = ex.sets[0] || {};
+  const totalSec = first.durationSec || 0;
   return `<div class="set-table-row">
     <button class="set-check${allCompleted?' checked':''}" data-toggle-exercise="${idx}" type="button" style="flex:0 0 28px;" title="Mark all sets complete">✓</button>
     <span class="name" data-exercise-history="${ex.exerciseId}" style="flex:1;min-width:0;text-align:left;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;">${escapeHtml(ex.exerciseTitle)}</span>
     ${columns.map(f=>{
       if(!fields.includes(f)) return `<span style="flex:0 0 44px;text-align:center;color:var(--muted);">—</span>`;
-      const val = f==='sets' ? ex.sets.length : (f==='durationSec' ? secToMin(first.durationSec) : (first[f]!=null ? first[f] : ''));
-      return `<input type="number"${f==='distanceMi'||f==='durationSec'?' step="0.1"':''} style="flex:0 0 44px;" data-exercise-field="${idx}:${f}" value="${val}">`;
+      const val = f==='sets' ? ex.sets.length : (first[f]!=null ? first[f] : '');
+      return `<input type="number"${f==='distanceMi'?' step="0.1"':''} style="flex:0 0 44px;" data-exercise-field="${idx}:${f}" value="${val}">`;
     }).join('')}
+    <input type="number" style="flex:0 0 32px;" data-exercise-time="${idx}:min" value="${totalSec?Math.floor(totalSec/60):''}" placeholder="0">
+    <input type="number" style="flex:0 0 32px;" data-exercise-time="${idx}:sec" value="${totalSec?totalSec%60:''}" placeholder="0">
     <button class="del" data-rm-exercise-session="${idx}" type="button" style="flex:0 0 16px;font-size:14px;padding:0;" title="Remove exercise">×</button>
   </div>`;
 }
@@ -1595,6 +1616,7 @@ function activeWorkoutSessionCard(){
       <span style="flex:0 0 28px;"></span>
       <span style="flex:1;text-align:left;">Exercise</span>
       ${liveColumns.map(f=>`<span style="flex:0 0 44px;">${LIVE_FIELD_LABELS[f]}</span>`).join('')}
+      <span style="flex:0 0 32px;">MIN</span><span style="flex:0 0 32px;">SEC</span>
       <span style="flex:0 0 16px;"></span>
     </div>` : ''}
     ${s.exercises.map((ex,i)=>activeSessionExerciseHtml(ex,i,liveColumns)).join('')}
@@ -3887,8 +3909,18 @@ function attachHandlers(){
       const [exIdx, field] = inp.dataset.exerciseField.split(':');
       const sessionEx = state.activeWorkoutSession.exercises[Number(exIdx)];
       if(field==='sets') updateExerciseSetCount(sessionEx.id, inp.value);
-      else if(field==='durationSec') updateExerciseField(sessionEx.id, field, minToSec(inp.value));
       else updateExerciseField(sessionEx.id, field, inp.value);
+    });
+  });
+  document.querySelectorAll('[data-exercise-time]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const [exIdxStr] = inp.dataset.exerciseTime.split(':');
+      const exIdx = Number(exIdxStr);
+      const row = inp.closest('.set-table-row');
+      const min = Number(row.querySelector(`[data-exercise-time="${exIdx}:min"]`).value)||0;
+      const sec = Number(row.querySelector(`[data-exercise-time="${exIdx}:sec"]`).value)||0;
+      const sessionEx = state.activeWorkoutSession.exercises[exIdx];
+      updateExerciseField(sessionEx.id, 'durationSec', min*60+sec>0 ? min*60+sec : null);
     });
   });
   document.querySelectorAll('[data-rm-exercise-session]').forEach(btn=>{
