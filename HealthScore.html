@@ -1497,7 +1497,7 @@ function readDayCheckboxes(root, prefix){
 }
 const INFO_CONTENT = {
   projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
-  trend: ['Score trend', `Under "This Week", your daily Activity and Nutrition scores (0-100) for the last 7 days. Under "Monthly", your Total Score and Weight for each of the last 12 months (labeled by month letter — a January point also shows its year so a 12-month span crossing a new year stays unambiguous) — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value, or tap elsewhere on the chart for the full data table.`],
+  trend: ['Trend', `Under "This Week", your actual Calories Burned (activity) and Calories In for the last 7 days — real numbers rather than the 0-100 Activity/Nutrition scores, since a score flattens to 100 the moment a goal's met and hides how far under your calorie limit you actually ran, or how much you outpaced your activity goals by. A day with nothing logged is a gap in the line, not a literal zero. Under "Monthly", your Total Score and Weight for each of the last 12 months (labeled by month letter — a January point also shows its year so a 12-month span crossing a new year stays unambiguous) — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value, or tap elsewhere on the chart for the full data table.`],
   fitsync: ['Connect your Fitbit', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Head to Settings to connect it: finding your Fitbit's Google account, getting approved, and connecting. After you connect once, it re-syncs automatically in the background — no further action needed unless you reconnect a different account.<br><br><strong>Why do I have to wait for approval before I can connect?</strong> Everyone connects through one shared Google project the app owner controls, and Google caps how many outside accounts can use it before requiring a full verification review. Adding each person by hand keeps it under that limit — it's a one-time, ~30-second step on the app owner's end.<br><br><strong>My Fitbit's Google account isn't a Gmail address — is that right?</strong> Yes, that's normal. A Google account can be created with any email as its login, including Outlook, Hotmail, or Yahoo addresses. Use whatever email Fitbit's app shows you, even if it doesn't end in @gmail.com.<br><br><strong>I connected the wrong account.</strong> In Settings, tap "Reconnect & sync now" — Google always shows the account-chooser screen again, so just pick the correct email that time.<br><br><strong>App owner only:</strong> to approve a new person, go to <strong>console.cloud.google.com</strong> → your project → <strong>APIs & Services → OAuth consent screen → Audience</strong> → <strong>Add users</strong> under Test users, paste in the email they sent you, save. Then send them the project's <strong>Client ID</strong> and <strong>Client Secret</strong> from <strong>APIs & Services → Credentials</strong> (whatever channel you like — text, email) so they can paste them into Settings on their own device. If you haven't created the project yet, use the same Credentials/OAuth-consent-screen path to set one up, with redirect URI <strong>${location.origin}${location.pathname}</strong> and the Google Health API enabled.`],
   backupfile: ['Back up now', `Your data is already safely auto-saved as you go — one continuously-updated save, same idea as any other app, never a pile of files. This button makes a separate exportable copy for the one thing that auto-save can't survive: deliberately clearing your browser's history/site data.<br><br>On browsers that let a page choose a save location, the very first tap asks where to save once, then every tap after that overwrites that same file — a real single save file, no extra notification each time. Elsewhere, each tap creates a new dated file and triggers your browser's own "Download complete" notification, which no page can silence — that's the browser, not Health Score.`]
 };
@@ -1629,7 +1629,7 @@ function trendLineChart(series, labels, opts){
       const x = padL + stepX*i, y = H-padB-((v-min)/(max-min))*plotH;
       const c = svgEl('circle',{cx:x,cy:y,r:5,fill:s.color,class:'chart-mark'});
       const tipLabel = (opts.tooltipLabels && opts.tooltipLabels[i]) || labels[i];
-      c.addEventListener('click', ev=>{ ev.stopPropagation(); showTooltip(ev.clientX, ev.clientY, `${tipLabel} · ${s.name}: ${v}`); });
+      c.addEventListener('click', ev=>{ ev.stopPropagation(); showTooltip(ev.clientX, ev.clientY, `${tipLabel} · ${s.name}: ${v.toLocaleString()}${s.unit||''}`); });
       svg.appendChild(c);
     });
   });
@@ -2501,13 +2501,23 @@ function mountCharts(){
   }else{
     const dates = []; for(let i=6;i>=0;i--) dates.push(addDays(t,-i));
     const labels = dates.map(d=>dateFromIso(d).toLocaleDateString(undefined,{weekday:'short'}).slice(0,2));
-    const actPoints = dates.map(activityScore), nutPoints = dates.map(nutritionScore);
+    // Actual kcal in/out rather than the 0-100 Activity/Nutrition scores: a
+    // score flattens to 100 the moment a goal's met (eating well under the
+    // calorie limit, or blowing past step/active-min goals, both just read
+    // as "100"), which hides exactly the swings someone would want to see
+    // on a trend chart. Same null-when-unlogged behavior as the scores had
+    // (a day with nothing logged is a gap in the line, not a literal 0).
+    const calBurnedPoints = dates.map(d=>{
+      const a = getDay(d).activity;
+      return (a.steps===0 && a.activeMin===0) ? null : Math.round(caloriesBurnedForDay(d));
+    });
+    const calInPoints = dates.map(d=> getDay(d).foods.length===0 ? null : Math.round(dayTotals(d).kcal));
     trendEl.appendChild(trendLineChart([
-      {name:'Activity', color:'var(--blue)', points: actPoints},
-      {name:'Nutrition', color:'var(--aqua)', points: nutPoints}
+      {name:'Calories Burned', color:'var(--blue)', points: calBurnedPoints, unit:' kcal'},
+      {name:'Calories In', color:'var(--aqua)', points: calInPoints, unit:' kcal'}
     ], labels));
-    trendEl.addEventListener('click', ()=>openChartTableModal('7-day trend', ['Day','Activity','Nutrition'],
-      dates.map((d,i)=>[dateFromIso(d).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}), actPoints[i]===null?'--':actPoints[i], nutPoints[i]===null?'--':nutPoints[i]]),
+    trendEl.addEventListener('click', ()=>openChartTableModal('7-day trend', ['Day','Calories Burned','Calories In'],
+      dates.map((d,i)=>[dateFromIso(d).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}), calBurnedPoints[i]===null?'--':calBurnedPoints[i].toLocaleString()+' kcal', calInPoints[i]===null?'--':calInPoints[i].toLocaleString()+' kcal']),
       [null,'var(--blue)','var(--aqua)']
     ));
   }
