@@ -1,3 +1,7 @@
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Personal data exports — used locally for testing the Hevy CSV importer,
+# never meant to be committed to this public repo.
+workout_data.csv

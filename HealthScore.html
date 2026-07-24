@@ -128,6 +128,15 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
 .food-row .sub{font-size:12px;color:var(--muted);}
 .food-row .kcal{font-size:14px;font-weight:700;text-align:right;}
 .food-row .del{background:none;border:none;color:var(--muted);font-size:18px;padding:4px 8px;}
+/* ---- generic list row (routines, custom exercises, workout history) ---- */
+.list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px solid var(--grid);gap:10px;}
+.list-row:first-child{border-top:none;}
+.list-row .name{font-size:14px;font-weight:600;}
+.list-row .sub{font-size:12px;color:var(--muted);}
+.del{background:none;border:none;color:var(--muted);font-size:18px;padding:4px 8px;flex:none;}
+/* ---- routine builder exercise rows ---- */
+.routine-exercise-row{padding:10px 0;border-top:1px solid var(--grid);}
+.routine-exercise-row:first-child{border-top:none;}
 
 /* ---- forms ---- */
 .field{margin-bottom:14px;}
@@ -172,6 +181,14 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
 .topbar-install-btn:active{transform:translateY(1px);box-shadow:0 1px 0 var(--btn-lo);}
 .topbar-install-btn.installed{background:var(--surface);color:var(--muted);border:1px solid var(--border);
   box-shadow:none;font-weight:600;}
+/* ---- topbar "workout in progress" banner — shown on every screen except the
+   Activity log itself (where the full session card already covers this), so
+   start/pause/stop stays reachable "at any time" without a dedicated nav tab ---- */
+.workout-banner-btn{flex-shrink:0;border:none;border-radius:20px;padding:7px 14px;font-size:13px;font-weight:700;
+  color:#fff;background:linear-gradient(180deg, color-mix(in srgb, var(--critical) 100%, white 15%), var(--critical));
+  box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);
+  transition:transform .08s, box-shadow .08s;}
+.workout-banner-btn:active{transform:translateY(1px);box-shadow:0 1px 0 var(--btn-lo);}
 .btn-secondary{width:100%;padding:13px;border:1px solid var(--border);border-radius:11px;background:var(--surface);
   color:var(--text);font-size:15px;font-weight:600;
   box-shadow:0 3px 0 var(--btn-lo), inset 0 1px 0 var(--btn-hi);
@@ -308,9 +325,13 @@ const STORE_KEY = 'healthscore_v1';
 function defaultState(){
   return {
     profile: null, // {age, sex, heightIn, weightLb, goalType, ratePerWeekLb, stepGoal, activeMinGoal}
-    days: {},      // 'YYYY-MM-DD' -> {weightLb, foods:[...], activity:{steps,activeMin,kcal,source}}
+    days: {},      // 'YYYY-MM-DD' -> {weightLb, foods:[...], activity:{steps,activeMin,kcal,source}, workouts:[...]}
     myFoods: [],
     foodMemory: {}, // { foodName: {qty, unitLabel} } — last quantity used, recalled next time
+    myExercises: [],    // user/import-added custom exercises — mirrors myFoods
+    exerciseMemory: {}, // { exerciseId: {weightLb, reps, durationSec, distanceMi, ts} } — mirrors foodMemory
+    routines: [],        // named templates: "Leg day", "Cardio", etc. — see EXERCISE_DB/allExercises()
+    activeWorkoutSession: null, // the single in-progress/paused session, or null — see startWorkoutSession()
     settings: {
       clientId:'', clientSecret:'', fdcApiKey:'', useMetric:false,
       charts: { projection:true },
@@ -689,6 +710,7 @@ function getDay(iso){
   if(!state.days[iso]) state.days[iso] = {weightLb:null, foods:[], activity:{steps:0,activeMin:0,kcal:0,distanceMi:0,source:'manual'}, celebrated:{}};
   if(state.days[iso].activity.distanceMi===undefined) state.days[iso].activity.distanceMi = 0; // upgrade older saved days
   if(!state.days[iso].celebrated) state.days[iso].celebrated = {};
+  if(!state.days[iso].workouts) state.days[iso].workouts = []; // upgrade older saved days
   return state.days[iso];
 }
 // Marks the first time (per day) steps, active minutes, or a perfect Total Score
@@ -703,7 +725,7 @@ function checkGoalsAndCelebrate(iso){
   if(p.stepGoal>0 && d.activity.steps>=p.stepGoal && !d.celebrated.steps){
     d.celebrated.steps = true; fired = true;
   }
-  if(p.activeMinGoal>0 && d.activity.activeMin>=p.activeMinGoal && !d.celebrated.activeMin){
+  if(p.activeMinGoal>0 && effectiveActiveMin(iso)>=p.activeMinGoal && !d.celebrated.activeMin){
     d.celebrated.activeMin = true; fired = true;
   }
   const overall = dayOverallScore(iso);
@@ -794,6 +816,706 @@ const FOOD_DB = [
 {n:"Honey, 1 tbsp",per:1,u:"tbsp",k:64,p:0.1,c:17,f:0,ir:0.1,ca:1}
 ];
 function allFoods(){ return FOOD_DB.concat(state.myFoods); }
+
+/* =========================================================
+   EXERCISE DATABASE — mirrors FOOD_DB's role: a curated baseline
+   plus state.myExercises for user/import-added custom entries.
+   Names deliberately bake the equipment variant into the name
+   itself ("Bench Press (Dumbbell)" vs "... (Barbell)" are distinct
+   entries), matching Hevy's own naming convention — this is what
+   makes an imported CSV's exercise_title match cleanly by name
+   against this list instead of needing fuzzy matching.
+   ========================================================= */
+// id is a deterministic slug of the name — the same function is used for
+// both baseline seeding and CSV-import reconciliation (reconcileImportedExercise),
+// so a CSV row and a baseline entry with the same name always resolve to the
+// same id without needing a separate lookup table.
+function slugify(name){
+  return String(name).toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/(^-+|-+$)/g,'');
+}
+// metricType is a UI hint only (which input fields to default to when logging
+// a set) — the Set schema itself always has every field available regardless,
+// so an imported set with an unexpected field for its exercise is never dropped.
+// 'weight_reps' (barbell/dumbbell/machine/cable lifts), 'reps_only' (bodyweight),
+// 'duration' (planks/holds), 'distance_duration' (cardio), 'weight_distance' (carries/sled).
+const EXERCISE_DB_RAW = [
+// Chest
+['Bench Press (Barbell)','Chest','weight_reps'],['Bench Press (Dumbbell)','Chest','weight_reps'],
+['Bench Press (Smith Machine)','Chest','weight_reps'],['Bench Press (Machine)','Chest','weight_reps'],
+['Incline Bench Press (Barbell)','Chest','weight_reps'],['Incline Bench Press (Dumbbell)','Chest','weight_reps'],
+['Incline Bench Press (Smith Machine)','Chest','weight_reps'],['Incline Chest Press (Machine)','Chest','weight_reps'],
+['Decline Bench Press (Barbell)','Chest','weight_reps'],['Decline Bench Press (Dumbbell)','Chest','weight_reps'],
+['Chest Fly (Dumbbell)','Chest','weight_reps'],['Chest Fly (Cable)','Chest','weight_reps'],
+['Chest Fly (Machine)','Chest','weight_reps'],['Incline Chest Fly (Dumbbell)','Chest','weight_reps'],
+['Decline Chest Fly (Dumbbell)','Chest','weight_reps'],['Lower Chest Fly','Chest','weight_reps'],
+['Pec Deck (Machine)','Chest','weight_reps'],['Push Up','Chest','reps_only'],
+['Chest Dip','Chest','reps_only'],['Cable Crossover','Chest','weight_reps'],
+// Back
+['Deadlift (Barbell)','Back','weight_reps'],['Romanian Deadlift (Barbell)','Back','weight_reps'],
+['Romanian Deadlift (Dumbbell)','Back','weight_reps'],['Sumo Deadlift (Barbell)','Back','weight_reps'],
+['Pull Up','Back','reps_only'],['Chin Up','Back','reps_only'],
+['Lat Pulldown (Cable)','Back','weight_reps'],['Lat Pulldown (Machine)','Back','weight_reps'],
+['Wide Grip Pulldown (Cable)','Back','weight_reps'],['Close Grip Pulldown (Cable)','Back','weight_reps'],
+['Straight Arm Pulldown (Cable)','Back','weight_reps'],['Seated Cable Row','Back','weight_reps'],
+['Bent Over Row (Barbell)','Back','weight_reps'],['Bent Over Row (Dumbbell)','Back','weight_reps'],
+['Reverse Grip Row (Barbell)','Back','weight_reps'],['T Bar Row','Back','weight_reps'],
+['Single Arm Row (Dumbbell)','Back','weight_reps'],['Face Pull (Cable)','Back','weight_reps'],
+['Back Extension','Back','reps_only'],['Good Morning (Barbell)','Back','weight_reps'],
+['Shrug (Barbell)','Back','weight_reps'],['Shrug (Dumbbell)','Back','weight_reps'],
+// Shoulders
+['Overhead Press (Barbell)','Shoulders','weight_reps'],['Overhead Press (Dumbbell)','Shoulders','weight_reps'],
+['Seated Overhead Press (Barbell)','Shoulders','weight_reps'],['Seated Overhead Press (Dumbbell)','Shoulders','weight_reps'],
+['Arnold Press (Dumbbell)','Shoulders','weight_reps'],['Shoulder Press (Machine)','Shoulders','weight_reps'],
+['Lateral Raise (Dumbbell)','Shoulders','weight_reps'],['Lateral Raise (Cable)','Shoulders','weight_reps'],
+['Lateral Raise (Machine)','Shoulders','weight_reps'],['Front Raise (Dumbbell)','Shoulders','weight_reps'],
+['Cable Front Raise','Shoulders','weight_reps'],['Rear Delt Fly (Dumbbell)','Shoulders','weight_reps'],
+['Rear Delt Fly (Cable)','Shoulders','weight_reps'],['Rear Delt Fly (Machine)','Shoulders','weight_reps'],
+['Upright Row (Barbell)','Shoulders','weight_reps'],['Upright Row (Dumbbell)','Shoulders','weight_reps'],
+['Cuban Press','Shoulders','weight_reps'],
+// Biceps
+['Bicep Curl (Barbell)','Arms','weight_reps'],['Bicep Curl (Dumbbell)','Arms','weight_reps'],
+['Bicep Curl (Cable)','Arms','weight_reps'],['EZ Bar Curl','Arms','weight_reps'],
+['Hammer Curl (Dumbbell)','Arms','weight_reps'],['Hammer Curl (Cable)','Arms','weight_reps'],
+['Preacher Curl (Barbell)','Arms','weight_reps'],['Preacher Curl (Dumbbell)','Arms','weight_reps'],
+['Concentration Curl (Dumbbell)','Arms','weight_reps'],['Incline Curl (Dumbbell)','Arms','weight_reps'],
+['Cable Curl (Rope)','Arms','weight_reps'],['Zottman Curl (Dumbbell)','Arms','weight_reps'],
+['Spider Curl (Dumbbell)','Arms','weight_reps'],
+// Triceps
+['Tricep Pushdown (Cable)','Arms','weight_reps'],['Rope Pushdown (Cable)','Arms','weight_reps'],
+['Tricep Extension (Dumbbell)','Arms','weight_reps'],['Overhead Tricep Extension (Dumbbell)','Arms','weight_reps'],
+['Overhead Tricep Extension (Cable)','Arms','weight_reps'],['Skullcrusher (Barbell)','Arms','weight_reps'],
+['Skullcrusher (Dumbbell)','Arms','weight_reps'],['Close Grip Bench Press (Barbell)','Arms','weight_reps'],
+['Tricep Dip','Arms','reps_only'],['Bench Dip','Arms','reps_only'],
+['Diamond Push Up','Arms','reps_only'],['Tricep Kickback (Dumbbell)','Arms','weight_reps'],
+// Legs
+['Squat (Barbell)','Legs','weight_reps'],['Front Squat (Barbell)','Legs','weight_reps'],
+['Squat (Smith Machine)','Legs','weight_reps'],['Box Squat (Barbell)','Legs','weight_reps'],
+['Sumo Squat (Dumbbell)','Legs','weight_reps'],['Goblet Squat (Dumbbell)','Legs','weight_reps'],
+['Pistol Squat','Legs','reps_only'],['Leg Press (Machine)','Legs','weight_reps'],
+['Hack Squat (Machine)','Legs','weight_reps'],['Leg Extension (Machine)','Legs','weight_reps'],
+['Leg Curl (Machine)','Legs','weight_reps'],['Lying Leg Curl (Machine)','Legs','weight_reps'],
+['Seated Leg Curl (Machine)','Legs','weight_reps'],['Nordic Curl','Legs','reps_only'],
+['Lunge (Dumbbell)','Legs','weight_reps'],['Lunge (Barbell)','Legs','weight_reps'],
+['Walking Lunge (Dumbbell)','Legs','weight_reps'],['Bulgarian Split Squat (Dumbbell)','Legs','weight_reps'],
+['Step Up (Dumbbell)','Legs','weight_reps'],['Hip Thrust (Barbell)','Legs','weight_reps'],
+['Glute Bridge (Barbell)','Legs','weight_reps'],['Glute Kickback (Cable)','Legs','weight_reps'],
+['Adductor (Machine)','Legs','weight_reps'],['Abductor (Machine)','Legs','weight_reps'],
+['Calf Raise (Machine)','Legs','weight_reps'],['Standing Calf Raise (Machine)','Legs','weight_reps'],
+['Seated Calf Raise (Machine)','Legs','weight_reps'],
+// Core
+['Plank','Core','duration'],['Side Plank','Core','duration'],
+['Crunch','Core','reps_only'],['Sit Up','Core','reps_only'],
+['Reverse Crunch','Core','reps_only'],['Bicycle Crunch','Core','reps_only'],
+['Cable Crunch','Core','weight_reps'],['Hanging Leg Raise','Core','reps_only'],
+['Hanging Knee Raise','Core','reps_only'],['Leg Raise','Core','reps_only'],
+['Russian Twist','Core','reps_only'],['Ab Wheel Rollout','Core','reps_only'],
+['Mountain Climber','Core','reps_only'],['Woodchopper (Cable)','Core','weight_reps'],
+['Toe Touch','Core','reps_only'],['Dead Bug','Core','reps_only'],
+['V Up','Core','reps_only'],['Flutter Kick','Core','reps_only'],
+// Cardio
+['Running','Cardio','distance_duration'],['Walking','Cardio','distance_duration'],
+['Cycling','Cardio','distance_duration'],['Rowing (Machine)','Cardio','distance_duration'],
+['Elliptical','Cardio','distance_duration'],['Stairmaster','Cardio','distance_duration'],
+['Jump Rope','Cardio','duration'],['Swimming','Cardio','distance_duration'],
+['Assault Bike','Cardio','distance_duration'],['Ski Erg','Cardio','distance_duration'],
+['Sprint','Cardio','distance_duration'],
+// Full Body / Olympic
+['Clean and Jerk (Barbell)','Full Body','weight_reps'],['Power Clean (Barbell)','Full Body','weight_reps'],
+['Snatch (Barbell)','Full Body','weight_reps'],['Clean (Barbell)','Full Body','weight_reps'],
+['Kettlebell Swing','Full Body','weight_reps'],['Farmer\'s Carry','Full Body','weight_distance'],
+['Sled Push','Full Body','weight_distance'],['Sled Pull','Full Body','weight_distance'],
+['Battle Ropes','Full Body','duration'],['Burpee','Full Body','reps_only'],
+['Thruster (Barbell)','Full Body','weight_reps'],['Man Maker (Dumbbell)','Full Body','weight_reps'],
+['Wall Ball','Full Body','weight_reps'],['Box Jump','Full Body','reps_only'],
+['Turkish Get Up (Kettlebell)','Full Body','weight_reps'],['Renegade Row (Dumbbell)','Full Body','weight_reps']
+];
+const EXERCISE_DB = EXERCISE_DB_RAW.map(([name,category,metricType])=>({id:slugify(name), name, category, metricType}));
+function allExercises(){ return EXERCISE_DB.concat(state.myExercises); }
+function exerciseById(id){ return allExercises().find(e=>e.id===id); }
+
+/* =========================================================
+   WORKOUT SESSION — start/pause/stop/save with automatic time
+   tracking. Mirrors the app's existing convention for state that
+   must survive reload/backgrounding (see googleHealth.expiresAt):
+   an absolute timestamp persisted in state, re-derived on every
+   read via Date.now(), rather than a live-counting JS variable
+   that would be lost if the phone locks or the tab reloads mid-workout.
+   ========================================================= */
+function workoutDurationMs(session){
+  // A finished session's duration is fixed at its own endTime — using
+  // Date.now() here (as the running/paused branches correctly do) would make
+  // an already-completed workout's "duration" keep growing every time this
+  // is called long after the fact, which is exactly wrong for a saved record.
+  if(session.status==='completed') return session.endTime - session.startTime - (session.pausedAccumMs||0);
+  const end = session.status==='paused' ? session.pausedAt : Date.now();
+  return end - session.startTime - (session.pausedAccumMs||0);
+}
+function formatElapsed(ms){
+  const totalSec = Math.max(0, Math.floor(ms/1000));
+  const h = Math.floor(totalSec/3600), m = Math.floor((totalSec%3600)/60), s = totalSec%60;
+  const mm = String(m).padStart(2,'0'), ss = String(s).padStart(2,'0');
+  return h>0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}
+function startWorkoutSession(routine){
+  const exercises = routine ? routine.exercises.map((re,i)=>{
+    const ex = exerciseById(re.exerciseId);
+    return {id:Date.now()+Math.random()+i, exerciseId:re.exerciseId, exerciseTitle:ex?ex.name:'',
+      supersetId:null, notes:re.notes||'', order:i, sets:[]};
+  }) : [];
+  state.activeWorkoutSession = {
+    id: Date.now()+Math.random(),
+    title: routine ? routine.name : 'Workout',
+    routineId: routine ? routine.id : null,
+    startTime: Date.now(), endTime: null, description:'',
+    status:'running', pausedAccumMs:0, pausedAt:null,
+    exercises
+  };
+  saveState(); render();
+}
+function pauseWorkoutSession(){
+  const s = state.activeWorkoutSession; if(!s || s.status!=='running') return;
+  s.status='paused'; s.pausedAt=Date.now();
+  saveState(); render();
+}
+function resumeWorkoutSession(){
+  const s = state.activeWorkoutSession; if(!s || s.status!=='paused') return;
+  s.pausedAccumMs += Date.now()-s.pausedAt; s.pausedAt=null; s.status='running';
+  saveState(); render();
+}
+// discard=true drops the session entirely (e.g. started by mistake); otherwise
+// finalizes it into getDay(iso).workouts, which is what makes it count toward
+// the Activity goal (see effectiveActiveMin) and show up in history.
+function finishWorkoutSession(discard){
+  const s = state.activeWorkoutSession; if(!s) return;
+  if(discard){ state.activeWorkoutSession=null; saveState(); render(); return; }
+  if(s.status==='paused'){ s.pausedAccumMs += Date.now()-s.pausedAt; s.pausedAt=null; }
+  s.endTime = Date.now(); s.status = 'completed';
+  const iso = isoDate(new Date(s.startTime));
+  getDay(iso).workouts.push(s);
+  state.activeWorkoutSession = null;
+  saveState(); render();
+  checkGoalsAndCelebrate(iso);
+}
+function addExerciseToActiveSession(exerciseId){
+  const s = state.activeWorkoutSession; if(!s) return;
+  const ex = exerciseById(exerciseId); if(!ex) return;
+  s.exercises.push({id:Date.now()+Math.random(), exerciseId, exerciseTitle:ex.name, supersetId:null, notes:'', order:s.exercises.length, sets:[]});
+  saveState(); render();
+}
+// setData fields are all optional — whatever wasn't relevant for this
+// exercise/set (e.g. no distance on a weight_reps lift) stays null, never 0,
+// consistent with how CSV-imported sets treat a blank field (see parseHevyCsv).
+function addSetToExercise(sessionExerciseId, setData){
+  const s = state.activeWorkoutSession; if(!s) return;
+  const ex = s.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
+  const set = {
+    index: ex.sets.length, setType: setData.setType||'normal',
+    weightLb: setData.weightLb!=null && setData.weightLb!=='' ? Number(setData.weightLb) : null,
+    reps: setData.reps!=null && setData.reps!=='' ? Number(setData.reps) : null,
+    distanceMi: setData.distanceMi!=null && setData.distanceMi!=='' ? Number(setData.distanceMi) : null,
+    durationSec: setData.durationSec!=null && setData.durationSec!=='' ? Number(setData.durationSec) : null,
+    rpe: setData.rpe!=null && setData.rpe!=='' ? Number(setData.rpe) : null,
+    completed: true
+  };
+  ex.sets.push(set);
+  // Recalled as the default next time this exercise is logged (in the set-entry
+  // form), the same way selectFoodIntoForm() recalls foodMemory — never
+  // clobbering something the user's already typed.
+  state.exerciseMemory[ex.exerciseId] = {weightLb:set.weightLb, reps:set.reps, durationSec:set.durationSec, distanceMi:set.distanceMi, ts:Date.now()};
+  saveState(); render();
+}
+function removeSetFromExercise(sessionExerciseId, setIndex){
+  const s = state.activeWorkoutSession; if(!s) return;
+  const ex = s.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
+  ex.sets.splice(setIndex,1);
+  ex.sets.forEach((st,i)=>st.index=i); // keep index contiguous after a mid-list delete
+  saveState(); render();
+}
+// Codebase's first setInterval — deliberately scoped to a single textContent
+// write, never triggering its own render(), since render() is a full innerHTML
+// rebuild (see its own comment) and would be wasteful/input-focus-hostile at a
+// 1Hz cadence. Armed/cleared once per render() call (see its own body) so it's
+// always in sync with whichever screen is currently mounted.
+let workoutTimerInterval = null;
+function wireWorkoutTimer(){
+  clearInterval(workoutTimerInterval); workoutTimerInterval = null;
+  if(!state.activeWorkoutSession || state.activeWorkoutSession.status!=='running') return;
+  workoutTimerInterval = setInterval(()=>{
+    const el = document.getElementById('workout-elapsed');
+    if(!el){ clearInterval(workoutTimerInterval); return; } // defensive: DOM was replaced without going through render()
+    el.textContent = formatElapsed(workoutDurationMs(state.activeWorkoutSession));
+  }, 1000);
+}
+
+/* =========================================================
+   ROUTINE BUILDER — a self-contained modal (own draft state, own
+   re-render loop scoped to its own wrapper element) following the
+   onboarding modal-sequence pattern (wrap appended to document.body,
+   its own handlers, wrap.remove() on close) rather than a new
+   top-level screen — bounded/linear (name -> add exercises -> set
+   targets -> save) fits a modal, unlike the live session below.
+   ========================================================= */
+function getExerciseResults(query){
+  if(!query || !query.trim()) return [];
+  const q = query.trim().toLowerCase();
+  return allExercises().filter(e=>e.name.toLowerCase().includes(q)).slice(0,8);
+}
+// Which target-KPI fields make sense for a given exercise's metricType — a UI
+// hint only (see the EXERCISE_DB comment); logSetFieldsHtml (live session)
+// mirrors this same field selection for the actual set-entry form.
+function targetFieldsForMetricType(mt){
+  const fields = [];
+  if(mt==='weight_reps'||mt==='reps_only') fields.push('targetReps');
+  if(mt==='weight_reps'||mt==='weight_distance') fields.push('targetWeightLb');
+  if(mt==='weight_reps'||mt==='weight_distance'||mt==='reps_only') fields.push('targetSets');
+  if(mt==='duration'||mt==='distance_duration') fields.push('targetDurationSec');
+  if(mt==='distance_duration'||mt==='weight_distance') fields.push('targetDistanceMi');
+  return fields;
+}
+const TARGET_FIELD_LABELS = {targetSets:['Sets','3'], targetReps:['Reps','10'], targetWeightLb:['Weight (lb)','45'], targetDurationSec:['Time (sec)','60'], targetDistanceMi:['Distance (mi)','1']};
+function routineTargetFieldsHtml(re, idx, ex){
+  const fields = targetFieldsForMetricType(ex ? ex.metricType : 'weight_reps');
+  return `<div class="field-row" style="flex-wrap:wrap;">${fields.map(f=>{
+    const [label,placeholder] = TARGET_FIELD_LABELS[f];
+    const step = f==='targetDistanceMi' ? ' step="0.1"' : '';
+    return `<div class="field" style="flex:1;min-width:90px;"><label>${label}</label><input type="number"${step} data-target="${f}" data-idx="${idx}" value="${re[f]!=null?re[f]:''}" placeholder="${placeholder}"></div>`;
+  }).join('')}</div>`;
+}
+
+let routineBuilderDraft = null; // { id, name, notes, exercises:[...] } while the modal is open
+let routineBuilderQuery = '';   // exercise search box text within the modal
+let routineBuilderWrap = null;  // the modal's own wrapper element
+
+function renderRoutineBuilderModal(existingRoutine){
+  routineBuilderDraft = existingRoutine
+    ? JSON.parse(JSON.stringify(existingRoutine))
+    : {id: Date.now()+Math.random(), name:'', notes:'', exercises:[], createdAt:Date.now(), updatedAt:Date.now()};
+  routineBuilderQuery = '';
+  routineBuilderWrap = document.createElement('div');
+  document.body.appendChild(routineBuilderWrap);
+  renderRoutineBuilderDom();
+}
+function closeRoutineBuilderModal(){
+  if(routineBuilderWrap){ routineBuilderWrap.remove(); routineBuilderWrap = null; }
+  routineBuilderDraft = null;
+}
+function addExerciseToRoutineDraft(exerciseId){
+  routineBuilderDraft.exercises.push({exerciseId, order:routineBuilderDraft.exercises.length,
+    targetSets:null, targetReps:null, targetWeightLb:null, targetDurationSec:null, targetDistanceMi:null, notes:''});
+  routineBuilderQuery = '';
+  renderRoutineBuilderDom();
+}
+function renderRoutineBuilderDom(){
+  const draft = routineBuilderDraft;
+  const results = getExerciseResults(routineBuilderQuery);
+  routineBuilderWrap.innerHTML = `
+  <div class="modal-backdrop center">
+    <div class="modal">
+      <h2>${draft.exercises.length===0 && !draft.name ? 'New Routine' : 'Edit Routine'}</h2>
+      <div class="field"><label>Name</label><input type="text" id="rb-name" value="${escapeHtml(draft.name)}" placeholder="Leg day"></div>
+      <div class="field">
+        <label>Add exercise</label>
+        <input type="text" id="rb-search" placeholder="Search exercises…" value="${escapeHtml(routineBuilderQuery)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      </div>
+      ${routineBuilderQuery ? `
+        <div class="search-list ${results.length?'':'hidden'}" id="rb-results">
+          ${results.map((e,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${escapeHtml(e.name)}</div><div class="m">${escapeHtml(e.category)}</div></div>`).join('')}
+        </div>
+        ${results.length===0 ? `<button class="btn-secondary" id="rb-add-custom" type="button" style="margin-top:6px;">+ Add "${escapeHtml(routineBuilderQuery.trim())}" as custom exercise</button>` : ''}
+      ` : ''}
+      ${draft.exercises.length ? `
+        <div style="margin-top:14px;">
+          ${draft.exercises.map((re,i)=>{
+            const ex = exerciseById(re.exerciseId);
+            return `<div class="routine-exercise-row">
+              <div class="list-row" style="padding-bottom:6px;"><span class="name">${escapeHtml(ex?ex.name:re.exerciseId)}</span><button class="del" data-rm-exercise="${i}" type="button">×</button></div>
+              ${routineTargetFieldsHtml(re, i, ex)}
+            </div>`;
+          }).join('')}
+        </div>
+      ` : `<div class="muted" style="margin-top:10px;">No exercises added yet.</div>`}
+      <button class="btn-primary" id="rb-save" style="margin-top:14px;">Save Routine</button>
+      <button class="btn-secondary" id="rb-cancel" style="margin-top:8px;">Cancel</button>
+    </div>
+  </div>`;
+  wireRoutineBuilderHandlers();
+}
+function wireRoutineBuilderHandlers(){
+  const wrap = routineBuilderWrap;
+  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeRoutineBuilderModal(); });
+
+  const nameInput = wrap.querySelector('#rb-name');
+  if(nameInput){
+    nameInput.addEventListener('input', ()=>{ routineBuilderDraft.name = nameInput.value; });
+  }
+  const searchInput = wrap.querySelector('#rb-search');
+  if(searchInput){
+    searchInput.addEventListener('input', ()=>{
+      routineBuilderQuery = searchInput.value;
+      renderRoutineBuilderDom();
+      // Re-render replaces the input with a fresh DOM node, which resets the
+      // cursor to the start unless explicitly put back at the end — same fix
+      // as the main food-search input uses.
+      const el = routineBuilderWrap.querySelector('#rb-search');
+      if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    });
+  }
+  const resultsEl = wrap.querySelector('#rb-results');
+  if(resultsEl){
+    const results = getExerciseResults(routineBuilderQuery);
+    resultsEl.querySelectorAll('.search-item').forEach(el=>{
+      el.addEventListener('click', ()=>addExerciseToRoutineDraft(results[Number(el.dataset.idx)].id));
+    });
+  }
+  const addCustomBtn = wrap.querySelector('#rb-add-custom');
+  if(addCustomBtn) addCustomBtn.addEventListener('click', ()=>{
+    const name = routineBuilderQuery.trim(); if(!name) return;
+    const id = slugify(name);
+    if(!exerciseById(id)) state.myExercises.push({id, name, category:'Other', metricType:'weight_reps', isCustom:true});
+    addExerciseToRoutineDraft(id);
+  });
+  wrap.querySelectorAll('[data-rm-exercise]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      routineBuilderDraft.exercises.splice(Number(btn.dataset.rmExercise),1);
+      renderRoutineBuilderDom();
+    });
+  });
+  wrap.querySelectorAll('[data-target]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const idx = Number(inp.dataset.idx);
+      routineBuilderDraft.exercises[idx][inp.dataset.target] = inp.value===''?null:Number(inp.value);
+    });
+  });
+  const saveBtn = wrap.querySelector('#rb-save');
+  if(saveBtn) saveBtn.addEventListener('click', ()=>{
+    const name = (routineBuilderDraft.name||'').trim();
+    if(!name){ alert('Enter a routine name.'); return; }
+    routineBuilderDraft.name = name; // stored raw — escapeHtml() is applied at every render site, not at storage time
+    routineBuilderDraft.updatedAt = Date.now();
+    const existingIdx = state.routines.findIndex(r=>r.id===routineBuilderDraft.id);
+    if(existingIdx>=0) state.routines[existingIdx] = routineBuilderDraft;
+    else state.routines.push(routineBuilderDraft);
+    saveState();
+    closeRoutineBuilderModal();
+    render();
+  });
+  const cancelBtn = wrap.querySelector('#rb-cancel');
+  if(cancelBtn) cancelBtn.addEventListener('click', closeRoutineBuilderModal);
+}
+function deleteRoutine(id){
+  if(!confirm('Delete this routine?')) return;
+  state.routines = state.routines.filter(r=>r.id!==id);
+  saveState(); render();
+}
+
+/* =========================================================
+   WORKOUT SCREEN UI — lives inside the Log screen's Activity
+   section (see screenLog), not a dedicated tab; a topbar banner on
+   every OTHER screen keeps an in-progress session reachable "at any
+   time" without needing its own nav-level screen.
+   ========================================================= */
+// No routine started yet — pick a routine to start, or start freeform.
+function workoutsQuickCard(){
+  return `<div class="card">
+    <div class="card-head"><h3>Workouts</h3><button class="iconbtn" id="btn-new-routine" title="New routine">+</button></div>
+    ${state.routines.length===0 ? `<div class="muted">No routines yet — start one freeform below, or build a routine.</div>` : `
+      ${state.routines.map(r=>`<div class="list-row"><span class="name">${escapeHtml(r.name)}</span><button class="btn-secondary" style="width:auto;padding:8px 14px;" data-start-routine="${r.id}" type="button">Start</button></div>`).join('')}
+    `}
+    <button class="btn-secondary" id="btn-quick-start-workout" style="margin-top:10px;">Quick start (freeform)</button>
+  </div>`;
+}
+// Which set-entry fields make sense for a given exercise's metricType — the
+// live-logging counterpart to routineTargetFieldsHtml's target-KPI fields
+// (a "number of sets" field doesn't apply to logging ONE set, so this is a
+// deliberately different field list, not a reuse of targetFieldsForMetricType).
+function setFieldsForMetricType(mt){
+  if(mt==='weight_reps') return ['weightLb','reps'];
+  if(mt==='reps_only') return ['reps'];
+  if(mt==='duration') return ['durationSec'];
+  if(mt==='distance_duration') return ['distanceMi','durationSec'];
+  if(mt==='weight_distance') return ['weightLb','distanceMi'];
+  return ['weightLb','reps'];
+}
+const SET_FIELD_LABELS = {weightLb:['Weight (lb)','45'], reps:['Reps','10'], durationSec:['Seconds','60'], distanceMi:['Miles','1']};
+// Prefills from exerciseMemory (last logged values for this exercise) the same
+// way selectFoodIntoForm() recalls foodMemory — a starting point, not locked.
+function logSetFieldsHtml(idx, mt, remembered){
+  const fields = setFieldsForMetricType(mt);
+  return `<div class="field-row" style="flex-wrap:wrap;">${fields.map(f=>{
+    const [label,placeholder] = SET_FIELD_LABELS[f];
+    const step = f==='distanceMi' ? ' step="0.1"' : '';
+    const remVal = remembered && remembered[f]!=null ? remembered[f] : '';
+    return `<div class="field" style="flex:1;min-width:90px;"><label>${label}</label><input type="number"${step} id="ws-set-${idx}-${f}" placeholder="${placeholder}" value="${remVal}"></div>`;
+  }).join('')}</div>`;
+}
+function activeSessionExerciseHtml(ex, idx){
+  const template = exerciseById(ex.exerciseId);
+  const mt = template ? template.metricType : 'weight_reps';
+  const remembered = state.exerciseMemory[ex.exerciseId];
+  return `<div class="routine-exercise-row">
+    <div class="list-row" style="padding-bottom:4px;"><span class="name" data-exercise-history="${ex.exerciseId}" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;">${escapeHtml(ex.exerciseTitle)}</span></div>
+    ${ex.sets.map((set,si)=>`<div class="row" style="font-size:13px;padding:4px 0;">
+      <span class="muted">Set ${si+1}${set.setType!=='normal'?' ('+set.setType+')':''}</span>
+      <span>${[set.weightLb!=null?set.weightLb+' lb':null, set.reps!=null?set.reps+' reps':null, set.durationSec!=null?formatElapsed(set.durationSec*1000)+' min':null, set.distanceMi!=null?set.distanceMi+' mi':null].filter(Boolean).join(' · ')}</span>
+      <button class="del" data-rm-set="${idx}:${si}" type="button">×</button>
+    </div>`).join('')}
+    ${logSetFieldsHtml(idx, mt, remembered)}
+    <button class="btn-secondary" data-log-set="${idx}" type="button" style="margin-top:2px;">+ Log set</button>
+  </div>`;
+}
+let workoutSessionSearchQuery = ''; // exercise search box inside an active session card
+function activeWorkoutSessionCard(){
+  const s = state.activeWorkoutSession;
+  const wsResults = getExerciseResults(workoutSessionSearchQuery);
+  return `<div class="card">
+    <div class="card-head"><h3>${escapeHtml(s.title)}</h3>
+      <span class="inline-stat">${s.status==='paused' ? 'Paused' : `<span id="workout-elapsed">${formatElapsed(workoutDurationMs(s))}</span>`}</span>
+    </div>
+    <div class="row" style="margin-bottom:10px;gap:10px;">
+      ${s.status==='running'
+        ? `<button class="btn-secondary" id="btn-pause-workout" style="width:auto;flex:1;" type="button">Pause</button>`
+        : `<button class="btn-secondary" id="btn-resume-workout" style="width:auto;flex:1;" type="button">Resume</button>`}
+      <button class="btn-primary" id="btn-finish-workout" style="width:auto;flex:1;" type="button">Finish & Save</button>
+    </div>
+    ${s.exercises.map((ex,i)=>activeSessionExerciseHtml(ex,i)).join('')}
+    <div class="field" style="margin-top:10px;">
+      <label>Add exercise</label>
+      <input type="text" id="ws-search" placeholder="Search exercises…" value="${escapeHtml(workoutSessionSearchQuery)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    </div>
+    ${workoutSessionSearchQuery ? `<div class="search-list ${wsResults.length?'':'hidden'}" id="ws-results">
+      ${wsResults.map((e,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${escapeHtml(e.name)}</div><div class="m">${escapeHtml(e.category)}</div></div>`).join('')}
+    </div>` : ''}
+    <button class="btn-secondary" id="btn-discard-workout" style="margin-top:14px;color:var(--critical);" type="button">Discard workout</button>
+  </div>`;
+}
+// Today's already-finished sessions — same "shown alongside the log form, delete
+// only, no inline edit" convention as todaysFoodsCard().
+function todaysWorkoutsCard(){
+  const workouts = getDay(today()).workouts;
+  if(workouts.length===0) return '';
+  return `<div class="card">
+    <h3>Today's workouts</h3>
+    ${workouts.map(w=>`<div class="list-row"><div><div class="name">${escapeHtml(w.title)}</div><div class="sub">${w.exercises.length} exercise${w.exercises.length===1?'':'s'} · ${formatElapsed(workoutDurationMs(w))}</div></div><button class="del" data-del-workout="${w.id}" type="button">×</button></div>`).join('')}
+  </div>`;
+}
+// Shown top-right on every OTHER screen (not the Activity log itself, where
+// the full activeWorkoutSessionCard already covers this) so an in-progress
+// session can be resumed from wherever the user is — "start/pause/stop at
+// any time" without a dedicated bottom-nav tab. See wireWorkoutTimer for how
+// #workout-elapsed gets updated live without a full render() every second.
+function activeSessionBannerHtml(){
+  const s = state.activeWorkoutSession;
+  if(!s) return '';
+  if(activeTab==='log' && logFocus==='activity') return '';
+  const label = s.status==='paused' ? 'Paused' : `<span id="workout-elapsed">${formatElapsed(workoutDurationMs(s))}</span>`;
+  return `<button class="workout-banner-btn" data-quick-nav="log" data-log-focus="activity" type="button">⏱ ${label}</button>`;
+}
+
+/* =========================================================
+   HEVY CSV IMPORT — brings in a workout_data.csv export. Format
+   confirmed against a real export (not just Hevy's own docs): one
+   row per SET, workout-level fields repeat across every row of
+   that workout, exercise-level fields repeat across every row of
+   that exercise, weight/distance column names vary by the
+   exporting account's unit setting (weight_lbs/distance_miles or
+   weight_kg/distance_km).
+   ========================================================= */
+// Hand-rolled character-scanning parser rather than split(',') — Hevy quotes
+// every field and escapes embedded quotes as "", and description/notes can
+// contain literal commas, so a naive split would silently corrupt those rows.
+function parseCsv(text){
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for(let i=0;i<text.length;i++){
+    const c = text[i];
+    if(inQuotes){
+      if(c==='"'){
+        if(text[i+1]==='"'){ field+='"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else {
+      if(c==='"') inQuotes = true;
+      else if(c===','){ row.push(field); field=''; }
+      else if(c==='\r'){ /* skip — \n (or end of text) follows */ }
+      else if(c==='\n'){ row.push(field); rows.push(row); row=[]; field=''; }
+      else field += c;
+    }
+  }
+  if(field!=='' || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r=>r.length>1 || r[0]!=='');
+}
+const HEVY_MONTHS = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+// Hevy's export date format is "D MMM YYYY, HH:mm" — day is 1 or 2 digits, NO
+// leading zero (confirmed in a real export, e.g. "2 Feb 2026, 20:45") — this
+// is NOT ISO 8601, and new Date(string) is not reliable for it cross-browser.
+// Parsed as local time (the export carries no timezone), matching how the
+// rest of the app already treats dates via isoDate(new Date(...)).
+function hevyDateToEpoch(str){
+  const m = String(str).trim().match(/^(\d{1,2}) (\w{3}) (\d{4}), (\d{1,2}):(\d{2})$/);
+  if(!m) return null;
+  const monthIdx = HEVY_MONTHS[m[2]];
+  if(monthIdx===undefined) return null;
+  return new Date(Number(m[3]), monthIdx, Number(m[1]), Number(m[4]), Number(m[5])).getTime();
+}
+// Mirrors selectFoodIntoForm's matched-vs-custom decision: exact name match
+// (via the same slugify() used for baseline seeding) reuses that id; no match
+// creates a state.myExercises entry so an incomplete baseline never causes
+// data loss, only a less-populated shared library. metricType is a best
+// guess from which fields actually showed up across this exercise's
+// imported sets (sampleSets), so the set-entry form defaults sensibly later.
+function reconcileImportedExercise(title, sampleSets){
+  const id = slugify(title);
+  if(exerciseById(id)) return id;
+  const has = f => sampleSets.some(s=>s[f]!=null);
+  let metricType = 'reps_only';
+  if(has('weightLb') && has('distanceMi')) metricType = 'weight_distance';
+  else if(has('weightLb')) metricType = 'weight_reps';
+  else if(has('distanceMi')) metricType = 'distance_duration';
+  else if(has('durationSec')) metricType = 'duration';
+  else if(has('reps')) metricType = 'reps_only';
+  state.myExercises.push({id, name:title, category:'Other', metricType, isCustom:true});
+  return id;
+}
+// Groups the flat row-per-set CSV into Workout -> Exercise -> Set, matching
+// state.days[iso].workouts[] exactly — the data model was built to natively
+// match Hevy's own hierarchy specifically so this mapping is close to 1:1
+// rather than needing a lossy reshape. Change-detection over successive rows
+// (new workout when title+start_time differs from the previous row, new
+// exercise when exercise_title differs) rather than a group-by-map, since a
+// real export is already contiguous/ordered.
+function parseHevyCsv(text){
+  const rows = parseCsv(text);
+  if(rows.length<2) return [];
+  const header = rows[0].map(h=>h.trim());
+  const col = name => header.indexOf(name);
+  const weightCol = col('weight_lbs')>=0 ? {i:col('weight_lbs'), toLb:v=>v} : {i:col('weight_kg'), toLb:v=>v*2.20462};
+  const distCol = col('distance_miles')>=0 ? {i:col('distance_miles'), toMi:v=>v} : {i:col('distance_km'), toMi:v=>v*0.621371};
+  const iTitle=col('title'), iStart=col('start_time'), iEnd=col('end_time'), iDesc=col('description'),
+    iExTitle=col('exercise_title'), iSuperset=col('superset_id'), iExNotes=col('exercise_notes'),
+    iSetType=col('set_type'), iReps=col('reps'), iDuration=col('duration_seconds'), iRpe=col('rpe');
+  const num = v => (v===undefined || v===null || v==='') ? null : Number(v);
+
+  const workouts = [];
+  let curWorkout=null, curExercise=null, lastWorkoutKey=null;
+  for(let r=1;r<rows.length;r++){
+    const row = rows[r];
+    if(row.length<header.length) continue; // trailing blank line etc.
+    const title = row[iTitle], startStr = row[iStart];
+    const workoutKey = title+'|'+startStr;
+    if(workoutKey!==lastWorkoutKey){
+      curWorkout = {
+        id: Date.now()+Math.random(),
+        importKey: workoutKey, // stable per (title,start) — used only to dedupe on (re-)import, not as the row identity
+        title: title || 'Workout', routineId: null,
+        startTime: hevyDateToEpoch(startStr), endTime: hevyDateToEpoch(row[iEnd]),
+        description: row[iDesc]||'', status: 'completed', pausedAccumMs: 0, exercises: []
+      };
+      workouts.push(curWorkout);
+      lastWorkoutKey = workoutKey; curExercise = null;
+    }
+    const exTitle = row[iExTitle];
+    if(!curExercise || curExercise.exerciseTitle!==exTitle){
+      curExercise = {id: Date.now()+Math.random(), exerciseId:null, exerciseTitle:exTitle,
+        supersetId: row[iSuperset]||null, notes: row[iExNotes]||'', order: curWorkout.exercises.length, sets:[]};
+      curWorkout.exercises.push(curExercise);
+    }
+    curExercise.sets.push({
+      index: curExercise.sets.length,
+      setType: row[iSetType]||'normal',
+      weightLb: num(row[weightCol.i])!=null ? Math.round(weightCol.toLb(num(row[weightCol.i]))*10)/10 : null,
+      reps: num(row[iReps]),
+      distanceMi: num(row[distCol.i])!=null ? Math.round(distCol.toMi(num(row[distCol.i]))*100)/100 : null,
+      durationSec: num(row[iDuration]),
+      rpe: num(row[iRpe]),
+      completed: true
+    });
+  }
+  // Resolved after all sets are collected, since metricType inference needs
+  // the full set list for each exercise.
+  workouts.forEach(w=>w.exercises.forEach(ex=>{ ex.exerciseId = reconcileImportedExercise(ex.exerciseTitle, ex.sets); }));
+  return workouts;
+}
+// Skips checkGoalsAndCelebrate entirely — this is historical backfill, not
+// something happening "now"; celebrating dozens of backdated goal-crossings
+// at once in a loop would be a jarring confetti storm, not a welcome-back moment.
+async function importHevyCsv(file){
+  if(!file) return;
+  try{
+    const text = await file.text();
+    const workouts = parseHevyCsv(text);
+    if(workouts.length===0){ showToast('No workouts found in that file.', 'critical'); return; }
+    const affectedDays = new Set(workouts.map(w=>isoDate(new Date(w.startTime))));
+    if(!confirm(`This will add ${workouts.length} workout${workouts.length===1?'':'s'} across ${affectedDays.size} day${affectedDays.size===1?'':'s'}. Continue?`)) return;
+    let added=0, skipped=0;
+    workouts.forEach(w=>{
+      const d = getDay(isoDate(new Date(w.startTime)));
+      if(d.workouts.some(existing=>existing.importKey===w.importKey)){ skipped++; return; }
+      d.workouts.push(w);
+      added++;
+    });
+    saveState(); render();
+    showToast(`Imported ${added} workout${added===1?'':'s'}${skipped?` (${skipped} already imported)`:''}.`, 'good');
+  }catch(e){
+    showToast('Could not import that file: '+e.message, 'critical');
+  }
+}
+
+/* =========================================================
+   EXERCISE PROGRESS TREND — reuses trendLineChart/openChartTableModal
+   exactly as-is (both already generic), same as the app's other charts.
+   ========================================================= */
+// One point per day this exercise was logged: best-set estimated 1RM (Epley
+// formula) for weight-based exercises, total distance/duration for cardio
+// types, best reps for bodyweight — capped to the most recent `limit` points,
+// matching the 7/12-point precedent of the other trend charts.
+function exerciseHistoryPoints(exerciseId, limit){
+  const template = exerciseById(exerciseId);
+  const mt = template ? template.metricType : 'weight_reps';
+  const points = [];
+  Object.keys(state.days).sort().forEach(iso=>{
+    state.days[iso].workouts.forEach(w=>{
+      const ex = w.exercises.find(e=>e.exerciseId===exerciseId);
+      if(!ex || ex.sets.length===0) return;
+      let value = null;
+      if(mt==='weight_reps' || mt==='weight_distance'){
+        const oneRms = ex.sets.filter(s=>s.weightLb!=null && s.reps!=null).map(s=>s.weightLb*(1+s.reps/30));
+        if(oneRms.length) value = Math.max(...oneRms);
+      } else if(mt==='distance_duration'){
+        const total = ex.sets.reduce((sum,s)=>sum+(s.distanceMi||0), 0);
+        if(total>0) value = total;
+      } else if(mt==='duration'){
+        const total = ex.sets.reduce((sum,s)=>sum+(s.durationSec||0), 0);
+        if(total>0) value = total;
+      } else {
+        const reps = ex.sets.filter(s=>s.reps!=null).map(s=>s.reps);
+        if(reps.length) value = Math.max(...reps);
+      }
+      if(value!=null) points.push({iso, value: Math.round(value*10)/10});
+    });
+  });
+  return points.slice(-limit);
+}
+function openExerciseTrendModal(exerciseId){
+  const template = exerciseById(exerciseId);
+  const name = template ? template.name : exerciseId;
+  const mt = template ? template.metricType : 'weight_reps';
+  const points = exerciseHistoryPoints(exerciseId, 15);
+  if(points.length===0){ showToast('No logged history for this exercise yet.', 'critical'); return; }
+  const unit = (mt==='weight_reps'||mt==='weight_distance') ? ' lb (est. 1RM)' : mt==='distance_duration' ? ' mi' : mt==='duration' ? ' sec' : ' reps';
+  const labels = points.map(p=>dateFromIso(p.iso).toLocaleDateString(undefined,{month:'short',day:'numeric'}));
+  // openInfoModal takes an HTML string, but trendLineChart returns a live SVG
+  // node with click listeners already bound to it — appending that node into
+  // a placeholder container (rather than serializing to a string) is what
+  // keeps those listeners working, same reasoning as mountCharts().
+  openInfoModal(name, `<div id="exercise-trend-chart"></div>`);
+  const container = document.getElementById('exercise-trend-chart');
+  const chart = trendLineChart([{name, color:'var(--blue)', points: points.map(p=>p.value), unit}], labels, {independentScale:true});
+  container.appendChild(chart);
+  chart.addEventListener('click', ()=>openChartTableModal(name, ['Date', name],
+    points.map(p=>[dateFromIso(p.iso).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}), p.value.toLocaleString()+unit]).reverse(),
+    [null, 'var(--blue)']
+  ));
+}
 
 /* =========================================================
    USDA FOODDATA CENTRAL — live food search, supplementing the
@@ -954,6 +1676,22 @@ function caloriesBurnedForDay(iso){
   const d = getDay(iso);
   if(d.activity.source==='googlehealth' && d.activity.kcal>0) return d.activity.kcal;
   return estimateCaloriesBurned(state.profile, d.activity.steps, d.activity.activeMin, d.activity.distanceMi);
+  // Deliberately does NOT fold in workout-session time — only the Activity
+  // GOAL was asked to count workouts (see effectiveActiveMin below), not
+  // calorie-burn estimation. Revisit if that scope ever expands.
+}
+// Workout minutes are kept OUT of d.activity entirely (see startWorkoutSession)
+// because both existing writers of d.activity — the manual Log Activity save
+// handler and the Google Health auto-sync — do a full object REPLACE, not a
+// merge, so anything written into d.activity.activeMin directly would be
+// silently wiped by whichever of those runs next. Instead, workout minutes
+// are summed from d.workouts and added in at read time, everywhere the
+// Activity goal is checked or displayed.
+function workoutActiveMinForDay(iso){
+  return getDay(iso).workouts.reduce((sum,w)=>sum+Math.round(workoutDurationMs(w)/60000), 0);
+}
+function effectiveActiveMin(iso){
+  return getDay(iso).activity.activeMin + workoutActiveMinForDay(iso);
 }
 function weeklyGoalKcalAdjustment(p){
   const sign = p.goalType==='lose' ? -1 : p.goalType==='gain' ? 1 : 0;
@@ -1147,9 +1885,10 @@ function aggregateNutritionScore(dates){
 function activityScore(iso){
   const p = state.profile; if(!p) return null;
   const d = getDay(iso);
-  if(d.activity.steps===0 && d.activity.activeMin===0) return null;
+  const activeMin = effectiveActiveMin(iso);
+  if(d.activity.steps===0 && activeMin===0) return null; // includes workout-only days as "activity logged"
   const stepPart = clamp(d.activity.steps/p.stepGoal*100, 0, 100);
-  const minPart = clamp(d.activity.activeMin/p.activeMinGoal*100, 0, 100);
+  const minPart = clamp(activeMin/p.activeMinGoal*100, 0, 100);
   return Math.round(stepPart*0.6 + minPart*0.4);
 }
 function dayOverallScore(iso){
@@ -1190,7 +1929,7 @@ function buildHighlightBullets(dates, periodLabel, oAvg){
   const nAvg = aggregateNutritionScore(dates);
   const aAvg = avgScore(dates, activityScore);
   const loggedDays = dates.filter(d=>getDay(d).foods.length>0).length;
-  const activityDays = dates.filter(d=>{const a=getDay(d).activity; return a.steps>0||a.activeMin>0;}).length;
+  const activityDays = dates.filter(d=>{const a=getDay(d).activity; return a.steps>0||effectiveActiveMin(d)>0;}).length;
   const oAvgText = oAvg===null ? '--' : oAvg;
 
   const activityText = aAvg===null
@@ -1535,7 +2274,7 @@ function openTotalsModal(){
     ${progRow('Iron', totals.iron, ironRDA(p), 'mg', 'var(--critical)')}
     ${progRow('Calcium', totals.calcium, calciumRDA(p), 'mg', 'var(--muted)')}
     ${progRow('Steps', d.activity.steps, p.stepGoal, '', 'var(--blue)')}
-    ${progRow('Active min', d.activity.activeMin, p.activeMinGoal, '', 'var(--aqua)')}
+    ${progRow('Active min', effectiveActiveMin(t), p.activeMinGoal, '', 'var(--aqua)')}
     <div class="row" style="margin-top:8px;"><span class="text2">Distance</span><span>${(d.activity.distanceMi||0).toFixed(1)} mi</span></div>
   `);
 }
@@ -1553,7 +2292,7 @@ function openActivityModal(){
   const impactText = weightGoalImpactText(impact, p, 'today');
   openInfoModal('Activity', `
     ${bigStatRow(d.activity.steps.toLocaleString(), 'Steps', `/ ${p.stepGoal.toLocaleString()} goal`)}
-    ${bigStatRow(d.activity.activeMin, 'Active minutes', `/ ${p.activeMinGoal} goal`)}
+    ${bigStatRow(effectiveActiveMin(t), 'Active minutes', `/ ${p.activeMinGoal} goal`)}
     ${bigStatRow((d.activity.distanceMi||0).toFixed(1), 'Miles')}
     <div class="popup-stat">
       <div class="v" style="font-size:19px;line-height:1.5;">${fromActivity.toLocaleString()} <span class="l" style="display:inline;">(Activity)</span> <span class="muted">+</span> ${resting.toLocaleString()} <span class="l" style="display:inline;">(Resting)</span> <span class="muted">=</span> ${(resting+fromActivity).toLocaleString()} <span class="l" style="display:inline;">(Total Calories Burned)</span></div>
@@ -1768,6 +2507,11 @@ window.addEventListener('popstate', e=>{
 });
 
 function render(){
+  // Cleared unconditionally up front — render() is about to tear down/replace
+  // whatever DOM the previous interval tick was targeting (#workout-elapsed),
+  // and wireWorkoutTimer() re-arms it fresh at the end of this function if
+  // still applicable to whatever's now on screen.
+  clearInterval(workoutTimerInterval); workoutTimerInterval = null;
   document.querySelectorAll('.navbtn').forEach(b=>b.classList.toggle('active', b.dataset.tab===activeTab));
   const app = document.getElementById('app');
   if(needsOnboarding()){
@@ -1784,6 +2528,7 @@ function render(){
   else if(activeTab==='settings') app.innerHTML = screenSettings();
   attachHandlers();
   mountCharts();
+  wireWorkoutTimer();
 
   if(shouldPromptWeighIn() && !document.querySelector('.modal-backdrop')) renderWeighInModal();
 }
@@ -1804,7 +2549,7 @@ function screenToday(){
   // Gold outline is Total Score / Activity only, never Calories/Nutrition — matches
   // which goals actually trigger the confetti celebration (checkGoalsAndCelebrate).
   const totalGoalMet = oScore!==null && oScore>=100;
-  const activityGoalMet = (p.stepGoal>0 && d.activity.steps>=p.stepGoal) || (p.activeMinGoal>0 && d.activity.activeMin>=p.activeMinGoal);
+  const activityGoalMet = (p.stepGoal>0 && d.activity.steps>=p.stepGoal) || (p.activeMinGoal>0 && effectiveActiveMin(t)>=p.activeMinGoal);
 
   return `
   <div class="topbar"><h1>Health Score</h1>
@@ -1813,6 +2558,7 @@ function screenToday(){
         <div class="muted" id="today-date"></div>
         <div class="muted" style="font-size:11px;">${fitbitSyncLabel()}</div>
       </div>
+      ${activeSessionBannerHtml()}
       ${installTopbarBtnHtml()}
     </div>
   </div>
@@ -1932,7 +2678,7 @@ function screenLog(){
   const showNutrition = logFocus!=='activity';
   const showActivity = logFocus!=='nutrition';
   return `
-  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1>${installTopbarBtnHtml()}</div>
+  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1>${activeSessionBannerHtml()}${installTopbarBtnHtml()}</div>
   <div class="screen">
     ${showNutrition ? `<div class="card">
       <h3>Add food</h3>
@@ -1962,7 +2708,10 @@ function screenLog(){
 
     ${todaysFoodsCard()}` : ''}
 
-    ${showActivity ? `<div class="card">
+    ${showActivity ? `
+    ${state.activeWorkoutSession ? activeWorkoutSessionCard() : workoutsQuickCard()}
+    ${todaysWorkoutsCard()}
+    <div class="card">
       <div class="card-head"><h3>Activity</h3>${infoBtnHtml('fitsync')}</div>
       <div class="field-row">
         <div class="field"><label>Steps</label><input type="number" id="act-steps" placeholder="Not entered"></div>
@@ -2038,7 +2787,7 @@ function screenHistory(){
   }
 
   return `
-  <div class="topbar"><h1>Trends</h1>${installTopbarBtnHtml()}</div>
+  <div class="topbar"><h1>Trends</h1>${activeSessionBannerHtml()}${installTopbarBtnHtml()}</div>
   <div class="screen">
     <div class="seg" id="history-seg">
       <button data-v="week" class="${historyMode==='week'?'active':''}">This Week</button>
@@ -2155,7 +2904,7 @@ function settingsCardOpenAttr(key){ return openSettingsCards.has(key) ? 'open' :
 function screenSettings(){
   const p = state.profile;
   return `
-  <div class="topbar"><h1>Settings</h1>${installTopbarBtnHtml(true)}</div>
+  <div class="topbar"><h1>Settings</h1>${activeSessionBannerHtml()}${installTopbarBtnHtml(true)}</div>
   <div class="screen">
     <details class="card" data-card-key="profile" ${settingsCardOpenAttr('profile')}>
       <summary class="card-summary"><h3>Profile</h3><span class="chevron">⌄</span></summary>
@@ -2214,6 +2963,23 @@ function screenSettings(){
       <div class="field"><label>USDA FoodData Central API key</label><input type="text" id="s-fdc-key" placeholder="paste your free key here" value="${state.settings.fdcApiKey}"></div>
       <button class="btn-secondary" id="s-fdc-save">Save key</button>
       <div class="muted" style="margin-top:8px;">${state.settings.fdcApiKey ? 'Food search pulls live results from FoodData Central, including branded/packaged foods as a fallback for generic-food misses.' : 'Without a key, food search only uses the small built-in list. Add a free key above for live USDA results.'}</div>
+    </details>
+
+    <details class="card" data-card-key="workouts" ${settingsCardOpenAttr('workouts')}>
+      <summary class="card-summary"><h3>Workouts</h3><span class="chevron">⌄</span></summary>
+      <button class="btn-secondary" id="s-import-hevy">Import from Hevy (CSV)</button>
+      <input type="file" id="s-import-hevy-input" accept=".csv,text/csv" class="hidden">
+      <div class="muted" style="margin-top:8px;">Export "workout_data.csv" from Hevy's app settings, then pick it here — matched exercises reuse the built-in library, anything new becomes a custom exercise below. Re-importing an updated export only adds what's new.</div>
+      ${state.routines.length ? `
+      <div style="height:14px"></div>
+      <h3 style="font-size:13px;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">Routines</h3>
+      ${state.routines.map(r=>`<div class="list-row"><span class="name">${escapeHtml(r.name)}</span><div style="display:flex;align-items:center;gap:10px;"><button class="btn-secondary" style="width:auto;padding:6px 12px;font-size:13px;" data-edit-routine="${r.id}" type="button">Edit</button><button class="del" data-del-routine="${r.id}" type="button">×</button></div></div>`).join('')}
+      ` : ''}
+      ${state.myExercises.length ? `
+      <div style="height:14px"></div>
+      <h3 style="font-size:13px;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px;">Custom exercises</h3>
+      ${state.myExercises.map(e=>`<div class="list-row"><span class="name" data-exercise-history="${e.id}" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;">${escapeHtml(e.name)}</span><button class="del" data-del-exercise="${e.id}" type="button">×</button></div>`).join('')}
+      ` : ''}
     </details>
 
     ${state.errorLog.length ? `<details class="card" data-card-key="errors" ${settingsCardOpenAttr('errors')}>
@@ -2676,6 +3442,81 @@ function attachHandlers(){
       saveState(); render();
     });
   });
+  // WORKOUTS — routine picker / active session card, see screenLog's Activity section
+  const newRoutineBtn = document.getElementById('btn-new-routine');
+  if(newRoutineBtn) newRoutineBtn.addEventListener('click', ()=>renderRoutineBuilderModal(null));
+  document.querySelectorAll('[data-start-routine]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const routine = state.routines.find(r=>r.id===Number(btn.dataset.startRoutine));
+      if(routine) startWorkoutSession(routine);
+    });
+  });
+  const quickStartBtn = document.getElementById('btn-quick-start-workout');
+  if(quickStartBtn) quickStartBtn.addEventListener('click', ()=>startWorkoutSession(null));
+
+  const pauseBtn = document.getElementById('btn-pause-workout');
+  if(pauseBtn) pauseBtn.addEventListener('click', pauseWorkoutSession);
+  const resumeBtn = document.getElementById('btn-resume-workout');
+  if(resumeBtn) resumeBtn.addEventListener('click', resumeWorkoutSession);
+  const finishBtn = document.getElementById('btn-finish-workout');
+  if(finishBtn) finishBtn.addEventListener('click', ()=>{
+    if(confirm('Finish and save this workout?')) finishWorkoutSession(false);
+  });
+  const discardWorkoutBtn = document.getElementById('btn-discard-workout');
+  if(discardWorkoutBtn) discardWorkoutBtn.addEventListener('click', ()=>{
+    if(confirm('Discard this workout? This cannot be undone.')) finishWorkoutSession(true);
+  });
+
+  document.querySelectorAll('[data-log-set]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const idx = Number(btn.dataset.logSet);
+      const sessionEx = state.activeWorkoutSession.exercises[idx];
+      const template = exerciseById(sessionEx.exerciseId);
+      const mt = template ? template.metricType : 'weight_reps';
+      const setData = {};
+      setFieldsForMetricType(mt).forEach(f=>{
+        const el = document.getElementById(`ws-set-${idx}-${f}`);
+        setData[f] = el ? el.value : '';
+      });
+      addSetToExercise(sessionEx.id, setData);
+    });
+  });
+  document.querySelectorAll('[data-rm-set]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [exIdx, setIdx] = btn.dataset.rmSet.split(':').map(Number);
+      const sessionEx = state.activeWorkoutSession.exercises[exIdx];
+      removeSetFromExercise(sessionEx.id, setIdx);
+    });
+  });
+  const wsSearch = document.getElementById('ws-search');
+  if(wsSearch){
+    wsSearch.addEventListener('input', ()=>{
+      workoutSessionSearchQuery = wsSearch.value;
+      render();
+      const el = document.getElementById('ws-search');
+      if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    });
+  }
+  const wsResultsEl = document.getElementById('ws-results');
+  if(wsResultsEl){
+    const wsResults = getExerciseResults(workoutSessionSearchQuery);
+    wsResultsEl.querySelectorAll('.search-item').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        addExerciseToActiveSession(wsResults[Number(el.dataset.idx)].id);
+        workoutSessionSearchQuery = '';
+        render();
+      });
+    });
+  }
+  document.querySelectorAll('[data-del-workout]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const id = Number(btn.dataset.delWorkout);
+      const d = getDay(today());
+      d.workouts = d.workouts.filter(w=>w.id!==id);
+      saveState(); render();
+    });
+  });
+
   // Fields start blank every time (see screenLog) rather than showing today's current
   // totals, and are additive: leaving a field blank keeps whatever's already stored for
   // that metric instead of zeroing it out, so you can log just steps, just active
@@ -2749,6 +3590,32 @@ function attachHandlers(){
   if(fdcSave) fdcSave.addEventListener('click', ()=>{
     state.settings.fdcApiKey = document.getElementById('s-fdc-key').value.trim();
     saveState(); alert('Key saved.'); render();
+  });
+  const importHevyBtn = document.getElementById('s-import-hevy');
+  const importHevyInput = document.getElementById('s-import-hevy-input');
+  if(importHevyBtn && importHevyInput) importHevyBtn.addEventListener('click', ()=>importHevyInput.click());
+  if(importHevyInput) importHevyInput.addEventListener('change', ()=>{
+    importHevyCsv(importHevyInput.files[0]);
+    importHevyInput.value = ''; // allow re-selecting the same filename later without a no-op change event
+  });
+  document.querySelectorAll('[data-edit-routine]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const routine = state.routines.find(r=>r.id===Number(btn.dataset.editRoutine));
+      if(routine) renderRoutineBuilderModal(routine);
+    });
+  });
+  document.querySelectorAll('[data-del-routine]').forEach(btn=>{
+    btn.addEventListener('click', ()=>deleteRoutine(Number(btn.dataset.delRoutine)));
+  });
+  document.querySelectorAll('[data-del-exercise]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      if(!confirm('Delete this custom exercise? Any routines or history using it will keep showing its name but lose the link to it.')) return;
+      state.myExercises = state.myExercises.filter(e=>e.id!==btn.dataset.delExercise);
+      saveState(); render();
+    });
+  });
+  document.querySelectorAll('[data-exercise-history]').forEach(el=>{
+    el.addEventListener('click', ()=>openExerciseTrendModal(el.dataset.exerciseHistory));
   });
   const clearErrorsBtn = document.getElementById('s-clear-errors');
   if(clearErrorsBtn) clearErrorsBtn.addEventListener('click', e=>{
