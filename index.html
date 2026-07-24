@@ -2125,6 +2125,12 @@ function screenSettings(){
   return `
   <div class="topbar"><h1>Settings</h1></div>
   <div class="screen">
+    ${isStandaloneApp() ? '' : `
+    <div class="card">
+      <div class="row" style="margin-bottom:8px;"><span class="muted" style="display:flex;align-items:center;gap:6px;">Installed apps are far less likely to have their data silently cleared${infoBtnHtml('installhome')}</span></div>
+      <button class="btn-primary" id="s-install">Install on Home Screen</button>
+    </div>
+    `}
     <details class="card" data-card-key="profile" ${settingsCardOpenAttr('profile')}>
       <summary class="card-summary"><h3>Profile</h3><span class="chevron">⌄</span></summary>
       <div class="field-row">
@@ -2191,11 +2197,6 @@ function screenSettings(){
 
     <details class="card" data-card-key="data" ${settingsCardOpenAttr('data')}>
       <summary class="card-summary"><h3>Data</h3><span class="chevron">⌄</span></summary>
-      ${isStandaloneApp() ? '' : `
-      <div class="row" style="margin-bottom:8px;"><span class="muted" style="display:flex;align-items:center;gap:6px;">Installed apps are far less likely to have their data silently cleared${infoBtnHtml('installhome')}</span></div>
-      <button class="btn-secondary" id="s-install">Install on Home Screen</button>
-      <div style="height:14px"></div>
-      `}
       <div class="row" style="margin-bottom:8px;"><span class="muted" style="display:flex;align-items:center;gap:6px;">Your data auto-saves as you go — this makes a separate exportable copy${infoBtnHtml('backupfile')}</span></div>
       <button class="btn-secondary" id="s-backup-now">Back up now</button>
       <div style="height:14px"></div>
