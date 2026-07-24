@@ -1465,13 +1465,16 @@ function openChartTableModal(title, columns, rows, colColors){
   openInfoModal(title, `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`);
 }
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
-// Shown top-right on every screen's topbar, same row as the heading, so it's
-// visible immediately no matter where the user lands — not just tucked into
-// Settings. Stays visible after installing too (rather than disappearing),
-// just switched to an inert "Installed" state, so it doubles as a status
-// check rather than only ever being a call to action.
-function installTopbarBtnHtml(){
+// Shown top-right on every screen's topbar, same row as the heading, so the
+// call-to-action is visible immediately no matter where the user lands —
+// not just tucked into Settings. Once actually installed there's nothing
+// left to act on there, so it disappears from Today/Log/Trends; Settings
+// passes keepAfterInstall=true to keep showing it as an inert "Installed"
+// status line instead, since that's the one place people go looking to
+// confirm state.
+function installTopbarBtnHtml(keepAfterInstall){
   const installed = isInstalled();
+  if(installed && !keepAfterInstall) return '';
   return `<button class="topbar-install-btn${installed?' installed':''}" id="s-install"${installed?' disabled':''}>${installed?'Installed':'Install'}</button>`;
 }
 // Day-of-week checkboxes shared by onboarding and Settings > Profile — index
@@ -2152,7 +2155,7 @@ function settingsCardOpenAttr(key){ return openSettingsCards.has(key) ? 'open' :
 function screenSettings(){
   const p = state.profile;
   return `
-  <div class="topbar"><h1>Settings</h1>${installTopbarBtnHtml()}</div>
+  <div class="topbar"><h1>Settings</h1>${installTopbarBtnHtml(true)}</div>
   <div class="screen">
     <details class="card" data-card-key="profile" ${settingsCardOpenAttr('profile')}>
       <summary class="card-summary"><h3>Profile</h3><span class="chevron">⌄</span></summary>
