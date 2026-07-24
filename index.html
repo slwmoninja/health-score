@@ -135,10 +135,7 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
 .list-row .name{font-size:14px;font-weight:600;}
 .list-row .sub{font-size:12px;color:var(--muted);}
 .del{background:none;border:none;color:var(--muted);font-size:18px;padding:4px 8px;flex:none;}
-/* ---- routine builder exercise rows ---- */
-.routine-exercise-row{padding:10px 0;border-top:1px solid var(--grid);}
-.routine-exercise-row:first-child{border-top:none;}
-/* ---- live-session set table (SET / PREV / value / check / delete) ---- */
+/* ---- compact exercise tables (routine builder targets, live-session rows) ---- */
 .set-table-head{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--muted);
   text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid var(--grid);padding-bottom:6px;margin-bottom:4px;}
 .set-table-head span{text-align:center;}
@@ -148,8 +145,6 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
 .set-check{height:30px;border-radius:8px;border:1px solid var(--border);background:var(--page);
   color:var(--muted);font-size:14px;font-weight:700;padding:0;}
 .set-check.checked{background:var(--good);color:#fff;border-color:var(--good);}
-.exercise-notes-input{width:100%;border:none;background:none;color:var(--muted);font-size:12.5px;
-  padding:2px 0 8px;font-family:inherit;}
 /* ---- routine tiles (Activity screen) — compact so several fit on screen ---- */
 .routine-tile-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
 .routine-tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
@@ -1100,54 +1095,58 @@ function addExerciseToActiveSession(exerciseId){
     sets:plannedSetRows({exerciseId, targetSets:1, targetReps:null, targetWeightLb:null, targetDurationSec:null, targetDistanceMi:null})});
   saveState(); render();
 }
-// Duplicates the previous row's values as a starting point for the new one —
-// matching Hevy's own "+ Add Set" behavior — rather than starting blank.
-function addSetToExercise(sessionExerciseId){
+// Grows/shrinks an exercise's set count in place — plannedSetRows seeds every
+// set with identical values, so growing just clones the last row's values
+// (same as the old "+ Add Set" behavior) and shrinking truncates from the
+// end. No render() — this only changes an off-screen array length (the
+// compact row doesn't display individual sets), so nothing visible needs
+// to update, same reasoning as updateExerciseField below.
+function updateExerciseSetCount(sessionExerciseId, count){
   const s = state.activeWorkoutSession; if(!s) return;
   const ex = s.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
-  const last = ex.sets[ex.sets.length-1];
-  ex.sets.push({
-    index: ex.sets.length, setType:'normal',
-    weightLb: last?last.weightLb:null, reps: last?last.reps:null,
-    distanceMi: last?last.distanceMi:null, durationSec: last?last.durationSec:null,
-    rpe:null, completed:false
-  });
-  saveState(); render();
-}
-// Fired on every keystroke in a set's input cells — deliberately does NOT
-// render(), so typing doesn't fight re-render/focus loss (see the food-search
-// input's own comment on that); the row's values just live-update in state,
-// visible again once something else (checking a set, adding one) re-renders.
-function updateSetField(sessionExerciseId, setIndex, field, value){
-  const s = state.activeWorkoutSession; if(!s) return;
-  const ex = s.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
-  const set = ex.sets[setIndex]; if(!set) return;
-  set[field] = (value===''||value==null) ? null : Number(value);
+  count = Math.max(0, Math.min(20, Math.round(Number(count))||0));
+  const template = ex.sets[ex.sets.length-1] || {weightLb:null, reps:null, distanceMi:null, durationSec:null};
+  while(ex.sets.length < count){
+    ex.sets.push({index:ex.sets.length, setType:'normal', weightLb:template.weightLb, reps:template.reps,
+      distanceMi:template.distanceMi, durationSec:template.durationSec, rpe:null, completed:false});
+  }
+  if(ex.sets.length > count) ex.sets.length = count;
+  ex.sets.forEach((st,i)=>st.index=i);
   saveState();
 }
-// Checking a set is what "counts" it — captures exerciseMemory (recalled as
-// the default for this exercise's next planned row/session, same as
-// selectFoodIntoForm recalls foodMemory) and is what finishWorkoutSession
-// uses to decide which rows actually happened.
-function toggleSetComplete(sessionExerciseId, setIndex){
+// One compact row edits one exercise, not one set — an edit applies the same
+// value to every one of that exercise's sets uniformly (they already start
+// uniform, from plannedSetRows). Fired on every keystroke — deliberately
+// does NOT render(), so typing doesn't fight focus loss (see the food-search
+// input's own comment on that).
+function updateExerciseField(sessionExerciseId, field, value){
   const s = state.activeWorkoutSession; if(!s) return;
   const ex = s.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
-  const set = ex.sets[setIndex]; if(!set) return;
-  set.completed = !set.completed;
-  if(set.completed) state.exerciseMemory[ex.exerciseId] = {weightLb:set.weightLb, reps:set.reps, durationSec:set.durationSec, distanceMi:set.distanceMi, ts:Date.now()};
+  const v = (value===''||value==null) ? null : Number(value);
+  ex.sets.forEach(set=>{ set[field] = v; });
+  saveState();
+}
+// Checking an exercise is what "counts" it — marks every one of its sets
+// complete at once (using their current, possibly-edited values), captures
+// exerciseMemory (recalled as the default for this exercise's next planned
+// row/session, same as selectFoodIntoForm recalls foodMemory), and is what
+// finishWorkoutSession uses to decide which exercises actually happened.
+// Toggles off (uncompletes all) if every set was already complete.
+function toggleExerciseComplete(sessionExerciseId){
+  const s = state.activeWorkoutSession; if(!s) return;
+  const ex = s.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
+  const next = !(ex.sets.length>0 && ex.sets.every(set=>set.completed));
+  ex.sets.forEach(set=>{ set.completed = next; });
+  if(next && ex.sets[0]){
+    const s0 = ex.sets[0];
+    state.exerciseMemory[ex.exerciseId] = {weightLb:s0.weightLb, reps:s0.reps, durationSec:s0.durationSec, distanceMi:s0.distanceMi, ts:Date.now()};
+  }
   saveState(); render();
 }
 function removeExerciseFromActiveSession(idx){
   const s = state.activeWorkoutSession; if(!s) return;
   s.exercises.splice(idx,1);
   s.exercises.forEach((ex,i)=>ex.order=i);
-  saveState(); render();
-}
-function removeSetFromExercise(sessionExerciseId, setIndex){
-  const s = state.activeWorkoutSession; if(!s) return;
-  const ex = s.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
-  ex.sets.splice(setIndex,1);
-  ex.sets.forEach((st,i)=>st.index=i); // keep index contiguous after a mid-list delete
   saveState(); render();
 }
 function volumeLbForSession(s){
@@ -1227,14 +1226,31 @@ function targetFieldsForMetricType(mt){
   if(mt==='distance_duration'||mt==='weight_distance') fields.push('targetDistanceMi');
   return fields;
 }
-const TARGET_FIELD_LABELS = {targetSets:['Sets','3'], targetReps:['Reps','10'], targetWeightLb:['Weight (lb)','45'], targetDurationSec:['Time (sec)','60'], targetDistanceMi:['Distance (mi)','1']};
-function routineTargetFieldsHtml(re, idx, ex){
-  const fields = targetFieldsForMetricType(ex ? ex.metricType : 'weight_reps');
-  return `<div class="field-row" style="flex-wrap:wrap;">${fields.map(f=>{
-    const [label,placeholder] = TARGET_FIELD_LABELS[f];
-    const step = f==='targetDistanceMi' ? ' step="0.1"' : '';
-    return `<div class="field" style="flex:1;min-width:90px;"><label>${label}</label><input type="number"${step} data-target="${f}" data-idx="${idx}" value="${re[f]!=null?re[f]:''}" placeholder="${placeholder}"></div>`;
-  }).join('')}</div>`;
+const TARGET_FIELD_LABELS = {targetSets:'SETS', targetReps:'REPS', targetWeightLb:'LBS', targetDurationSec:'MIN', targetDistanceMi:'MI'};
+const TARGET_FIELD_ORDER = ['targetSets','targetReps','targetWeightLb','targetDurationSec','targetDistanceMi'];
+// Union of columns needed across every exercise currently in the draft, in
+// one canonical order — lets a mixed-type routine (a lift plus a plank)
+// share ONE header row instead of each exercise repeating its own field
+// labels, which is what made the old per-exercise layout tall.
+function routineTargetColumns(draft){
+  const cols = new Set();
+  draft.exercises.forEach(re=>{
+    const ex = exerciseById(re.exerciseId);
+    targetFieldsForMetricType(ex ? ex.metricType : 'weight_reps').forEach(f=>cols.add(f));
+  });
+  return TARGET_FIELD_ORDER.filter(f=>cols.has(f));
+}
+function routineExerciseRowHtml(re, idx, ex, columns){
+  const exFields = targetFieldsForMetricType(ex ? ex.metricType : 'weight_reps');
+  return `<div class="set-table-row">
+    <span style="flex:1;min-width:0;text-align:left;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(ex?ex.name:re.exerciseId)}</span>
+    ${columns.map(f=>{
+      if(!exFields.includes(f)) return `<span style="flex:0 0 44px;text-align:center;color:var(--muted);">—</span>`;
+      const val = f==='targetDurationSec' ? secToMin(re.targetDurationSec) : (re[f]!=null ? re[f] : '');
+      return `<input type="number"${f==='targetDistanceMi'||f==='targetDurationSec'?' step="0.1"':''} style="flex:0 0 44px;" data-target="${f}" data-idx="${idx}" value="${val}">`;
+    }).join('')}
+    <button class="del" data-rm-exercise="${idx}" type="button" style="flex:0 0 16px;">×</button>
+  </div>`;
 }
 
 let routineBuilderDraft = null; // { id, name, notes, exercises:[...] } while the modal is open
@@ -1266,7 +1282,7 @@ function renderRoutineBuilderDom(){
   routineBuilderWrap.innerHTML = `
   <div class="modal-backdrop center">
     <div class="modal">
-      <h2>${draft.exercises.length===0 && !draft.name ? 'New Routine' : 'Edit Routine'}</h2>
+      ${draft.exercises.length===0 && !draft.name ? '<h2>New Routine</h2>' : ''}
       <div class="field"><label>Name</label><input type="text" id="rb-name" value="${escapeHtml(draft.name)}" placeholder="Leg day"></div>
       <div class="field">
         <label>Add exercise</label>
@@ -1277,17 +1293,17 @@ function renderRoutineBuilderDom(){
         ${results.map((e,i)=>`<div class="search-item" data-idx="${i}" style="display:flex;align-items:center;gap:10px;">${exerciseThumbHtml(e.category)}<div><div class="n">${escapeHtml(e.name)}</div><div class="m">${escapeHtml(e.category)}</div></div></div>`).join('')}
       </div>
       ${routineBuilderQuery && results.length===0 ? `<button class="btn-secondary" id="rb-add-custom" type="button" style="margin-top:6px;">+ Add "${escapeHtml(routineBuilderQuery.trim())}" as custom exercise</button>` : ''}
-      ${draft.exercises.length ? `
-        <div style="margin-top:14px;">
-          ${draft.exercises.map((re,i)=>{
-            const ex = exerciseById(re.exerciseId);
-            return `<div class="routine-exercise-row">
-              <div class="list-row" style="padding-bottom:6px;"><span class="name">${escapeHtml(ex?ex.name:re.exerciseId)}</span><button class="del" data-rm-exercise="${i}" type="button">×</button></div>
-              ${routineTargetFieldsHtml(re, i, ex)}
-            </div>`;
-          }).join('')}
-        </div>
-      ` : `<div class="muted" style="margin-top:10px;">No exercises added yet.</div>`}
+      ${draft.exercises.length ? (()=>{
+        const columns = routineTargetColumns(draft);
+        return `<div style="margin-top:14px;">
+          <div class="set-table-head">
+            <span style="flex:1;text-align:left;">Exercise</span>
+            ${columns.map(f=>`<span style="flex:0 0 44px;">${TARGET_FIELD_LABELS[f]}</span>`).join('')}
+            <span style="flex:0 0 16px;"></span>
+          </div>
+          ${draft.exercises.map((re,i)=>routineExerciseRowHtml(re, i, exerciseById(re.exerciseId), columns)).join('')}
+        </div>`;
+      })() : `<div class="muted" style="margin-top:10px;">No exercises added yet.</div>`}
       <button class="btn-primary" id="rb-save" style="margin-top:14px;">Save Routine</button>
       <button class="btn-secondary" id="rb-cancel" style="margin-top:8px;">Cancel</button>
     </div>
@@ -1337,7 +1353,10 @@ function wireRoutineBuilderHandlers(){
   wrap.querySelectorAll('[data-target]').forEach(inp=>{
     inp.addEventListener('input', ()=>{
       const idx = Number(inp.dataset.idx);
-      routineBuilderDraft.exercises[idx][inp.dataset.target] = inp.value===''?null:Number(inp.value);
+      const field = inp.dataset.target;
+      routineBuilderDraft.exercises[idx][field] = field==='targetDurationSec'
+        ? minToSec(inp.value)
+        : (inp.value===''?null:Number(inp.value));
     });
   });
   const saveBtn = wrap.querySelector('#rb-save');
@@ -1492,40 +1511,48 @@ function setFieldsForMetricType(mt){
   if(mt==='weight_distance') return ['weightLb','distanceMi'];
   return ['weightLb','reps'];
 }
-const SET_FIELD_COL_LABELS = {weightLb:'LBS', reps:'REPS', durationSec:'SEC', distanceMi:'MI'};
-// A Hevy-style "Log Workout" set table: SET / PREV / [value columns] / check
-// / delete. Rows are pre-populated (see plannedSetRows) rather than typed
-// fresh each time — editing a cell live-updates state (updateSetField, no
-// re-render, so typing doesn't fight focus); the checkmark is what "counts"
-// a row (toggleSetComplete) and is what finishWorkoutSession keeps.
-function activeSessionExerciseHtml(ex, idx){
+// Duration is stored internally as seconds (durationSec — matches Hevy's own
+// CSV column and every other duration field in the app), but a routine's
+// planned exercise time reads far more naturally in minutes than raw
+// seconds, so these compact tables display/edit minutes and convert at the
+// boundary rather than changing the underlying field.
+function secToMin(sec){ return sec==null ? '' : Math.round((sec/60)*10)/10; }
+function minToSec(min){ return (min===''||min==null) ? null : Math.round(Number(min)*60); }
+const LIVE_FIELD_LABELS = {sets:'SETS', reps:'REPS', weightLb:'LBS', durationSec:'MIN', distanceMi:'MI'};
+const LIVE_FIELD_ORDER = ['sets','reps','weightLb','durationSec','distanceMi'];
+function liveFieldsForExercise(template){
+  return ['sets', ...setFieldsForMetricType(template ? template.metricType : 'weight_reps')];
+}
+// Which value columns to show across the WHOLE table — the union of what
+// each individual exercise needs, in one canonical order, so mixed-type
+// routines (e.g. a lift plus a plank) still get one shared header instead
+// of a different column set forcing a per-exercise header each time.
+function liveTargetColumns(s){
+  const cols = new Set();
+  s.exercises.forEach(ex=>liveFieldsForExercise(exerciseById(ex.exerciseId)).forEach(f=>cols.add(f)));
+  return LIVE_FIELD_ORDER.filter(f=>cols.has(f));
+}
+// One compact row per exercise, not one row per set — a single checkbox
+// marks every one of that exercise's (uniform, since plannedSetRows seeds
+// them identically) sets complete at once, so a routine with many exercises
+// still fits on one screen. Sets/Reps/Weight/etc. are editable and apply to
+// every set in the exercise uniformly (see updateExerciseField/
+// updateExerciseSetCount) — a deliberate trade of per-set precision for
+// speed, since checking off a whole exercise at a glance was the ask.
+function activeSessionExerciseHtml(ex, idx, columns){
   const template = exerciseById(ex.exerciseId);
-  const mt = template ? template.metricType : 'weight_reps';
-  const fields = setFieldsForMetricType(mt);
-  const remembered = state.exerciseMemory[ex.exerciseId];
-  const prevLabel = remembered
-    ? (fields.length===1 ? `x ${remembered[fields[0]]??'—'}` : `${remembered[fields[0]]??'—'} x ${remembered[fields[1]]??'—'}`)
-    : '—';
-  return `<div class="routine-exercise-row">
-    <div class="list-row" style="padding-bottom:2px;">
-      <span class="name" data-exercise-history="${ex.exerciseId}" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;">${escapeHtml(ex.exerciseTitle)}</span>
-      <button class="del" data-rm-exercise-session="${idx}" type="button" title="Remove exercise">×</button>
-    </div>
-    <input type="text" class="exercise-notes-input" placeholder="Add notes here…" data-exercise-notes="${idx}" value="${escapeHtml(ex.notes||'')}">
-    <div class="set-table-head">
-      <span style="flex:0 0 22px;">SET</span><span style="flex:0 0 48px;">PREV</span>
-      ${fields.map(f=>`<span style="flex:1;">${SET_FIELD_COL_LABELS[f]}</span>`).join('')}
-      <span style="flex:0 0 28px;">✓</span><span style="flex:0 0 16px;"></span>
-    </div>
-    ${ex.sets.map((set,si)=>`
-    <div class="set-table-row">
-      <span style="flex:0 0 22px;font-weight:700;text-align:center;">${si+1}</span>
-      <span class="muted" style="flex:0 0 48px;font-size:11.5px;text-align:center;">${prevLabel}</span>
-      ${fields.map(f=>`<input type="number" ${f==='distanceMi'?'step="0.1"':''} data-set-field="${idx}:${si}:${f}" value="${set[f]!=null?set[f]:''}">`).join('')}
-      <button class="set-check${set.completed?' checked':''}" data-toggle-set="${idx}:${si}" type="button" style="flex:0 0 28px;">✓</button>
-      <button class="del" data-rm-set="${idx}:${si}" type="button" style="flex:0 0 16px;font-size:14px;padding:0;">×</button>
-    </div>`).join('')}
-    <button class="btn-secondary" data-add-set="${idx}" type="button" style="margin-top:8px;">+ Add Set</button>
+  const fields = liveFieldsForExercise(template);
+  const allCompleted = ex.sets.length>0 && ex.sets.every(set=>set.completed);
+  const first = ex.sets[0] || {};
+  return `<div class="set-table-row">
+    <button class="set-check${allCompleted?' checked':''}" data-toggle-exercise="${idx}" type="button" style="flex:0 0 28px;" title="Mark all sets complete">✓</button>
+    <span class="name" data-exercise-history="${ex.exerciseId}" style="flex:1;min-width:0;text-align:left;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;">${escapeHtml(ex.exerciseTitle)}</span>
+    ${columns.map(f=>{
+      if(!fields.includes(f)) return `<span style="flex:0 0 44px;text-align:center;color:var(--muted);">—</span>`;
+      const val = f==='sets' ? ex.sets.length : (f==='durationSec' ? secToMin(first.durationSec) : (first[f]!=null ? first[f] : ''));
+      return `<input type="number"${f==='distanceMi'||f==='durationSec'?' step="0.1"':''} style="flex:0 0 44px;" data-exercise-field="${idx}:${f}" value="${val}">`;
+    }).join('')}
+    <button class="del" data-rm-exercise-session="${idx}" type="button" style="flex:0 0 16px;font-size:14px;padding:0;" title="Remove exercise">×</button>
   </div>`;
 }
 let workoutSessionSearchQuery = ''; // exercise search box inside an active session card
@@ -1536,31 +1563,41 @@ function activeWorkoutSessionCard(){
   // Volume/Sets stats or Add exercise search, just Duration + Calories.
   const isQuickStart = s.routineId===null;
   const wsResults = isQuickStart ? [] : getExerciseResults(workoutSessionSearchQuery);
+  const liveColumns = isQuickStart ? [] : liveTargetColumns(s);
   const volume = volumeLbForSession(s), setCount = completedSetCountForSession(s);
   // Live auto-estimate (recomputed every render, so it tracks a growing
   // duration) unless the user's typed their own override — see
   // estimateWorkoutCalories's own comment for the formula and its limits.
   const displayCal = s.caloriesBurnedOverride!=null ? s.caloriesBurnedOverride : estimateWorkoutCalories(s);
+  const clockHtml = s.status==='paused' ? 'Paused' : `<span id="workout-elapsed">${formatElapsed(workoutDurationMs(s))}</span>`;
   return `<div class="card">
     <div class="card-head">
-      <h3 style="text-transform:none;letter-spacing:0;color:var(--text);font-size:17px;">${escapeHtml(s.title)}</h3>
+      <div style="display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap;">
+        <h3 style="text-transform:none;letter-spacing:0;color:var(--text);font-size:17px;">${escapeHtml(s.title)}</h3>
+        <span style="font-weight:700;color:var(--blue);font-size:14px;">${clockHtml}</span>
+      </div>
       <div style="display:flex;gap:6px;align-items:center;">
         ${s.status==='running'
           ? `<button class="iconbtn" id="btn-pause-workout" title="Pause" type="button">⏸</button>`
           : `<button class="iconbtn" id="btn-resume-workout" title="Resume" type="button">▶</button>`}
-        <button class="iconbtn" id="btn-discard-workout" title="Discard workout" type="button">✕</button>
-        <button class="btn-primary" id="btn-finish-workout" style="width:auto;padding:8px 16px;" type="button">Finish</button>
+        <button class="iconbtn" id="btn-finish-workout" title="Finish & save" type="button">⏹</button>
+        <button class="iconbtn" id="btn-discard-workout" title="Discard workout (exit)" type="button">✕</button>
       </div>
     </div>
     <div class="row" style="margin-bottom:14px;align-items:flex-start;flex-wrap:wrap;gap:10px;">
-      <div><div class="muted" style="font-size:11px;">Duration</div><div style="font-weight:700;color:var(--blue);">${s.status==='paused'?'Paused':`<span id="workout-elapsed">${formatElapsed(workoutDurationMs(s))}</span>`}</div></div>
       ${isQuickStart ? '' : `
       <div><div class="muted" style="font-size:11px;">Volume</div><div style="font-weight:700;">${volume.toLocaleString()} lbs</div></div>
       <div><div class="muted" style="font-size:11px;">Sets</div><div style="font-weight:700;">${setCount}</div></div>`}
       <div><div class="muted" style="font-size:11px;">Calories (est.)</div><input type="number" id="workout-calories-input" value="${displayCal}" style="width:56px;padding:4px 2px;text-align:center;border-radius:6px;border:1px solid var(--border);background:var(--page);color:var(--text);font-size:14px;font-weight:700;"></div>
     </div>
     ${isQuickStart ? '' : `
-    ${s.exercises.map((ex,i)=>activeSessionExerciseHtml(ex,i)).join('')}
+    ${s.exercises.length ? `<div class="set-table-head">
+      <span style="flex:0 0 28px;"></span>
+      <span style="flex:1;text-align:left;">Exercise</span>
+      ${liveColumns.map(f=>`<span style="flex:0 0 44px;">${LIVE_FIELD_LABELS[f]}</span>`).join('')}
+      <span style="flex:0 0 16px;"></span>
+    </div>` : ''}
+    ${s.exercises.map((ex,i)=>activeSessionExerciseHtml(ex,i,liveColumns)).join('')}
     <div class="field" style="margin-top:10px;">
       <label>Add exercise</label>
       <input type="text" id="ws-search" placeholder="Search exercises…" value="${escapeHtml(workoutSessionSearchQuery)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
@@ -3836,45 +3873,27 @@ function attachHandlers(){
   const calInput = document.getElementById('workout-calories-input');
   if(calInput) calInput.addEventListener('input', ()=>{
     state.activeWorkoutSession.caloriesBurnedOverride = calInput.value===''? null : Number(calInput.value);
-    saveState(); // no render() — avoid disrupting typing, same reasoning as updateSetField
+    saveState(); // no render() — avoid disrupting typing, same reasoning as updateExerciseField
   });
 
-  document.querySelectorAll('[data-add-set]').forEach(btn=>{
+  document.querySelectorAll('[data-toggle-exercise]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      const sessionEx = state.activeWorkoutSession.exercises[Number(btn.dataset.addSet)];
-      addSetToExercise(sessionEx.id);
+      const sessionEx = state.activeWorkoutSession.exercises[Number(btn.dataset.toggleExercise)];
+      toggleExerciseComplete(sessionEx.id);
     });
   });
-  document.querySelectorAll('[data-toggle-set]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const [exIdx, setIdx] = btn.dataset.toggleSet.split(':').map(Number);
-      const sessionEx = state.activeWorkoutSession.exercises[exIdx];
-      toggleSetComplete(sessionEx.id, setIdx);
-    });
-  });
-  document.querySelectorAll('[data-set-field]').forEach(inp=>{
+  document.querySelectorAll('[data-exercise-field]').forEach(inp=>{
     inp.addEventListener('input', ()=>{
-      const [exIdx, setIdx, field] = inp.dataset.setField.split(':');
+      const [exIdx, field] = inp.dataset.exerciseField.split(':');
       const sessionEx = state.activeWorkoutSession.exercises[Number(exIdx)];
-      updateSetField(sessionEx.id, Number(setIdx), field, inp.value);
-    });
-  });
-  document.querySelectorAll('[data-exercise-notes]').forEach(inp=>{
-    inp.addEventListener('input', ()=>{
-      state.activeWorkoutSession.exercises[Number(inp.dataset.exerciseNotes)].notes = inp.value;
-      saveState(); // no render() — avoid disrupting typing, same reasoning as updateSetField
+      if(field==='sets') updateExerciseSetCount(sessionEx.id, inp.value);
+      else if(field==='durationSec') updateExerciseField(sessionEx.id, field, minToSec(inp.value));
+      else updateExerciseField(sessionEx.id, field, inp.value);
     });
   });
   document.querySelectorAll('[data-rm-exercise-session]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       if(confirm('Remove this exercise from the workout?')) removeExerciseFromActiveSession(Number(btn.dataset.rmExerciseSession));
-    });
-  });
-  document.querySelectorAll('[data-rm-set]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const [exIdx, setIdx] = btn.dataset.rmSet.split(':').map(Number);
-      const sessionEx = state.activeWorkoutSession.exercises[exIdx];
-      removeSetFromExercise(sessionEx.id, setIdx);
     });
   });
   const wsSearch = document.getElementById('ws-search');
