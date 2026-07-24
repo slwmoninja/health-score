@@ -1214,15 +1214,31 @@ function deleteRoutine(id){
    every OTHER screen keeps an in-progress session reachable "at any
    time" without needing its own nav-level screen.
    ========================================================= */
+// One full card per routine — name, a comma-joined list of its exercises as a
+// subtitle (clamped to 2 lines), and a full-width Start button, matching how
+// Hevy's own Workout tab shows routines. Edit/delete live in Settings >
+// Workouts rather than duplicated here as a per-card menu.
+function routineCardHtml(r){
+  const exerciseNames = r.exercises.map(re=>{
+    const ex = exerciseById(re.exerciseId);
+    return ex ? ex.name : re.exerciseId;
+  }).join(', ');
+  return `<div class="card">
+    <h3 style="text-transform:none;letter-spacing:0;color:var(--text);font-size:17px;margin-bottom:4px;">${escapeHtml(r.name)}</h3>
+    <div class="muted" style="margin-bottom:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${exerciseNames ? escapeHtml(exerciseNames) : 'No exercises yet'}</div>
+    <button class="btn-primary" data-start-routine="${r.id}" type="button">Start Routine</button>
+  </div>`;
+}
 // No routine started yet — pick a routine to start, or start freeform.
 function workoutsQuickCard(){
-  return `<div class="card">
-    <div class="card-head"><h3>Workouts</h3><button class="iconbtn" id="btn-new-routine" title="New routine">+</button></div>
-    ${state.routines.length===0 ? `<div class="muted">No routines yet — start one freeform below, or build a routine.</div>` : `
-      ${state.routines.map(r=>`<div class="list-row"><span class="name">${escapeHtml(r.name)}</span><button class="btn-secondary" style="width:auto;padding:8px 14px;" data-start-routine="${r.id}" type="button">Start</button></div>`).join('')}
-    `}
-    <button class="btn-secondary" id="btn-quick-start-workout" style="margin-top:10px;">Quick start (freeform)</button>
-  </div>`;
+  return `
+    ${state.routines.map(routineCardHtml).join('')}
+    <div class="card">
+      <div class="card-head"><h3>${state.routines.length ? 'More' : 'Workouts'}</h3><button class="iconbtn" id="btn-new-routine" title="New routine">+</button></div>
+      ${state.routines.length===0 ? `<div class="muted" style="margin-bottom:10px;">No routines yet — import from Hevy in Settings, or build one.</div>` : ''}
+      <button class="btn-secondary" id="btn-quick-start-workout">Quick start (freeform)</button>
+    </div>
+  `;
 }
 // Which set-entry fields make sense for a given exercise's metricType — the
 // live-logging counterpart to routineTargetFieldsHtml's target-KPI fields
@@ -1435,6 +1451,35 @@ function parseHevyCsv(text){
   workouts.forEach(w=>w.exercises.forEach(ex=>{ ex.exerciseId = reconcileImportedExercise(ex.exerciseTitle, ex.sets); }));
   return workouts;
 }
+// Hevy's CSV has no separate "routines" concept — what Hevy's own Workout tab
+// shows as routine cards is just past sessions grouped by their repeated
+// title, with the exercises that were actually done under that name. This
+// reproduces that: one routine per distinct workout title not already
+// matching an existing routine's name, exercise list built from the union of
+// exercises seen across every imported session with that title (first-seen
+// order). Target sets/reps/weight are left blank (it's inferred from
+// history, not an explicit plan) — same as how the routine builder leaves
+// them optional.
+function deriveRoutinesFromImportedWorkouts(workouts){
+  const byTitle = {};
+  workouts.forEach(w=>{ (byTitle[w.title] = byTitle[w.title]||[]).push(w); });
+  let created = 0;
+  Object.keys(byTitle).forEach(title=>{
+    if(state.routines.some(r=>r.name===title)) return;
+    const exerciseIds = [];
+    byTitle[title].forEach(w=>w.exercises.forEach(ex=>{
+      if(!exerciseIds.includes(ex.exerciseId)) exerciseIds.push(ex.exerciseId);
+    }));
+    if(exerciseIds.length===0) return;
+    state.routines.push({
+      id: Date.now()+Math.random(), name: title, notes: '',
+      exercises: exerciseIds.map((exerciseId,order)=>({exerciseId, order, targetSets:null, targetReps:null, targetWeightLb:null, targetDurationSec:null, targetDistanceMi:null, notes:''})),
+      createdAt: Date.now(), updatedAt: Date.now()
+    });
+    created++;
+  });
+  return created;
+}
 // Skips checkGoalsAndCelebrate entirely — this is historical backfill, not
 // something happening "now"; celebrating dozens of backdated goal-crossings
 // at once in a loop would be a jarring confetti storm, not a welcome-back moment.
@@ -1445,7 +1490,7 @@ async function importHevyCsv(file){
     const workouts = parseHevyCsv(text);
     if(workouts.length===0){ showToast('No workouts found in that file.', 'critical'); return; }
     const affectedDays = new Set(workouts.map(w=>isoDate(new Date(w.startTime))));
-    if(!confirm(`This will add ${workouts.length} workout${workouts.length===1?'':'s'} across ${affectedDays.size} day${affectedDays.size===1?'':'s'}. Continue?`)) return;
+    if(!confirm(`This will add ${workouts.length} workout${workouts.length===1?'':'s'} across ${affectedDays.size} day${affectedDays.size===1?'':'s'}, and build a routine for each repeated workout name. Continue?`)) return;
     let added=0, skipped=0;
     workouts.forEach(w=>{
       const d = getDay(isoDate(new Date(w.startTime)));
@@ -1453,8 +1498,9 @@ async function importHevyCsv(file){
       d.workouts.push(w);
       added++;
     });
+    const routinesCreated = deriveRoutinesFromImportedWorkouts(workouts);
     saveState(); render();
-    showToast(`Imported ${added} workout${added===1?'':'s'}${skipped?` (${skipped} already imported)`:''}.`, 'good');
+    showToast(`Imported ${added} workout${added===1?'':'s'}${routinesCreated?`, ${routinesCreated} routine${routinesCreated===1?'':'s'}`:''}${skipped?` (${skipped} workout${skipped===1?'':'s'} already imported)`:''}.`, 'good');
   }catch(e){
     showToast('Could not import that file: '+e.message, 'critical');
   }
