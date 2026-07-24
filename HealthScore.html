@@ -406,8 +406,8 @@ function logError(message){
   state.errorLog = state.errorLog.slice(0, 3);
   saveState();
 }
-// Shared by the onboarding "Restore from backup" button and Settings' Import —
-// both need the exact same parse/validate/replace logic.
+// Backing logic for the onboarding "Restore latest backup" flow — see
+// openBackupRestorePicker for how the file(s) get here.
 async function importDataFromFile(file){
   if(!file) return;
   try{
@@ -426,6 +426,72 @@ async function importDataFromFile(file){
   }catch(e){
     alert('Could not import that file: '+e.message);
   }
+}
+// Picks the newest Health Score backup out of one or more selected files, so
+// restoring never requires the user to eyeball filenames/dates themselves —
+// they can select their whole Downloads folder (or just multi-select a few
+// files) and the right one gets found automatically. Matches this app's own
+// timestamped filename (health-score-data-<ISO stamp>.json) first since the
+// stamp sorts correctly as a string with no file reads needed; anything that
+// doesn't match that pattern (e.g. a renamed file) falls back to the File
+// object's own lastModified. Accepts both .json and .js extensions — the
+// content is plain JSON text either way (importDataFromFile parses it the
+// same regardless of extension), so a backup that landed in Downloads named
+// or renamed with a .js extension is picked up exactly the same as a .json one.
+function pickLatestBackupFile(files){
+  const list = Array.from(files||[]).filter(f=>/\.(json|js)$/i.test(f.name));
+  if(list.length===0) return null;
+  const stampOf = f=>{
+    const m = f.name.match(/health-score-data-(.+)\.(?:json|js)$/i);
+    return m ? m[1] : null;
+  };
+  list.sort((a,b)=>{
+    const sa = stampOf(a), sb = stampOf(b);
+    if(sa && sb) return sa<sb ? 1 : sa>sb ? -1 : 0;
+    if(sa && !sb) return -1;
+    if(sb && !sa) return 1;
+    return b.lastModified-a.lastModified;
+  });
+  return list[0];
+}
+function importLatestBackupFromFiles(files){
+  const latest = pickLatestBackupFile(files);
+  if(!latest){ if(files && files.length) alert('No .json or .js backup file found in what you selected.'); return; }
+  importDataFromFile(latest);
+}
+// On browsers that support it (desktop Chrome/Edge; some Android Chrome
+// versions), jumps the native picker straight into the Downloads folder and
+// lets multiple files be selected in one go, so restoring is a single tap into
+// Downloads rather than a manual navigate-and-guess-which-one. iOS Safari and
+// older/other Android browsers don't expose this API at all — confirmed
+// on-device, not just a feature-detection gap — so they fall back to the
+// plain <input type=file multiple> picker, which still supports multi-select
+// and still gets the newest one picked automatically once files are chosen.
+// No browser exposes a way to read a file back into a page without some kind
+// of user gesture/grant every single time (that's what makes "clear history"
+// an effective wipe in the first place), so a manual tap here is unavoidable —
+// this is about making that one tap as short as possible, not eliminating it.
+async function openBackupRestorePicker(fallbackInputEl){
+  if(window.showOpenFilePicker){
+    try{
+      const handles = await window.showOpenFilePicker({
+        multiple: true,
+        startIn: 'downloads',
+        types: [{description:'Health Score backup', accept:{
+          'application/json':['.json'],
+          'text/javascript':['.js'],
+          'application/javascript':['.js']
+        }}]
+      });
+      const files = await Promise.all(handles.map(h=>h.getFile()));
+      importLatestBackupFromFiles(files);
+      return;
+    }catch(e){
+      if(e.name==='AbortError') return; // user backed out of the picker — don't chain into a second one
+      // Any other failure — fall through to the plain file input below.
+    }
+  }
+  fallbackInputEl.click();
 }
 
 function isoDate(d){
@@ -782,40 +848,34 @@ function suggestedCalorieGoal(p){
 // Supporting text under the editable daily goal field — the daily number is the
 // single source of truth; weekly/monthly are just that number scaled up so the
 // user can see the bigger picture without needing separate editable fields.
-// Explicitly labeled "base" because actual tracked days add each day's activity
-// calories on top (see calorieGoalBreakdown) — this preview can't know that in
-// advance, so it would otherwise look like it doesn't match what shows up later.
+// This is a hard daily limit — it does not flex with activity (see dailyTargets).
 function calorieGoalBreakdownText(dailyGoal, sexForFloorCheck){
   const now = new Date();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
   const weekly = Math.round(dailyGoal*7), monthly = Math.round(dailyGoal*daysInMonth);
-  let text = `≈ ${weekly.toLocaleString()}/week · ${monthly.toLocaleString()}/month (base, before any activity bonus)`;
+  let text = `≈ ${weekly.toLocaleString()}/week · ${monthly.toLocaleString()}/month`;
   if(sexForFloorCheck){
     const floor = calorieSafetyFloor({sex:sexForFloorCheck});
     if(dailyGoal>0 && dailyGoal<floor) text += ` — below the commonly-cited ${floor.toLocaleString()} kcal safety floor; consider a less aggressive weekly rate.`;
   }
   return text;
 }
-function dailyTargets(p, activityKcal){
-  const base = (p.calorieGoal!=null && p.calorieGoal>0) ? p.calorieGoal : suggestedCalorieGoal(p);
-  const kcal = Math.round(base + (activityKcal||0)); // tracked exercise still added on top of the base goal
+// The daily calorie limit is hard: it's exactly what the user set (or the
+// suggested fallback) in profile/setup, and does NOT expand with tracked
+// activity — burning more calories doesn't buy a bigger intake budget. How
+// activity contributed toward the weight goal is still surfaced separately,
+// see weightGoalImpact/weightGoalImpactText.
+function dailyTargets(p){
+  const kcal = Math.round((p.calorieGoal!=null && p.calorieGoal>0) ? p.calorieGoal : suggestedCalorieGoal(p));
   const proteinG = Math.round(lbToKg(p.weightLb)*1.6);
   const proteinKcal = proteinG*4;
   const remaining = Math.max(kcal-proteinKcal, 200);
   const fatG = Math.round(remaining*0.35/9);
   const carbG = Math.round(remaining*0.65/4);
-  // baseKcal/activityKcal are exposed alongside the combined kcal so any UI showing
-  // "calories vs. goal" can call out the activity bonus instead of just displaying
-  // the combined number, which otherwise reads as an unexplained mismatch against
-  // whatever goal the user actually entered.
-  return {kcal, proteinG, carbG, fatG, baseKcal: Math.round(base), activityKcal: Math.round(activityKcal||0)};
+  return {kcal, proteinG, carbG, fatG};
 }
-// "1,500 goal + 380 activity", or just "1,500 goal" on a day/period with no
-// tracked activity burn yet.
-function calorieGoalBreakdown(baseKcal, activityKcal){
-  return activityKcal>0
-    ? `${Math.round(baseKcal).toLocaleString()} goal + ${Math.round(activityKcal).toLocaleString()} activity`
-    : `${Math.round(baseKcal).toLocaleString()} goal`;
+function calorieGoalBreakdown(kcal){
+  return `${Math.round(kcal).toLocaleString()} goal`;
 }
 function dayTotals(iso){
   const d = getDay(iso);
@@ -830,38 +890,30 @@ function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
 // calcium steps up later in life. Simplified age bands rather than full life-stage tables.
 function ironRDA(p){ return p.sex==='male' ? 8 : 18; }
 function calciumRDA(p){ const olderThreshold = p.sex==='male' ? 71 : 51; return p.age>=olderThreshold ? 1200 : 1000; }
-// Calories consumed vs. goal for the week so far (Monday through iso) — the goal side
-// sums each day's own target since activity-based bonus calories vary day to day.
+// Calories consumed vs. goal for the week so far (Monday through iso) — the goal
+// side is the same hard daily limit multiplied out, since it no longer flexes
+// with activity.
 function weekCalorieProgress(iso){
   const {start:ws} = weekRange(iso);
   const weekDates = trackedDatesBetween(ws, iso);
   const consumed = weekDates.reduce((sum,d)=>sum+dayTotals(d).kcal, 0);
-  let baseGoal=0, activityKcal=0;
-  weekDates.forEach(d=>{
-    const tg = dailyTargets(state.profile, getDay(d).activity.kcal);
-    baseGoal += tg.baseKcal; activityKcal += tg.activityKcal;
-  });
-  return {consumed, goal: baseGoal+activityKcal, baseGoal, activityKcal};
+  const goal = dailyTargets(state.profile).kcal * weekDates.length;
+  return {consumed, goal};
 }
-// Same approach, month-to-date — each day's own (activity-adjusted) target is summed
-// rather than a flat dailyGoal*daysSoFar, consistent with weekCalorieProgress.
+// Same approach, month-to-date.
 function monthCalorieProgress(iso){
   const {start:ms} = monthRange(iso);
   const monthDates = trackedDatesBetween(ms, iso);
   const consumed = monthDates.reduce((sum,d)=>sum+dayTotals(d).kcal, 0);
-  let baseGoal=0, activityKcal=0;
-  monthDates.forEach(d=>{
-    const tg = dailyTargets(state.profile, getDay(d).activity.kcal);
-    baseGoal += tg.baseKcal; activityKcal += tg.activityKcal;
-  });
-  return {consumed, goal: baseGoal+activityKcal, baseGoal, activityKcal};
+  const goal = dailyTargets(state.profile).kcal * monthDates.length;
+  return {consumed, goal};
 }
 // Protein/iron/calcium totals for a date range vs. the per-day target summed across
 // every date in range (not just logged days), matching weekCalorieProgress's approach
 // so an un-logged day pulls the period average down instead of being skipped.
 function periodNutrientTotals(dates){
   const p = state.profile;
-  const proteinTarget = dailyTargets(p, 0).proteinG;
+  const proteinTarget = dailyTargets(p).proteinG;
   const ironTarget = ironRDA(p);
   const calciumTarget = calciumRDA(p);
   let protein=0, iron=0, calcium=0;
@@ -890,10 +942,12 @@ function nutrientShortfallTips(totals){
   }
   return tips;
 }
-// How much of the activity-earned calorie "bonus" (burned calories widen the day's
-// allowed intake) actually became extra progress toward the weight goal vs. being
-// eaten back. bonusDeficit > 0 = bonus went unspent (extra progress); < 0 = ate
-// beyond even the activity-boosted budget despite the calories burned.
+// Purely informational — the calorie LIMIT itself is hard (baseGoal, see
+// dailyTargets) and never widens with activity. This just separately reports
+// how much burned-calorie "bonus" would have offset any overeating, so activity
+// still visibly counts toward the weight goal even though it can't buy a bigger
+// budget. bonusDeficit > 0 = burn covered the day fully with some to spare
+// (extra progress); < 0 = ate beyond what even the burn could offset.
 function weightGoalImpact(dates){
   const p = state.profile;
   let consumed=0, baseGoal=0, burned=0;
@@ -944,7 +998,7 @@ function nutritionScore(iso){
   const d = getDay(iso);
   if(d.foods.length===0) return null;
   const totals = dayTotals(iso);
-  const targets = dailyTargets(p, d.activity.kcal); // already folds in today's calories burned, so a bigger burn means a bigger score-free allowance below
+  const targets = dailyTargets(p); // hard daily limit — activity doesn't buy score-free allowance
   return Math.round(calorieDirectionScore(p.goalType, totals.kcal-targets.kcal, targets.kcal));
 }
 // Same idea as nutritionScore but scored against the period's AGGREGATE calorie
@@ -959,9 +1013,8 @@ function aggregateNutritionScore(dates){
   if(loggedDates.length===0) return null;
   let consumed=0, target=0;
   loggedDates.forEach(iso=>{
-    const d = getDay(iso);
     consumed += dayTotals(iso).kcal;
-    target += dailyTargets(p, d.activity.kcal).kcal;
+    target += dailyTargets(p).kcal;
   });
   return Math.round(calorieDirectionScore(p.goalType, consumed-target, target));
 }
@@ -1079,7 +1132,10 @@ function renderOnboarding(){
   <div class="modal-backdrop center">
     <div class="modal">
       <h2>Welcome to Health Score</h2>
-      <div class="sub">Let's set your baseline. This takes about a minute.</div>
+      <div class="sub">Already using Health Score? Restore your latest backup instead of starting over.</div>
+      <button class="btn-primary" id="ob-import">Restore latest backup</button>
+      <input type="file" id="ob-import-file" accept="application/json,.json,.js,text/javascript,application/javascript" multiple class="hidden">
+      <div class="muted" style="text-align:center;margin:14px 0 10px;">— or set up a new profile —</div>
       <div class="field-row">
         <div class="field"><label>Age</label><input type="number" id="ob-age" placeholder="34"></div>
         <div class="field"><label>Sex</label>
@@ -1103,9 +1159,9 @@ function renderOnboarding(){
         <input type="number" step="0.1" id="ob-rate" placeholder="1.0" value="1.0">
       </div>
       <div class="field">
-        <label>Daily calorie goal</label>
+        <label>Daily calorie limit</label>
         <input type="number" id="ob-calgoal" placeholder="calculated from your info above">
-        <div class="muted" id="ob-calgoal-derived" style="margin-top:6px;">Calculated from your age/sex/height/weight and weekly goal — edit if you'd rather set your own.</div>
+        <div class="muted" id="ob-calgoal-derived" style="margin-top:6px;">Calculated from your age/sex/height/weight and weekly goal — edit if you'd rather set your own. This is a hard daily limit: it won't increase on days you're more active, though we'll still show how that activity helped your goal.</div>
       </div>
       <div class="field-row">
         <div class="field"><label>Daily step goal</label><input type="number" id="ob-steps" placeholder="8000" value="8000"></div>
@@ -1113,9 +1169,6 @@ function renderOnboarding(){
       </div>
       ${dayCheckboxesHtml('ob')}
       <button class="btn-primary" id="ob-save">Save & Start</button>
-      <div class="muted" style="text-align:center;margin:14px 0 10px;">— or —</div>
-      <button class="btn-secondary" id="ob-import">Restore from backup (JSON)</button>
-      <input type="file" id="ob-import-file" accept="application/json" class="hidden">
     </div>
   </div>`;
   const wrap = document.createElement('div');
@@ -1193,8 +1246,8 @@ function renderOnboarding(){
 
   const obImportBtn = wrap.querySelector('#ob-import');
   const obImportFile = wrap.querySelector('#ob-import-file');
-  obImportBtn.addEventListener('click', ()=>obImportFile.click());
-  obImportFile.addEventListener('change', ()=>importDataFromFile(obImportFile.files[0]));
+  obImportBtn.addEventListener('click', ()=>openBackupRestorePicker(obImportFile));
+  obImportFile.addEventListener('change', ()=>importLatestBackupFromFiles(obImportFile.files));
 }
 function renderOnboardingFitbitStep(){
   const wrap = document.createElement('div');
@@ -1329,7 +1382,7 @@ function modalSectionLabel(text){
 }
 function openTotalsModal(){
   const t = today(), p = state.profile, d = getDay(t);
-  const totals = dayTotals(t), targets = dailyTargets(p, d.activity.kcal);
+  const totals = dayTotals(t), targets = dailyTargets(p);
   const n = nutritionScore(t), a = activityScore(t), overall = dayOverallScore(t);
   openInfoModal("Scorecard", `
     ${modalSectionLabel('How today’s score is calculated')}
@@ -1337,7 +1390,7 @@ function openTotalsModal(){
     ${n!==null ? progRow('Nutrition Score', n, 100, '', 'var(--good)') : '<div class="muted">Log food to see your nutrition score.</div>'}
     ${a!==null ? progRow('Activity Score', a, 100, '', 'var(--critical)') : '<div class="muted">Log activity to see your activity score.</div>'}
     ${modalSectionLabel("Today's data")}
-    ${progRow('Calories', totals.kcal, targets.kcal, '', 'var(--blue)', calorieGoalBreakdown(targets.baseKcal, targets.activityKcal))}
+    ${progRow('Calories', totals.kcal, targets.kcal, '', 'var(--blue)', calorieGoalBreakdown(targets.kcal))}
     ${progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)')}
     ${progRow('Carbs', totals.carbs, targets.carbG, 'g', 'var(--yellow)')}
     ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--orange)')}
@@ -1372,13 +1425,13 @@ function openActivityModal(){
 }
 function openNutritionModal(){
   const t = today(), p = state.profile;
-  const totals = dayTotals(t), targets = dailyTargets(p, getDay(t).activity.kcal);
+  const totals = dayTotals(t), targets = dailyTargets(p);
   const week = weekCalorieProgress(t);
   const month = monthCalorieProgress(t);
   openInfoModal('Nutrition', `
-    ${bigStatRow(Math.round(totals.kcal).toLocaleString(), 'Calories today', `/ ${calorieGoalBreakdown(targets.baseKcal, targets.activityKcal)}`)}
-    ${bigStatRow(Math.round(week.consumed).toLocaleString(), 'Calories this week', `/ ${calorieGoalBreakdown(week.baseGoal, week.activityKcal)}`)}
-    ${bigStatRow(Math.round(month.consumed).toLocaleString(), 'Calories this month', `/ ${calorieGoalBreakdown(month.baseGoal, month.activityKcal)}`)}
+    ${bigStatRow(Math.round(totals.kcal).toLocaleString(), 'Calories today', `/ ${calorieGoalBreakdown(targets.kcal)}`)}
+    ${bigStatRow(Math.round(week.consumed).toLocaleString(), 'Calories this week', `/ ${calorieGoalBreakdown(week.goal)}`)}
+    ${bigStatRow(Math.round(month.consumed).toLocaleString(), 'Calories this month', `/ ${calorieGoalBreakdown(month.goal)}`)}
     ${bigStatRow(Math.round(totals.protein), 'Protein (g)', `/ ${targets.proteinG}g target`)}
     ${bigStatRow(totals.iron.toFixed(1), 'Iron (mg)', `/ ${ironRDA(p)}mg RDA`)}
     ${bigStatRow(Math.round(totals.calcium), 'Calcium (mg)', `/ ${calciumRDA(p)}mg RDA`)}
@@ -1607,7 +1660,7 @@ function screenToday(){
   const t = today();
   const oScore = dayOverallScore(t);
   const p = state.profile, d = getDay(t);
-  const totals = dayTotals(t), targets = dailyTargets(p, d.activity.kcal);
+  const totals = dayTotals(t), targets = dailyTargets(p);
   const stepPct = clamp(p.stepGoal>0 ? d.activity.steps/p.stepGoal*100 : 0, 0, 100);
   const calPct = clamp(targets.kcal>0 ? totals.kcal/targets.kcal*100 : 0, 0, 100);
   // Gold outline is Total Score / Activity only, never Calories/Nutrition — matches
@@ -1983,12 +2036,12 @@ function screenSettings(){
       </div>
       <div class="field"><label>Target rate (lb/week)</label><input type="number" step="0.1" id="s-rate" value="${p.ratePerWeekLb}"></div>
       <div class="field">
-        <label>Daily calorie goal</label>
+        <label>Daily calorie limit</label>
         <div class="field-row">
           <input type="number" id="s-calgoal" value="${p.calorieGoal||suggestedCalorieGoal(p)}" style="flex:2;">
           <button class="btn-secondary" id="s-calgoal-suggest" style="flex:1;">Suggest</button>
         </div>
-        <div class="muted" id="s-calgoal-derived" style="margin-top:6px;">${calorieGoalBreakdownText(p.calorieGoal||suggestedCalorieGoal(p), p.sex)}</div>
+        <div class="muted" id="s-calgoal-derived" style="margin-top:6px;">${calorieGoalBreakdownText(p.calorieGoal||suggestedCalorieGoal(p), p.sex)} This is a hard daily limit — it won't increase on active days, though how activity helped your goal is still shown separately.</div>
       </div>
       <div class="field-row">
         <div class="field"><label>Daily step goal</label><input type="number" id="s-steps" value="${p.stepGoal}"></div>
