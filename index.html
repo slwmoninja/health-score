@@ -395,19 +395,102 @@ const AUTO_BACKUP_THROTTLE_MS = 20*60*1000;         // when "Reduce backup files
 const AUTO_BACKUP_THROTTLE_MS_MINIMIZED = 4*60*60*1000; // when it's on (default)
 let lastAutoBackupJson = null;
 let lastAutoBackupAttemptAt = 0;
-function runAutoBackupDownload(force){
+
+// Minimal IndexedDB wrapper for the one thing it's used for: persisting a
+// FileSystemFileHandle across page loads so the single-file-overwrite path
+// below can reuse the same on-disk file without re-prompting every time.
+// (A handle isn't JSON-serializable, so it can't live in localStorage/state
+// like everything else — IndexedDB is the only storage that can hold one.)
+const BACKUP_HANDLE_DB = 'health-score-fs', BACKUP_HANDLE_STORE = 'handles', BACKUP_HANDLE_KEY = 'backupFile';
+function openHandleDb(){
+  return new Promise((resolve, reject)=>{
+    const req = indexedDB.open(BACKUP_HANDLE_DB, 1);
+    req.onupgradeneeded = ()=>{ req.result.createObjectStore(BACKUP_HANDLE_STORE); };
+    req.onsuccess = ()=>resolve(req.result);
+    req.onerror = ()=>reject(req.error);
+  });
+}
+async function loadSavedBackupHandle(){
+  try{
+    const db = await openHandleDb();
+    return await new Promise((resolve, reject)=>{
+      const req = db.transaction(BACKUP_HANDLE_STORE, 'readonly').objectStore(BACKUP_HANDLE_STORE).get(BACKUP_HANDLE_KEY);
+      req.onsuccess = ()=>resolve(req.result||null);
+      req.onerror = ()=>reject(req.error);
+    });
+  }catch(e){ return null; }
+}
+async function saveBackupHandle(handle){
+  try{
+    const db = await openHandleDb();
+    await new Promise((resolve, reject)=>{
+      const tx = db.transaction(BACKUP_HANDLE_STORE, 'readwrite');
+      tx.objectStore(BACKUP_HANDLE_STORE).put(handle, BACKUP_HANDLE_KEY);
+      tx.oncomplete = resolve; tx.onerror = ()=>reject(tx.error);
+    });
+  }catch(e){ /* best-effort */ }
+}
+// On browsers with the File System Access API (desktop Chrome/Edge; per the
+// note further up, confirmed absent on iOS Safari and this app's actual
+// Android Chrome target as of that testing — kept here as progressive
+// enhancement in case that ever changes, and free on the browsers where it's
+// already true), this lets backups overwrite the SAME on-disk file every
+// time instead of creating a new timestamped one. allowPrompt is only ever
+// true from the explicit "Back up now" tap — a genuine, dedicated gesture
+// for this — so it's the only path allowed to pop the one-time "choose where
+// to save" picker; every other caller (the automatic saveState()/
+// backgrounding triggers) only reuses an already-granted handle silently and
+// falls back rather than surprising the user with a picker mid unrelated tap.
+async function getWritableBackupHandle(allowPrompt){
+  if(!window.showSaveFilePicker) return null;
+  try{
+    let handle = await loadSavedBackupHandle();
+    if(handle){
+      const perm = await handle.queryPermission({mode:'readwrite'});
+      if(perm==='granted') return handle;
+      if(perm==='prompt' && allowPrompt){
+        const req = await handle.requestPermission({mode:'readwrite'});
+        if(req==='granted') return handle;
+      }
+      return null; // denied, or needs a prompt we're not allowed to show right now
+    }
+    if(!allowPrompt) return null;
+    handle = await window.showSaveFilePicker({
+      suggestedName: 'health-score-data.json',
+      types: [{description:'Health Score backup', accept:{'application/json':['.json']}}]
+    });
+    await saveBackupHandle(handle);
+    return handle;
+  }catch(e){
+    return null; // user cancelled the picker, or any other failure — caller falls back
+  }
+}
+async function runAutoBackupDownload(force){
   if(!AUTO_BACKUP_DOWNLOAD_ENABLED || !state.profile) return;
   const throttleMs = state.settings.minimizeBackupFiles ? AUTO_BACKUP_THROTTLE_MS_MINIMIZED : AUTO_BACKUP_THROTTLE_MS;
   if(!force && Date.now()-lastAutoBackupAttemptAt<throttleMs) return;
   const json = JSON.stringify(state);
   if(!force && json===lastAutoBackupJson) return; // nothing's changed since the last backup
   lastAutoBackupAttemptAt = Date.now();
+
+  const handle = await getWritableBackupHandle(force===true);
+  if(handle){
+    try{
+      const writable = await handle.createWritable();
+      await writable.write(json);
+      await writable.close();
+      lastAutoBackupJson = json;
+      return;
+    }catch(e){ /* fall through to the timestamped-download fallback below */ }
+  }
   try{
     const blob = new Blob([json], {type:'application/json'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     // Timestamped, not a fixed name — a fixed name hit a hard "file already
-    // exists" error on-device rather than a silent auto-rename.
+    // exists" error on-device rather than a silent auto-rename, on the
+    // browsers that land here (no File System Access API, or no granted
+    // handle yet).
     const stamp = new Date().toISOString().replace(/[:.]/g,'-');
     a.download = `health-score-data-${stamp}.json`;
     a.click();
@@ -1398,7 +1481,7 @@ const INFO_CONTENT = {
   projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
   trend: ['Score trend', `Under "This Week", your daily Activity and Nutrition scores (0-100) for the last 7 days. Under "Monthly", your Total Score and Weight for each of the last 12 months (labeled by month letter — a January point also shows its year so a 12-month span crossing a new year stays unambiguous) — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value, or tap elsewhere on the chart for the full data table.`],
   fitsync: ['Connect your Fitbit', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Head to Settings to connect it: finding your Fitbit's Google account, getting approved, and connecting. After you connect once, it re-syncs automatically in the background — no further action needed unless you reconnect a different account.<br><br><strong>Why do I have to wait for approval before I can connect?</strong> Everyone connects through one shared Google project the app owner controls, and Google caps how many outside accounts can use it before requiring a full verification review. Adding each person by hand keeps it under that limit — it's a one-time, ~30-second step on the app owner's end.<br><br><strong>My Fitbit's Google account isn't a Gmail address — is that right?</strong> Yes, that's normal. A Google account can be created with any email as its login, including Outlook, Hotmail, or Yahoo addresses. Use whatever email Fitbit's app shows you, even if it doesn't end in @gmail.com.<br><br><strong>I connected the wrong account.</strong> In Settings, tap "Reconnect & sync now" — Google always shows the account-chooser screen again, so just pick the correct email that time.<br><br><strong>App owner only:</strong> to approve a new person, go to <strong>console.cloud.google.com</strong> → your project → <strong>APIs & Services → OAuth consent screen → Audience</strong> → <strong>Add users</strong> under Test users, paste in the email they sent you, save. Then send them the project's <strong>Client ID</strong> and <strong>Client Secret</strong> from <strong>APIs & Services → Credentials</strong> (whatever channel you like — text, email) so they can paste them into Settings on their own device. If you haven't created the project yet, use the same Credentials/OAuth-consent-screen path to set one up, with redirect URI <strong>${location.origin}${location.pathname}</strong> and the Google Health API enabled.`],
-  savefreq: ['Save frequency', `<strong>On</strong>: backup every ~4 hours. <strong>Off</strong>: every ~20 min. Either way, each backup triggers your browser's own "Download complete" notification — that's the browser, not Health Score, and can't be silenced from here.`]
+  savefreq: ['Save frequency', `<strong>On</strong>: backup every ~4 hours. <strong>Off</strong>: every ~20 min. On browsers that support choosing a save location (tap "Back up now" once to set it up), every backup overwrites that same file with no extra notification. Elsewhere, each backup is a new file and triggers your browser's own "Download complete" notification — that's the browser, not Health Score, and can't be silenced from here.`]
 };
 function wireInfoButtons(root){
   (root||document).querySelectorAll('[data-info]').forEach(b=>{
@@ -2643,9 +2726,12 @@ function attachHandlers(){
     state.errorLog = []; saveState(); render();
   });
   const backupNowBtn = document.getElementById('s-backup-now');
-  if(backupNowBtn) backupNowBtn.addEventListener('click', ()=>{
-    runAutoBackupDownload(true); // bypasses the throttle and the unchanged-data skip
-    showToast('Backup saved to your Downloads/Files.', 'good');
+  // Awaited (unlike the fire-and-forget automatic triggers elsewhere) so the
+  // toast can't claim "saved" before a first-time save-location picker (on
+  // browsers that support it) has actually been responded to.
+  if(backupNowBtn) backupNowBtn.addEventListener('click', async ()=>{
+    await runAutoBackupDownload(true); // bypasses the throttle and the unchanged-data skip
+    showToast('Backup saved.', 'good');
   });
   // No browser lets a webpage list or delete files it doesn't have a handle to —
   // opening the native file picker is the closest a page can get to "show me my
