@@ -376,7 +376,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.4.2';
 
 function defaultState(){
   return {
@@ -2803,7 +2803,7 @@ function openTotalsModal(){
     <div class="row" style="margin-bottom:11px;"><span class="text2">Distance</span><span style="color:var(--critical);font-weight:700;">${(d.activity.distanceMi||0).toFixed(1)} mi</span></div>
     ${progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)')}
     ${progRow('Carbs', totals.carbs, targets.carbG, 'g', 'var(--yellow)')}
-    ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--orange)')}
+    ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--magenta)')}
     ${progRow('Iron', totals.iron, ironRDA(p), 'mg', 'var(--brown)')}
     ${progRow('Calcium', totals.calcium, calciumRDA(p), 'mg', 'var(--muted)')}
   `);
