@@ -2333,7 +2333,18 @@ function nutritionScore(iso){
   if(d.foods.length===0) return null;
   const totals = dayTotals(iso);
   const targets = dailyTargets(p); // hard daily limit — activity doesn't buy score-free allowance
-  return Math.round(calorieDirectionScore(p.goalType, totals.kcal-targets.kcal, targets.kcal));
+  const raw = calorieDirectionScore(p.goalType, totals.kcal-targets.kcal, targets.kcal);
+  if(iso===today()){
+    // Today is still unfolding, so "under target" isn't proven yet the way it is for
+    // a finished day — without this, logging one small item instantly swings the score
+    // from fully excluded (null) to a flat 100 for lose/gain goals (calorieDirectionScore's
+    // kcalDiff<=0 branch), regardless of how little of the day has actually been logged.
+    // Blend toward a neutral midpoint until enough of the daily target has been logged,
+    // so the score ramps up with real data instead of jumping on the very first bite.
+    const confidence = clamp(totals.kcal/targets.kcal, 0, 1);
+    return Math.round(50 + (raw-50)*confidence);
+  }
+  return Math.round(raw);
 }
 // Same idea as nutritionScore but scored against the period's AGGREGATE calorie
 // result rather than averaging each day's own score — so a day that ran slightly
@@ -2388,75 +2399,6 @@ function avgScore(dates, fn){
    FEEDBACK GENERATION — heavy on positive reinforcement,
    with one concrete, achievable action to try next.
    ========================================================= */
-// Four-bullet highlight block shown in the Week/Month top card: Activity and
-// Nutrition each get their own positive-contribution line (weighted the same
-// 45%/55% as dayOverallScore), Goals correlates the two into what they did for
-// the underlying weight goal, and Looking Ahead is the one data-driven thing to
-// improve — whichever of Activity/Nutrition trailed the other, with a concrete
-// nutrient shortfall tip folded in when one applies.
-function buildHighlightBullets(dates, periodLabel, oAvg){
-  const p = state.profile;
-  const nAvg = aggregateNutritionScore(dates);
-  const aAvg = avgScore(dates, activityScore);
-  const loggedDays = dates.filter(d=>getDay(d).foods.length>0).length;
-  const activityDays = dates.filter(d=>{const a=getDay(d).activity; return a.steps>0||effectiveActiveMin(d)>0;}).length;
-  const oAvgText = oAvg===null ? '--' : oAvg;
-
-  const activityText = aAvg===null
-    ? `Log steps or active minutes to start this ${periodLabel}'s Activity score.`
-    : `${hl(aAvg+'/100')} Avg across ${hl(activityDays)} tracked day${activityDays===1?'':'s'} = ${hl(Math.round(aAvg*0.45)+' pts')} > ${hl(oAvgText+'/100')} Score.`;
-
-  const nutritionText = nAvg===null
-    ? `Log meals to start this ${periodLabel}'s Nutrition score.`
-    : `${hl(nAvg+'/100')} Avg across ${hl(loggedDays)} tracked day${loggedDays===1?'':'s'} = ${hl(Math.round(nAvg*0.55)+' pts')} > ${hl(oAvgText+'/100')} Score.`;
-
-  // Goals: built from the raw calorie-burn-vs-budget numbers directly (rather
-  // than weightGoalImpactText's full sentences) to stay in the same succinct,
-  // number-highlighted style as the other three bullets.
-  const goalWord = p.goalType==='lose' ? 'weight-loss' : p.goalType==='gain' ? 'weight-gain' : 'maintenance';
-  const impact = weightGoalImpact(dates);
-  const burned = Math.round(impact.burned), bonus = Math.round(impact.bonusDeficit);
-  let goalsText;
-  if(burned<30){
-    goalsText = oAvg!==null
-      ? `${hl(oAvgText+'/100')} Score > pace for ${goalWord} goal.`
-      : `Log food/activity > see ${goalWord} goal pace.`;
-  } else if(Math.abs(bonus)<50){
-    goalsText = `${hl(burned+' kcal')} burned > on pace for ${goalWord} goal.`;
-  } else if(bonus>0){
-    goalsText = `${hl(burned+' kcal')} burned, ${hl('+'+bonus+' kcal')} unused > bonus toward ${goalWord} goal.`;
-  } else {
-    goalsText = `${hl(burned+' kcal')} burned, ${hl(Math.abs(bonus)+' kcal')} over > ${goalWord} goal impacted.`;
-  }
-
-  // Action-focused: names whichever of Nutrition/Activity trailed the other and
-  // tells the user to push it past its own current average — a concrete nutrient
-  // shortfall tip stands in for Nutrition when one applies, since "increase
-  // Nutrition beyond X" alone isn't as actionable as naming the actual gap.
-  const nutrientTotals = periodNutrientTotals(dates);
-  const tips = nutrientShortfallTips(nutrientTotals);
-  let lookingAheadText;
-  if(nAvg!==null && aAvg!==null){
-    const weakerIsNutrition = nAvg<=aAvg;
-    if(weakerIsNutrition){
-      lookingAheadText = tips.length ? tips[0] : `Increase Nutrition beyond ${hl(nAvg+'/100')} > lift Total Score.`;
-    } else {
-      lookingAheadText = `Increase Activity beyond ${hl(aAvg+'/100')} > lift Total Score.`;
-    }
-  } else if(tips.length){
-    lookingAheadText = tips[0];
-  } else {
-    lookingAheadText = `Log food/activity daily > build a recommendation.`;
-  }
-
-  return [
-    {label:'Activity', text:activityText},
-    {label:'Nutrition', text:nutritionText},
-    {label:'Goals', text:goalsText},
-    {label:'Looking Ahead', text:lookingAheadText}
-  ];
-}
-
 /* =========================================================
    ONBOARDING
    ========================================================= */
@@ -2741,7 +2683,6 @@ function readDayCheckboxes(root, prefix){
   return days;
 }
 const INFO_CONTENT = {
-  projection: ['This Week / Month', `Averages your daily scores so far in the period and projects that same pace forward — not a guess, just "if the rest of it looks like today did." When the period ends (Sunday for the week, the last day of the month), the card shows the real final score instead of a projection, plus your highlights and one focus area for next time.`],
   trend: ['Trend', `Under "This Week", your actual Calories Burned (activity) and Calories In for the last 7 days — real numbers rather than the 0-100 Activity/Nutrition scores, since a score flattens to 100 the moment a goal's met and hides how far under your calorie limit you actually ran, or how much you outpaced your activity goals by. A day with nothing logged is a gap in the line, not a literal zero. Under "Monthly", your Total Score and Weight for each of the last 12 months (labeled by month letter — a January point also shows its year so a 12-month span crossing a new year stays unambiguous) — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value, or tap elsewhere on the chart for the full data table.`],
   fitsync: ['Connect your Fitbit', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Head to Settings to connect it: finding your Fitbit's Google account, getting approved, and connecting. After you connect once, it re-syncs automatically in the background — no further action needed unless you reconnect a different account.<br><br><strong>Why do I have to wait for approval before I can connect?</strong> Everyone connects through one shared Google project the app owner controls, and Google caps how many outside accounts can use it before requiring a full verification review. Adding each person by hand keeps it under that limit — it's a one-time, ~30-second step on the app owner's end.<br><br><strong>My Fitbit's Google account isn't a Gmail address — is that right?</strong> Yes, that's normal. A Google account can be created with any email as its login, including Outlook, Hotmail, or Yahoo addresses. Use whatever email Fitbit's app shows you, even if it doesn't end in @gmail.com.<br><br><strong>I connected the wrong account.</strong> In Settings, tap "Reconnect & sync now" — Google always shows the account-chooser screen again, so just pick the correct email that time.<br><br><strong>App owner only:</strong> to approve a new person, go to <strong>console.cloud.google.com</strong> → your project → <strong>APIs & Services → OAuth consent screen → Audience</strong> → <strong>Add users</strong> under Test users, paste in the email they sent you, save. Then send them the project's <strong>Client ID</strong> and <strong>Client Secret</strong> from <strong>APIs & Services → Credentials</strong> (whatever channel you like — text, email) so they can paste them into Settings on their own device. If you haven't created the project yet, use the same Credentials/OAuth-consent-screen path to set one up, with redirect URI <strong>${location.origin}${location.pathname}</strong> and the Google Health API enabled.`],
   backupfile: ['Back up now', `Your data is already safely auto-saved as you go — one continuously-updated save, same idea as any other app, never a pile of files. This button makes a separate exportable copy for the one thing that auto-save can't survive: deliberately clearing your browser's history/site data.<br><br>On browsers that let a page choose a save location, the very first tap asks where to save once, then every tap after that overwrites that same file — a real single save file, no extra notification each time. Elsewhere, each tap creates a new dated file and triggers your browser's own "Download complete" notification, which no page can silence — that's the browser, not Health Score.`]
@@ -3045,11 +2986,6 @@ function render(){
 }
 
 /* ---------- TODAY ---------- */
-function paceMsg(score, period){
-  if(score>=80) return `You're having a great ${period} — keep it up!`;
-  if(score>=60) return `Solid progress so far.`;
-  return '';
-}
 function screenToday(){
   const t = today();
   const oScore = dayOverallScore(t);
@@ -3258,32 +3194,8 @@ function screenHistory(){
   const range = historyMode==='week' ? weekRange(t) : monthRange(t);
   const rangeEnd = range.end < t ? range.end : t;
   const dates = trackedDatesBetween(range.start, rangeEnd);
-  const oAvg = periodOverallScore(dates);
-  const bullets = buildHighlightBullets(dates, historyMode, oAvg);
   const nutrientTotals = periodNutrientTotals(dates);
   const nutrientTips = nutrientShortfallTips(nutrientTotals);
-
-  // Pace/projection card, moved here from the Today tab — one card, parametrized by
-  // whichever History tab (week vs month) is currently active.
-  const dNow = dateFromIso(t);
-  const daysInMonth = new Date(dNow.getFullYear(), dNow.getMonth()+1, 0).getDate();
-  const periodComplete = historyMode==='week' ? isSunday(t) : dNow.getDate()===daysInMonth;
-  const periodRemain = historyMode==='week' ? (dayOfWeek(t)===0?0:7-dayOfWeek(t)) : daysInMonth-dNow.getDate();
-
-  // Week-over-week Total Score/Weight comparison, shown only in the Monthly card —
-  // "this week" is the week containing today (partial if today isn't Sunday yet),
-  // compared against the full prior 7-day week.
-  let curWeekScore=null, prevWeekScore=null, curWeekWeight=null, prevWeekWeight=null;
-  if(historyMode==='month'){
-    const curWeekStart = weekRange(t).start;
-    const curWeekDates = trackedDatesBetween(curWeekStart, t);
-    const prevWeekStart = addDays(curWeekStart, -7);
-    const prevWeekDates = trackedDatesBetween(prevWeekStart, addDays(prevWeekStart, 6));
-    curWeekScore = avgScore(curWeekDates, dayOverallScore);
-    prevWeekScore = avgScore(prevWeekDates, dayOverallScore);
-    curWeekWeight = latestWeightIn(curWeekDates);
-    prevWeekWeight = latestWeightIn(prevWeekDates);
-  }
 
   return `
   <div class="topbar"><h1>Trends</h1>${activeSessionBannerHtml()}${installTopbarBtnHtml()}</div>
@@ -3293,32 +3205,6 @@ function screenHistory(){
       <button data-v="month" class="${historyMode==='month'?'active':''}">Monthly</button>
     </div>
     <div style="height:14px"></div>
-
-    ${state.settings.charts.projection ? `<div class="card">
-      <div class="card-head">
-        <div style="display:flex;align-items:baseline;gap:8px;">
-          <h3 style="margin-bottom:0;color:var(--blue);">${periodComplete ? (historyMode==='week'?'Week Summary':'Month Summary') : (historyMode==='week'?'This Week':'Monthly')}</h3>
-          <span class="inline-stat">${oAvg===null?'--':oAvg}/100${periodComplete ? ` this ${historyMode}` : ` <span class="muted">· ${periodRemain}d ${historyMode==='week'?'to Sunday':'left'}</span>`}</span>
-        </div>
-        ${infoBtnHtml('projection')}
-      </div>
-      ${periodComplete
-        ? ''
-        : `${oAvg===null ? `<div class="muted">Log today to start the trend.</div>` : (paceMsg(oAvg, historyMode) ? `<div class="muted">${paceMsg(oAvg, historyMode)}</div>` : '')}`}
-      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--grid);">
-        ${bullets.map((b,i)=>`<div class="feedback-item"><div class="dot" style="background:${i===3?'var(--warning)':'var(--good)'}"></div><div><strong>${b.label}:</strong> ${b.text}</div></div>`).join('')}
-      </div>
-      ${historyMode==='month' ? `
-      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--grid);">
-        <div class="muted" style="font-size:12px;margin-bottom:6px;">Week over week</div>
-        ${curWeekScore!==null && prevWeekScore!==null
-          ? `<div class="row"><span class="text2">Total Score</span><span>${curWeekScore} <span class="muted">(${curWeekScore-prevWeekScore>=0?'+':''}${curWeekScore-prevWeekScore} vs last week)</span></span></div>`
-          : `<div class="muted">Not enough weeks logged yet to compare.</div>`}
-        ${curWeekWeight!==null && prevWeekWeight!==null
-          ? `<div class="row" style="margin-top:4px;"><span class="text2">Weight</span><span>${curWeekWeight.toFixed(1)} lb <span class="muted">(${curWeekWeight-prevWeekWeight>=0?'+':''}${(curWeekWeight-prevWeekWeight).toFixed(1)} lb vs last week)</span></span></div>`
-          : ''}
-      </div>` : ''}
-    </div>` : ''}
 
     ${state.settings.charts.projection ? `<div class="card">
       <div class="card-head"><h3>${historyMode==='week'?'7-day trend':'Monthly Trends'}</h3>${infoBtnHtml('trend')}</div>
