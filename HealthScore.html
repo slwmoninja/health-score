@@ -14,7 +14,7 @@
 :root{
   --surface:#fcfcfb;--page:#f9f9f7;--text:#0b0b0b;--text2:#52514e;--muted:#898781;
   --grid:#e1e0d9;--axis:#c3c2b7;--border:rgba(11,11,11,.10);
-  --blue:#2a78d6;--aqua:#1baf7a;--yellow:#eda100;--green:#008300;--violet:#4a3aa7;--red:#e34948;--magenta:#e87ba4;--orange:#eb6834;--brown:#8b5a2b;
+  --blue:#2a78d6;--aqua:#1baf7a;--yellow:#eda100;--green:#008300;--violet:#4a3aa7;--red:#e34948;--magenta:#e87ba4;--orange:#eb6834;--brown:#8b5a2b;--gold:#d4a017;
   --good:#0ca30c;--warning:#fab219;--serious:#ec835a;--critical:#d03b3b;
   --radius:14px;--shadow:0 2px 10px rgba(0,0,0,.08);
   --btn-hi:rgba(255,255,255,.35);--btn-lo:rgba(11,11,11,.22);
@@ -23,7 +23,7 @@
   :root{
     --surface:#1a1a19;--page:#0d0d0d;--text:#ffffff;--text2:#c3c2b7;--muted:#898781;
     --grid:#2c2c2a;--axis:#383835;--border:rgba(255,255,255,.10);
-    --blue:#3987e5;--aqua:#199e70;--yellow:#c98500;--green:#008300;--violet:#9085e9;--red:#e66767;--magenta:#d55181;--orange:#d95926;--brown:#c9905c;
+    --blue:#3987e5;--aqua:#199e70;--yellow:#c98500;--green:#008300;--violet:#9085e9;--red:#e66767;--magenta:#d55181;--orange:#d95926;--brown:#c9905c;--gold:#e0b12e;
     --btn-hi:rgba(255,255,255,.12);--btn-lo:rgba(0,0,0,.5);
   }
 }
@@ -379,7 +379,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.3.8';
+const APP_VERSION = '1.3.9';
 
 function defaultState(){
   return {
@@ -3111,7 +3111,7 @@ function screenToday(){
   <div class="screen">
     <div class="card score-hero">
       <div class="score-trio">
-        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 92, undefined, 'var(--blue)', totalGoalMet)}</div>
+        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 92, undefined, 'var(--gold)', totalGoalMet)}</div>
         <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, stepPct, 'var(--critical)', activityGoalMet)}</div>
         <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}</div>
       </div>
