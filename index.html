@@ -391,7 +391,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.8';
+const APP_VERSION = '1.4.9';
 
 function defaultState(){
   return {
@@ -3452,7 +3452,7 @@ function screenSettings(){
         </div>
       </div>
       <div class="field-row">
-        <div class="field"><label>Starting weight (lb)</label><input type="number" id="s-weight" value="${p.weightLb}"></div>
+        <div class="field"><label>Weight (lb)</label><input type="number" id="s-weight" value="${p.weightLb}"></div>
         <div class="field"><label>Target rate (lb/wk)</label><input type="number" step="0.1" id="s-rate" value="${p.ratePerWeekLb}"></div>
         <div class="field"><label>Target Weight</label><input type="number" step="0.1" id="s-targetweight" value="${p.targetWeightLb||''}" placeholder="optional"></div>
       </div>
