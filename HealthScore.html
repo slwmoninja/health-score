@@ -372,7 +372,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 
 function defaultState(){
   return {
@@ -3349,7 +3349,6 @@ function screenSettings(){
           <input type="number" id="s-calgoal" value="${p.calorieGoal||suggestedCalorieGoal(p)}" style="flex:2;">
           <button class="btn-secondary" id="s-calgoal-suggest" style="flex:1;">Suggest</button>
         </div>
-        <div class="muted" id="s-calgoal-derived" style="margin-top:6px;">${calorieGoalBreakdownText(p.calorieGoal||suggestedCalorieGoal(p), p.sex)} This is a hard daily limit — it won't increase on active days, though how activity helped your goal is still shown separately.</div>
       </div>
       <div class="field-row">
         <div class="field"><label>Daily step goal</label><input type="number" id="s-steps" value="${p.stepGoal}"></div>
@@ -3985,11 +3984,6 @@ function attachHandlers(){
     sGoal.querySelectorAll('button').forEach(x=>x.classList.remove('active')); b.classList.add('active');
   }));
   const sCalGoalInput = document.getElementById('s-calgoal');
-  const sCalGoalDerived = document.getElementById('s-calgoal-derived');
-  const refreshCalGoalDerived = ()=>{
-    if(sCalGoalDerived) sCalGoalDerived.textContent = calorieGoalBreakdownText(Number(sCalGoalInput.value)||0, document.getElementById('s-sex').value);
-  };
-  if(sCalGoalInput) sCalGoalInput.addEventListener('input', refreshCalGoalDerived);
   const sCalGoalSuggest = document.getElementById('s-calgoal-suggest');
   if(sCalGoalSuggest) sCalGoalSuggest.addEventListener('click', ()=>{
     const goalType = sGoal.querySelector('.active').dataset.v;
@@ -4000,7 +3994,6 @@ function attachHandlers(){
       weightLb: Number(document.getElementById('s-weight').value),
       goalType, ratePerWeekLb: goalType==='maintain'?0:Number(document.getElementById('s-rate').value)||0
     });
-    refreshCalGoalDerived();
   });
   const sSave = document.getElementById('s-save');
   if(sSave) sSave.addEventListener('click', ()=>{
