@@ -372,7 +372,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.2.2';
 
 function defaultState(){
   return {
@@ -2684,13 +2684,16 @@ function installTopbarBtnHtml(keepAfterInstall){
 // Day-of-week checkboxes shared by onboarding and Settings > Profile — index
 // matches JS Date.getDay() (0=Sun..6=Sat) so it lines up directly with isTrackedDay().
 const DAY_LABELS = ['S','M','T','W','T','F','S'];
-function dayCheckboxesHtml(prefix, trackedDays){
+function dayCheckboxesHtml(prefix, trackedDays, opts){
+  opts = opts || {};
   trackedDays = trackedDays || [true,true,true,true,true,true,true];
+  const checks = `<div class="day-checks" id="${prefix}-days">
+      ${DAY_LABELS.map((l,i)=>`<label class="daycheck"><input type="checkbox" data-day="${i}" ${trackedDays[i]!==false?'checked':''}><span>${l}</span></label>`).join('')}
+    </div>`;
+  if(opts.bare) return `<div class="field">${checks}</div>`;
   return `<div class="field">
     <label>Days to track</label>
-    <div class="day-checks" id="${prefix}-days">
-      ${DAY_LABELS.map((l,i)=>`<label class="daycheck"><input type="checkbox" data-day="${i}" ${trackedDays[i]!==false?'checked':''}><span>${l}</span></label>`).join('')}
-    </div>
+    ${checks}
     <div class="muted" style="margin-top:6px;">Only checked days count toward your weekly/monthly scores, feedback, and nutrient totals.</div>
   </div>`;
 }
@@ -3326,6 +3329,8 @@ function screenSettings(){
       <div class="toggle-row"><span>Weight Tracking</span><button class="switch ${state.settings.weightTrackingEnabled?'on':''}" data-setting-toggle="weightTrackingEnabled"></button></div>
       ${dashToggleRow('projection','Trend Charts')}
       <div style="height:14px"></div>
+      ${dayCheckboxesHtml('s', p.trackedDays, {bare:true})}
+      <div style="height:14px"></div>
       <div class="field-row">
         <div class="field"><label>Age</label><input type="number" id="s-age" value="${p.age}"></div>
         <div class="field"><label>Sex</label><select id="s-sex"><option value="female" ${p.sex==='female'?'selected':''}>Female</option><option value="male" ${p.sex==='male'?'selected':''}>Male</option></select></div>
@@ -3354,7 +3359,6 @@ function screenSettings(){
         <div class="field"><label>Daily step goal</label><input type="number" id="s-steps" value="${p.stepGoal}"></div>
         <div class="field"><label>Active min goal</label><input type="number" id="s-min" value="${p.activeMinGoal}"></div>
       </div>
-      ${dayCheckboxesHtml('s', p.trackedDays)}
       <button class="btn-primary" id="s-save">Save profile</button>
     </details>
 
