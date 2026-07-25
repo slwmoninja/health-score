@@ -350,9 +350,9 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .pill-btn:active{transform:translateY(2px);box-shadow:0 1px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.3);}
 .pill-btn.green{background:linear-gradient(180deg, color-mix(in srgb, var(--good) 100%, white 15%), var(--good));flex:1.5;}
 .pill-btn.red{background:linear-gradient(180deg, color-mix(in srgb, var(--critical) 100%, white 15%), var(--critical));flex:1;}
-.pill-btn.img-btn{padding:0;background:none;box-shadow:0 3px 8px rgba(0,0,0,.3);height:56px;flex:1;overflow:hidden;}
-.pill-btn.img-btn:active{box-shadow:0 1px 4px rgba(0,0,0,.25);}
-.pill-btn.img-btn img{width:100%;height:100%;object-fit:cover;display:block;}
+.pill-btn.img-btn{padding:0;background:none;box-shadow:none;height:56px;flex:1;}
+.pill-btn.img-btn:active{box-shadow:none;}
+.pill-btn.img-btn img{width:100%;height:100%;object-fit:contain;display:block;}
 
 /* ---- popup stat rows (large readable numbers, no chart) ---- */
 .popup-stat{padding:12px 0;border-top:1px solid var(--grid);}
@@ -384,7 +384,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.6';
+const APP_VERSION = '1.4.7';
 
 function defaultState(){
   return {
