@@ -379,7 +379,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 
 function defaultState(){
   return {
@@ -2213,19 +2213,20 @@ function calorieGoalOffTrack(p){
   const suggested = suggestedCalorieGoal(p);
   return Math.abs(p.calorieGoal - suggested) >= 250;
 }
-// Very short BMR->maintenance->goal-adjustment breakdown, shown when the "!"
-// icon above is tapped — the formula behind why the saved number is flagged,
-// using the same math as suggestedCalorieGoal, in the user's own profile terms.
+// One-line version of the formula behind the "!" icon: the stated rate's own
+// calculated calorie/day figure, vs. the saved goal, with a one-phrase verdict
+// on which direction it's off (harder to sustain vs. too generous to work).
+// Kept deliberately terse — this is a quick sanity check, not a report.
 function calorieGoalMathText(p){
-  const bmrVal = Math.round(bmr(p));
-  const tdee = Math.round(bmrVal*1.2);
   const suggested = suggestedCalorieGoal(p);
   const actual = Math.round(p.calorieGoal || suggested);
-  const diff = actual - tdee;
-  const impliedRate = Math.abs(diff)*7/3500;
-  return `BMR ${bmrVal.toLocaleString()} kcal × 1.2 activity ≈ ${tdee.toLocaleString()} kcal to maintain weight. `
-    + `Your ${p.ratePerWeekLb} lb/week ${p.goalType} goal needs ≈ ${suggested.toLocaleString()} kcal/day. `
-    + `Your saved goal of ${actual.toLocaleString()} kcal is ${diff>=0?'+':''}${diff.toLocaleString()} kcal/day vs maintenance ≈ ${impliedRate.toFixed(1)} lb/week.`;
+  if(p.goalType==='maintain'){
+    return `Maintain ≈ ${suggested.toLocaleString()} cal p/d. Your ${actual.toLocaleString()} cal p/d goal is off your calculated maintenance level.`;
+  }
+  const sign = p.goalType==='lose' ? '-' : '+';
+  const harder = p.goalType==='lose' ? actual<suggested : actual>suggested;
+  const verdict = harder ? 'may be harder to sustain.' : 'may be too generous to hit your goal.';
+  return `${sign}${p.ratePerWeekLb} lb/week ≈ ${suggested.toLocaleString()} cal p/d. Your ${actual.toLocaleString()} cal p/d goal ${verdict}`;
 }
 // Supporting text under the editable daily goal field — the daily number is the
 // single source of truth; weekly/monthly are just that number scaled up so the
