@@ -376,7 +376,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.4';
+const APP_VERSION = '1.4.5';
 
 function defaultState(){
   return {
@@ -3330,7 +3330,7 @@ function screenHistory(){
         <div class="legend-item"><span class="swatch" style="background:var(--orange)"></span>Weight</div>
         ` : `
         <div class="legend-item"><span class="swatch" style="background:var(--critical)"></span>Activity</div>
-        <div class="legend-item"><span class="swatch" style="background:var(--aqua)"></span>Nutrition</div>
+        <div class="legend-item"><span class="swatch" style="background:var(--good)"></span>Nutrition</div>
         `}
       </div>
     </div>` : ''}
@@ -3789,11 +3789,11 @@ function mountCharts(){
     const calInPoints = dates.map(d=> getDay(d).foods.length===0 ? null : Math.round(dayTotals(d).kcal));
     trendEl.appendChild(trendLineChart([
       {name:'Calories Burned', color:'var(--critical)', points: calBurnedPoints, unit:' kcal'},
-      {name:'Calories In', color:'var(--aqua)', points: calInPoints, unit:' kcal'}
+      {name:'Calories In', color:'var(--good)', points: calInPoints, unit:' kcal'}
     ], labels, {dashLastSegment:true}));
     trendEl.addEventListener('click', ()=>openChartTableModal('7-day trend', ['Day','Calories Burned','Calories In'],
       dates.map((d,i)=>[dateFromIso(d).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}), calBurnedPoints[i]===null?'--':calBurnedPoints[i].toLocaleString()+' kcal', calInPoints[i]===null?'--':calInPoints[i].toLocaleString()+' kcal']),
-      [null,'var(--critical)','var(--aqua)']
+      [null,'var(--critical)','var(--good)']
     ));
   }
 }
