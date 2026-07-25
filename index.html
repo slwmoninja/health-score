@@ -358,6 +358,11 @@ details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
    STATE
    ========================================================= */
 const STORE_KEY = 'healthscore_v1';
+// Human-readable build marker, shown in Settings > About — bump this on every
+// change from here on so a reload can be visually confirmed against what was
+// actually deployed (distinct from STORE_KEY, which is the data schema key
+// and unrelated to app code version).
+const APP_VERSION = '1.0.0';
 
 function defaultState(){
   return {
@@ -3335,7 +3340,7 @@ function screenSettings(){
     <details class="card" data-card-key="dashboard" ${settingsCardOpenAttr('dashboard')}>
       <summary class="card-summary"><h3>Dashboard</h3><span class="chevron">⌄</span></summary>
       ${dashToggleRow('projection','Trend reports')}
-      <div class="muted" style="margin-top:6px;">Covers both the week/month summary and the trend chart on the Trends tab.</div>
+      <div class="muted" style="margin-top:6px;">Covers the trend chart on the Trends tab.</div>
     </details>
 
     <details class="card" data-card-key="fitbit" ${settingsCardOpenAttr('fitbit')}>
@@ -3370,6 +3375,11 @@ function screenSettings(){
       <input type="file" id="s-show-data-files-input" accept="application/json,.json" class="hidden">
       <div style="height:14px"></div>
       <button class="btn-secondary" id="s-reset" style="color:var(--critical)">Reset all data</button>
+    </details>
+
+    <details class="card" data-card-key="about" ${settingsCardOpenAttr('about')}>
+      <summary class="card-summary"><h3>About</h3><span class="chevron">⌄</span></summary>
+      <div class="row"><span class="text2">Version</span><span>${APP_VERSION}</span></div>
     </details>
   </div>`;
 }
