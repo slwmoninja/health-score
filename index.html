@@ -299,6 +299,11 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid var(--grid);}
 .toggle-row:first-child{border-top:none;}
 .toggle-row span{font-size:14px;font-weight:600;}
+/* ---- two toggles sharing one row (Settings > Profile Preferences), instead of
+   each getting its own full-width row ---- */
+.toggle-row-split{justify-content:flex-start;gap:28px;}
+.toggle-item{display:flex;align-items:center;gap:8px;}
+.toggle-item span{font-size:14px;font-weight:600;}
 .switch{width:42px;height:25px;border-radius:99px;border:none;background:var(--grid);position:relative;flex:none;
   box-shadow:inset 0 1px 3px rgba(0,0,0,.15);transition:background .15s;}
 .switch::after{content:'';position:absolute;top:2px;left:2px;width:21px;height:21px;border-radius:50%;background:#fff;
@@ -345,6 +350,9 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .pill-btn:active{transform:translateY(2px);box-shadow:0 1px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.3);}
 .pill-btn.green{background:linear-gradient(180deg, color-mix(in srgb, var(--good) 100%, white 15%), var(--good));flex:1.5;}
 .pill-btn.red{background:linear-gradient(180deg, color-mix(in srgb, var(--critical) 100%, white 15%), var(--critical));flex:1;}
+.pill-btn.img-btn{padding:0;background:none;box-shadow:0 3px 8px rgba(0,0,0,.3);height:56px;flex:1;overflow:hidden;}
+.pill-btn.img-btn:active{box-shadow:0 1px 4px rgba(0,0,0,.25);}
+.pill-btn.img-btn img{width:100%;height:100%;object-fit:cover;display:block;}
 
 /* ---- popup stat rows (large readable numbers, no chart) ---- */
 .popup-stat{padding:12px 0;border-top:1px solid var(--grid);}
@@ -376,7 +384,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.5';
+const APP_VERSION = '1.4.6';
 
 function defaultState(){
   return {
@@ -2479,9 +2487,15 @@ function renderOnboarding(){
           <button data-v="gain">Gain</button>
         </div>
       </div>
-      <div class="field" id="ob-rate-field">
-        <label>Target rate (lb/week)</label>
-        <input type="number" step="0.1" id="ob-rate" placeholder="1.0" value="1.0">
+      <div class="field-row">
+        <div class="field" id="ob-rate-field">
+          <label>Target rate (lb/week)</label>
+          <input type="number" step="0.1" id="ob-rate" placeholder="1.0" value="1.0">
+        </div>
+        <div class="field">
+          <label>Target Weight (optional)</label>
+          <input type="number" step="0.1" id="ob-targetweight" placeholder="lb">
+        </div>
       </div>
       <div class="field">
         <label>Daily calorie limit</label>
@@ -2545,9 +2559,11 @@ function renderOnboarding(){
     if(!age||!height||!weight){ alert('Please fill in age, height, and weight.'); return; }
     const sex = wrap.querySelector('#ob-sex').value;
     const calGoal = Number(calGoalInput.value) || suggestedCalorieGoal({age, sex, heightIn:height, weightLb:weight, goalType, ratePerWeekLb: goalType==='maintain'?0:rate});
+    const targetWeight = Number(wrap.querySelector('#ob-targetweight').value)||null;
     state.profile = {
       age, sex, heightIn: height, weightLb: weight,
-      goalType, ratePerWeekLb: goalType==='maintain'?0:rate, stepGoal:steps, activeMinGoal:min, calorieGoal: calGoal,
+      goalType, ratePerWeekLb: goalType==='maintain'?0:rate, targetWeightLb: targetWeight,
+      stepGoal:steps, activeMinGoal:min, calorieGoal: calGoal,
       trackedDays: readDayCheckboxes(wrap, 'ob'), startedAt: today()
     };
     getDay(today()).weightLb = weight;
@@ -3108,8 +3124,8 @@ function screenToday(){
   const totals = dayTotals(t), targets = dailyTargets(p);
   const stepPct = clamp(p.stepGoal>0 ? d.activity.steps/p.stepGoal*100 : 0, 0, 100);
   const calPct = clamp(targets.kcal>0 ? totals.kcal/targets.kcal*100 : 0, 0, 100);
-  // Gold outline is Total Score / Activity only, never Calories/Nutrition — matches
-  // which goals actually trigger the confetti celebration (checkGoalsAndCelebrate).
+  // Checkered-flag outline is Total Score / Activity only, never Calories/Nutrition —
+  // matches which goals actually trigger the confetti celebration (checkGoalsAndCelebrate).
   const totalGoalMet = oScore!==null && oScore>=100;
   const activityGoalMet = (p.stepGoal>0 && d.activity.steps>=p.stepGoal) || (p.activeMinGoal>0 && effectiveActiveMin(t)>=p.activeMinGoal);
 
@@ -3127,15 +3143,15 @@ function screenToday(){
   <div class="screen">
     <div class="card score-hero">
       <div class="score-trio">
-        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 92, undefined, 'var(--gold)', totalGoalMet)}</div>
+        <div class="score-circle-col" data-open-modal="totals">${scoreCircle(oScore===null?'--':oScore, 92, undefined, '#fff', totalGoalMet)}</div>
         <div class="score-circle-col" data-open-modal="activity">${scoreCircle(formatCompact(d.activity.steps), 84, stepPct, 'var(--critical)', activityGoalMet)}</div>
         <div class="score-circle-col" data-open-modal="nutrition">${scoreCircle(formatCompact(totals.kcal), 84, calPct, 'var(--good)')}</div>
       </div>
     </div>
 
     <div class="pill-row">
-      <button class="pill-btn green" data-quick-nav="log" data-log-focus="nutrition">+ Log Nutrition</button>
-      <button class="pill-btn red" data-quick-nav="log" data-log-focus="activity">+ Activity</button>
+      <button class="pill-btn green img-btn" data-quick-nav="log" data-log-focus="nutrition" aria-label="Log Nutrition"><img src="btn-nutrition.png" alt=""></button>
+      <button class="pill-btn red img-btn" data-quick-nav="log" data-log-focus="activity" aria-label="Log Activity"><img src="btn-activity.png" alt=""></button>
     </div>
 
     ${todaysFoodsCard()}
@@ -3408,8 +3424,10 @@ function screenSettings(){
   <div class="screen">
     <details class="card" data-card-key="profile" ${settingsCardOpenAttr('profile')}>
       <summary class="card-summary"><h3>Profile Preferences</h3><span class="chevron">⌄</span></summary>
-      <div class="toggle-row"><span>Weight Tracking</span><button class="switch ${state.settings.weightTrackingEnabled?'on':''}" data-setting-toggle="weightTrackingEnabled"></button></div>
-      ${dashToggleRow('projection','Trend Charts')}
+      <div class="toggle-row toggle-row-split">
+        <div class="toggle-item"><span>Weight Tracking</span><button class="switch ${state.settings.weightTrackingEnabled?'on':''}" data-setting-toggle="weightTrackingEnabled"></button></div>
+        <div class="toggle-item"><span>Trend Charts</span><button class="switch ${state.settings.charts.projection?'on':''}" data-chart-toggle="projection"></button></div>
+      </div>
       <div style="height:14px"></div>
       ${dayCheckboxesHtml('s', p.trackedDays, {inline:true})}
       <div style="height:14px"></div>
@@ -3429,7 +3447,10 @@ function screenSettings(){
           <button data-v="gain" class="${p.goalType==='gain'?'active':''}">Gain</button>
         </div>
       </div>
-      <div class="field"><label>Target rate (lb/week)</label><input type="number" step="0.1" id="s-rate" value="${p.ratePerWeekLb}"></div>
+      <div class="field-row">
+        <div class="field"><label>Target rate (lb/week)</label><input type="number" step="0.1" id="s-rate" value="${p.ratePerWeekLb}"></div>
+        <div class="field"><label>Target Weight (optional)</label><input type="number" step="0.1" id="s-targetweight" value="${p.targetWeightLb||''}"></div>
+      </div>
       <div class="field">
         <label style="display:flex;align-items:center;gap:6px;">Daily calorie limit${calorieGoalOffTrack(p) ? `<button class="info-btn warn" id="s-calgoal-warn" type="button">!</button>` : ''}</label>
         <div class="field-row">
@@ -3485,11 +3506,6 @@ function screenSettings(){
     </details>
   </div>`;
 }
-function dashToggleRow(key, label){
-  const on = state.settings.charts[key];
-  return `<div class="toggle-row"><span>${label}</span><button class="switch ${on?'on':''}" data-chart-toggle="${key}"></button></div>`;
-}
-
 /* =========================================================
    GOOGLE HEALTH API (health.googleapis.com) — the platform Google
    moved Fitbit's data onto; the legacy Fitbit Web API is being
@@ -4101,6 +4117,7 @@ function attachHandlers(){
       weightLb: newWeight,
       goalType,
       ratePerWeekLb: goalType==='maintain'?0:Number(document.getElementById('s-rate').value)||0,
+      targetWeightLb: Number(document.getElementById('s-targetweight').value)||null,
       stepGoal: Number(document.getElementById('s-steps').value)||8000,
       activeMinGoal: Number(document.getElementById('s-min').value)||30,
       calorieGoal: Number(document.getElementById('s-calgoal').value)||null,
