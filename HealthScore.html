@@ -362,7 +362,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 
 function defaultState(){
   return {
@@ -2815,13 +2815,26 @@ function trendLineChart(series, labels, opts){
   const stepX = n>1 ? plotW/(n-1) : 0;
   series.forEach(s=>{
     const {min,max} = scaleFor(s);
-    let d = '';
+    const pts = [];
     s.points.forEach((v,i)=>{
       if(v===null) return;
-      const x = padL + stepX*i, y = H-padB-((v-min)/(max-min))*plotH;
-      d += (d===''?'M':'L')+x+' '+y+' ';
+      pts.push({i, x: padL + stepX*i, y: H-padB-((v-min)/(max-min))*plotH});
     });
+    // Last stretch (whichever plotted point precedes the final one) is drawn as its
+    // own dashed/dotted segment when the chart's last point is today — signals that
+    // today's number is still accumulating, not a settled final value like every
+    // earlier day. Only relevant for the 7-day chart (see opts.dashLastSegment).
+    const dashFrom = opts.dashLastSegment && pts.length>=2 && pts[pts.length-1].i===n-1 ? pts.length-2 : -1;
+    let d = '';
+    for(let k=0;k<pts.length;k++){
+      d += (k===0?'M':'L')+pts[k].x+' '+pts[k].y+' ';
+      if(k===dashFrom) break; // stop the solid path right before the dashed stretch
+    }
     if(d) svg.appendChild(svgEl('path',{d, fill:'none', stroke:s.color,'stroke-width':2,'stroke-linecap':'round','stroke-linejoin':'round'}));
+    if(dashFrom>=0){
+      const a = pts[dashFrom], b = pts[dashFrom+1];
+      svg.appendChild(svgEl('path',{d:`M${a.x} ${a.y} L${b.x} ${b.y}`, fill:'none', stroke:s.color,'stroke-width':2,'stroke-linecap':'round','stroke-dasharray':'1 6'}));
+    }
     s.points.forEach((v,i)=>{
       if(v===null) return;
       const x = padL + stepX*i, y = H-padB-((v-min)/(max-min))*plotH;
@@ -3679,7 +3692,7 @@ function mountCharts(){
     trendEl.appendChild(trendLineChart([
       {name:'Calories Burned', color:'var(--blue)', points: calBurnedPoints, unit:' kcal'},
       {name:'Calories In', color:'var(--aqua)', points: calInPoints, unit:' kcal'}
-    ], labels));
+    ], labels, {dashLastSegment:true}));
     trendEl.addEventListener('click', ()=>openChartTableModal('7-day trend', ['Day','Calories Burned','Calories In'],
       dates.map((d,i)=>[dateFromIso(d).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}), calBurnedPoints[i]===null?'--':calBurnedPoints[i].toLocaleString()+' kcal', calInPoints[i]===null?'--':calInPoints[i].toLocaleString()+' kcal']),
       [null,'var(--blue)','var(--aqua)']
