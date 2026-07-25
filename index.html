@@ -379,7 +379,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.3.2';
+const APP_VERSION = '1.3.3';
 
 function defaultState(){
   return {
@@ -2798,7 +2798,7 @@ function openTotalsModal(){
     ${modalSectionLabel('How today’s score is calculated')}
     <div class="muted" style="margin-bottom:10px;">Total Score ${overall===null?'--':overall}/100 = Nutrition (55%) + Activity (45%)</div>
     ${n!==null ? progRow('Calorie Intake Score', n, 100, '', 'var(--good)') : '<div class="muted">Log food to see your nutrition score.</div>'}
-    ${a!==null ? progRow('Activity Score', a, 100, '', 'var(--critical)') : '<div class="muted">Log activity to see your activity score.</div>'}
+    ${a!==null ? progRow('Calories Burned Score', a, 100, '', 'var(--critical)') : '<div class="muted">Log activity to see your activity score.</div>'}
     ${modalSectionLabel("Today's data")}
     ${progRow('Calories', totals.kcal, targets.kcal, '', 'var(--blue)', calorieGoalBreakdown(targets.kcal))}
     ${progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)')}
