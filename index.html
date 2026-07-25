@@ -379,7 +379,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.3.3';
+const APP_VERSION = '1.3.4';
 
 function defaultState(){
   return {
@@ -2801,13 +2801,13 @@ function openTotalsModal(){
     ${a!==null ? progRow('Calories Burned Score', a, 100, '', 'var(--critical)') : '<div class="muted">Log activity to see your activity score.</div>'}
     ${modalSectionLabel("Today's data")}
     ${progRow('Calories', totals.kcal, targets.kcal, '', 'var(--blue)', calorieGoalBreakdown(targets.kcal))}
+    ${progRow('Steps', d.activity.steps, p.stepGoal, '', 'var(--blue)')}
+    ${progRow('Active min', effectiveActiveMin(t), p.activeMinGoal, '', 'var(--aqua)')}
     ${progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)')}
     ${progRow('Carbs', totals.carbs, targets.carbG, 'g', 'var(--yellow)')}
     ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--orange)')}
     ${progRow('Iron', totals.iron, ironRDA(p), 'mg', 'var(--critical)')}
     ${progRow('Calcium', totals.calcium, calciumRDA(p), 'mg', 'var(--muted)')}
-    ${progRow('Steps', d.activity.steps, p.stepGoal, '', 'var(--blue)')}
-    ${progRow('Active min', effectiveActiveMin(t), p.activeMinGoal, '', 'var(--aqua)')}
     <div class="row" style="margin-top:8px;"><span class="text2">Distance</span><span>${(d.activity.distanceMi||0).toFixed(1)} mi</span></div>
   `);
 }
