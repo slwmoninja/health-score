@@ -39,7 +39,8 @@ input,select{font-family:inherit;}
 /* ---- top bar ---- */
 .topbar{position:sticky;top:0;z-index:20;background:var(--page);display:flex;align-items:center;
   justify-content:space-between;padding:14px 16px 10px;}
-.topbar h1{font-size:19px;}
+.topbar h1{font-size:19px;font-weight:800;letter-spacing:.01em;
+  text-shadow:0 -1px 0 var(--btn-hi), 0 1px 1px var(--btn-lo);}
 .iconbtn{width:36px;height:36px;border-radius:10px;border:none;background:var(--surface);
   display:flex;align-items:center;justify-content:center;color:var(--text2);
   box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 var(--btn-hi), var(--shadow);
@@ -189,6 +190,12 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
   display:flex;align-items:center;justify-content:center;}
 .field-row{display:flex;gap:10px;}
 .field-row .field{flex:1;}
+/* ---- Profile Preferences runs many small fields in a short card, so it gets
+   its own tighter rhythm instead of the app-wide .field spacing ---- */
+.profile-card .field{margin-bottom:10px;}
+.profile-card .field label{margin-bottom:4px;font-size:11.5px;}
+.profile-card .field-row{gap:8px;}
+.profile-card .field input[type=number],.profile-card .field select{padding:9px 8px;font-size:14px;}
 .seg{display:flex;background:var(--page);border-radius:10px;padding:3px;border:1px solid var(--border);
   box-shadow:inset 0 1px 3px rgba(0,0,0,.1);}
 .day-checks{display:flex;gap:6px;}
@@ -352,7 +359,7 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .pill-btn.red{background:linear-gradient(180deg, color-mix(in srgb, var(--critical) 100%, white 15%), var(--critical));flex:1;}
 .pill-btn.img-btn{padding:0;background:none;box-shadow:none;height:56px;flex:1;}
 .pill-btn.img-btn:active{box-shadow:none;}
-.pill-btn.img-btn img{width:100%;height:100%;object-fit:contain;display:block;}
+.pill-btn.img-btn img{width:100%;height:100%;object-fit:cover;display:block;}
 
 /* ---- popup stat rows (large readable numbers, no chart) ---- */
 .popup-stat{padding:12px 0;border-top:1px solid var(--grid);}
@@ -384,7 +391,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.7';
+const APP_VERSION = '1.4.8';
 
 function defaultState(){
   return {
@@ -3422,22 +3429,19 @@ function screenSettings(){
   return `
   <div class="topbar"><h1>Settings</h1>${activeSessionBannerHtml()}${installTopbarBtnHtml(true)}</div>
   <div class="screen">
-    <details class="card" data-card-key="profile" ${settingsCardOpenAttr('profile')}>
+    <details class="card profile-card" data-card-key="profile" ${settingsCardOpenAttr('profile')}>
       <summary class="card-summary"><h3>Profile Preferences</h3><span class="chevron">⌄</span></summary>
       <div class="toggle-row toggle-row-split">
         <div class="toggle-item"><span>Weight Tracking</span><button class="switch ${state.settings.weightTrackingEnabled?'on':''}" data-setting-toggle="weightTrackingEnabled"></button></div>
         <div class="toggle-item"><span>Trend Charts</span><button class="switch ${state.settings.charts.projection?'on':''}" data-chart-toggle="projection"></button></div>
       </div>
-      <div style="height:14px"></div>
+      <div style="height:10px"></div>
       ${dayCheckboxesHtml('s', p.trackedDays, {inline:true})}
-      <div style="height:14px"></div>
+      <div style="height:10px"></div>
       <div class="field-row">
         <div class="field"><label>Age</label><input type="number" id="s-age" value="${p.age}"></div>
         <div class="field"><label>Sex</label><select id="s-sex"><option value="female" ${p.sex==='female'?'selected':''}>Female</option><option value="male" ${p.sex==='male'?'selected':''}>Male</option></select></div>
-      </div>
-      <div class="field-row">
         <div class="field"><label>Height (in)</label><input type="number" id="s-height" value="${p.heightIn}"></div>
-        <div class="field"><label>Starting weight (lb)</label><input type="number" id="s-weight" value="${p.weightLb}"></div>
       </div>
       <div class="field">
         <label>Goal</label>
@@ -3448,8 +3452,9 @@ function screenSettings(){
         </div>
       </div>
       <div class="field-row">
-        <div class="field"><label>Target rate (lb/week)</label><input type="number" step="0.1" id="s-rate" value="${p.ratePerWeekLb}"></div>
-        <div class="field"><label>Target Weight (optional)</label><input type="number" step="0.1" id="s-targetweight" value="${p.targetWeightLb||''}"></div>
+        <div class="field"><label>Starting weight (lb)</label><input type="number" id="s-weight" value="${p.weightLb}"></div>
+        <div class="field"><label>Target rate (lb/wk)</label><input type="number" step="0.1" id="s-rate" value="${p.ratePerWeekLb}"></div>
+        <div class="field"><label>Target Weight</label><input type="number" step="0.1" id="s-targetweight" value="${p.targetWeightLb||''}" placeholder="optional"></div>
       </div>
       <div class="field">
         <label style="display:flex;align-items:center;gap:6px;">Daily calorie limit${calorieGoalOffTrack(p) ? `<button class="info-btn warn" id="s-calgoal-warn" type="button">!</button>` : ''}</label>
