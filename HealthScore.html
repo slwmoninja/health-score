@@ -62,6 +62,16 @@ summary.card-summary h3{margin-bottom:0;}
 summary.card-summary .chevron{color:var(--muted);font-size:12px;flex:none;margin-left:10px;transition:transform .15s ease;}
 details.card[open] > summary.card-summary{margin-bottom:12px;}
 details.card[open] > summary.card-summary .chevron{transform:rotate(180deg);}
+/* ---- nested foldable section within a card (e.g. Settings > Data's sub-sections) —
+   lighter than a full .card: no background/shadow of its own, just a divider from
+   the section above, since it's already inside one. ---- */
+details.subcard{border-top:1px solid var(--grid);padding-top:14px;margin-top:16px;}
+details.subcard:first-of-type{border-top:none;padding-top:0;margin-top:0;}
+details.subcard[open] > summary.subcard-summary{margin-bottom:12px;}
+details.subcard[open] > summary.subcard-summary .chevron{transform:rotate(180deg);}
+summary.subcard-summary{display:flex;align-items:center;justify-content:space-between;cursor:pointer;list-style:none;user-select:none;font-weight:600;}
+summary.subcard-summary::-webkit-details-marker{display:none;}
+summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;margin-left:10px;transition:transform .15s ease;}
 .row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
 .muted{color:var(--muted);font-size:12.5px;}
 
@@ -362,7 +372,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.2.0';
 
 function defaultState(){
   return {
@@ -3313,6 +3323,9 @@ function screenSettings(){
   <div class="screen">
     <details class="card" data-card-key="profile" ${settingsCardOpenAttr('profile')}>
       <summary class="card-summary"><h3>Profile Preferences</h3><span class="chevron">⌄</span></summary>
+      <div class="toggle-row"><span>Weight Tracking</span><button class="switch ${state.settings.weightTrackingEnabled?'on':''}" data-setting-toggle="weightTrackingEnabled"></button></div>
+      ${dashToggleRow('projection','Trend Charts')}
+      <div style="height:14px"></div>
       <div class="field-row">
         <div class="field"><label>Age</label><input type="number" id="s-age" value="${p.age}"></div>
         <div class="field"><label>Sex</label><select id="s-sex"><option value="female" ${p.sex==='female'?'selected':''}>Female</option><option value="male" ${p.sex==='male'?'selected':''}>Male</option></select></div>
@@ -3344,25 +3357,6 @@ function screenSettings(){
       </div>
       ${dayCheckboxesHtml('s', p.trackedDays)}
       <button class="btn-primary" id="s-save">Save profile</button>
-
-      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--grid);">
-        <div style="font-weight:600;margin-bottom:8px;">Weight Tracking</div>
-        <div class="toggle-row"><span>Sunday weigh-in reminder</span><button class="switch ${state.settings.weightTrackingEnabled?'on':''}" data-setting-toggle="weightTrackingEnabled"></button></div>
-        <div class="muted" style="margin-top:6px;">${state.settings.weightTrackingEnabled ? "You'll be prompted each Sunday to log your weight — the reminder stays up until you log it or dismiss it, and won't nag again that same day once dismissed." : 'Reminders are off. You can still log a weight manually any Sunday from this prompt if you turn it back on, or track it outside the app.'}</div>
-      </div>
-
-      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--grid);">
-        <div style="font-weight:600;margin-bottom:8px;">Dashboard</div>
-        ${dashToggleRow('projection','Trend reports')}
-        <div class="muted" style="margin-top:6px;">Covers the trend chart on the Trends tab.</div>
-      </div>
-    </details>
-
-    <details class="card" data-card-key="food" ${settingsCardOpenAttr('food')}>
-      <summary class="card-summary"><h3>Food search</h3><span class="chevron">⌄</span></summary>
-      <div class="field"><label>USDA FoodData Central API key</label><input type="text" id="s-fdc-key" placeholder="paste your free key here" value="${state.settings.fdcApiKey}"></div>
-      <button class="btn-secondary" id="s-fdc-save">Save key</button>
-      <div class="muted" style="margin-top:8px;">${state.settings.fdcApiKey ? 'Food search pulls live results from FoodData Central, including branded/packaged foods as a fallback for generic-food misses.' : 'Without a key, food search only uses the small built-in list. Add a free key above for live USDA results.'}</div>
     </details>
 
     ${state.errorLog.length ? `<details class="card" data-card-key="errors" ${settingsCardOpenAttr('errors')}>
@@ -3372,22 +3366,32 @@ function screenSettings(){
 
     <details class="card" data-card-key="data" ${settingsCardOpenAttr('data')}>
       <summary class="card-summary"><h3>Data</h3><span class="chevron">⌄</span></summary>
-      <div style="font-weight:600;margin-bottom:8px;">Connect your Fitbit</div>
-      ${connectFitbitStepsHtml('s')}
 
-      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--grid);">
-        <div style="font-weight:600;margin-bottom:8px;">Workouts</div>
+      <details class="subcard" data-card-key="fitbit" ${settingsCardOpenAttr('fitbit')}>
+        <summary class="subcard-summary"><span>Connect your Fitbit</span><span class="chevron">⌄</span></summary>
+        ${connectFitbitStepsHtml('s')}
+      </details>
+
+      <details class="subcard" data-card-key="workouts" ${settingsCardOpenAttr('workouts')}>
+        <summary class="subcard-summary"><span>Workouts</span><span class="chevron">⌄</span></summary>
         <button class="btn-secondary" id="s-import-hevy">Import from Hevy.csv</button>
         <input type="file" id="s-import-hevy-input" accept=".csv,text/csv" class="hidden">
-      </div>
+      </details>
 
-      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--grid);">
-        <div style="font-weight:600;margin-bottom:8px;">Backup &amp; Reset</div>
+      <details class="subcard" data-card-key="food" ${settingsCardOpenAttr('food')}>
+        <summary class="subcard-summary"><span>Food search</span><span class="chevron">⌄</span></summary>
+        <div class="field"><label>USDA FoodData Central API key</label><input type="text" id="s-fdc-key" placeholder="paste your free key here" value="${state.settings.fdcApiKey}"></div>
+        <button class="btn-secondary" id="s-fdc-save">Save key</button>
+        <div class="muted" style="margin-top:8px;">${state.settings.fdcApiKey ? 'Food search pulls live results from FoodData Central, including branded/packaged foods as a fallback for generic-food misses.' : 'Without a key, food search only uses the small built-in list. Add a free key above for live USDA results.'}</div>
+      </details>
+
+      <details class="subcard" data-card-key="backup" ${settingsCardOpenAttr('backup')}>
+        <summary class="subcard-summary"><span>Backup &amp; Reset</span><span class="chevron">⌄</span></summary>
         <div class="row" style="margin-bottom:8px;"><span class="muted" style="display:flex;align-items:center;gap:6px;">Your data auto-saves as you go — this makes a separate exportable copy${infoBtnHtml('backupfile')}</span></div>
         <button class="btn-secondary" id="s-backup-now">Back up now</button>
         <div style="height:14px"></div>
         <button class="btn-secondary" id="s-reset" style="color:var(--critical)">Reset all data</button>
-      </div>
+      </details>
     </details>
 
     <details class="card" data-card-key="about" ${settingsCardOpenAttr('about')}>
@@ -3595,9 +3599,18 @@ async function fetchGoogleHealthToday(silent){
     if(!silent) alert('Could not fetch Google Health data:\n\n'+e.message+'\n\nManual entry on the Log tab still works.');
   }
 }
+// Only counts genuine text-entry fields — NOT every focused INPUT. A hidden
+// file-picker input (e.g. Hevy import, Fitbit-adjacent flows) can end up as
+// document.activeElement after its native picker is opened and then cancelled
+// (no 'change' event fires to move focus elsewhere), which would otherwise
+// make this report "typing" forever and silently block checkForUpdate()'s
+// reload — including pull-to-refresh — from ever firing again.
 function isUserTyping(){
   const el = document.activeElement;
-  return !!(el && (el.tagName==='INPUT' || el.tagName==='TEXTAREA'));
+  if(!el) return false;
+  if(el.tagName==='TEXTAREA') return true;
+  if(el.tagName!=='INPUT') return false;
+  return ['text','number','email','tel','search','password','url','date','time'].includes(el.type);
 }
 let lastGHAutoSync = 0;
 // Deliberately short — this is called from render(), which fires after essentially every
@@ -4082,10 +4095,11 @@ function attachHandlers(){
       localStorage.removeItem(STORE_KEY); state = defaultState(); render();
     }
   });
-  // Settings cards fold by default; a card that's been manually opened stays
-  // open across the re-renders every save/toggle action triggers, since
-  // render() otherwise wipes and rebuilds this whole screen from scratch.
-  document.querySelectorAll('#app details.card[data-card-key]').forEach(d=>{
+  // Settings cards (and nested .subcard sections within Data) fold by default;
+  // one that's been manually opened stays open across the re-renders every
+  // save/toggle action triggers, since render() otherwise wipes and rebuilds
+  // this whole screen from scratch.
+  document.querySelectorAll('#app details.card[data-card-key], #app details.subcard[data-card-key]').forEach(d=>{
     d.addEventListener('toggle', ()=>{
       const key = d.dataset.cardKey;
       if(d.open) openSettingsCards.add(key); else openSettingsCards.delete(key);
