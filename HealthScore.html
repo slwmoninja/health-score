@@ -362,7 +362,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.2';
 
 function defaultState(){
   return {
@@ -2371,6 +2371,15 @@ function activityScore(iso){
   return Math.round(stepPart*0.6 + minPart*0.4);
 }
 function dayOverallScore(iso){
+  // nutritionScore now always returns a number once a profile exists (it starts
+  // at 100 and only falls once calories are exceeded — see nutritionScore),
+  // so it can no longer be used on its own to detect "nothing logged yet."
+  // Gate on the raw logged state instead: stay unscored until food or activity
+  // actually has something in it.
+  const d = getDay(iso);
+  const hasFood = d.foods.length>0;
+  const hasActivity = d.activity.steps>0 || effectiveActiveMin(iso)>0;
+  if(!hasFood && !hasActivity) return null;
   const n = nutritionScore(iso), a = activityScore(iso);
   if(n===null && a===null) return null;
   if(n===null) return a;
