@@ -362,7 +362,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 
 function defaultState(){
   return {
@@ -2334,22 +2334,15 @@ function calorieDirectionScore(goalType, kcalDiff, target){
 // that was otherwise well within its calorie goal).
 function nutritionScore(iso){
   const p = state.profile; if(!p) return null;
-  const d = getDay(iso);
-  if(d.foods.length===0) return null;
   const totals = dayTotals(iso);
   const targets = dailyTargets(p); // hard daily limit — activity doesn't buy score-free allowance
-  const raw = calorieDirectionScore(p.goalType, totals.kcal-targets.kcal, targets.kcal);
-  if(iso===today()){
-    // Today is still unfolding, so "under target" isn't proven yet the way it is for
-    // a finished day — without this, logging one small item instantly swings the score
-    // from fully excluded (null) to a flat 100 for lose/gain goals (calorieDirectionScore's
-    // kcalDiff<=0 branch), regardless of how little of the day has actually been logged.
-    // Blend toward a neutral midpoint until enough of the daily target has been logged,
-    // so the score ramps up with real data instead of jumping on the very first bite.
-    const confidence = clamp(totals.kcal/targets.kcal, 0, 1);
-    return Math.round(50 + (raw-50)*confidence);
-  }
-  return Math.round(raw);
+  // Starts at a full 100 (lose/gain: being on the right side of target is fully
+  // "correct" no matter how little of the day has happened yet) and only falls
+  // once calories actually cross the target — deliberately not scaled by how
+  // much of the day/budget has been logged so far, so it reads the same way a
+  // typical calorie-budget ring does: full/green until exceeded, not a
+  // progressively-earned score.
+  return Math.round(calorieDirectionScore(p.goalType, totals.kcal-targets.kcal, targets.kcal));
 }
 // Same idea as nutritionScore but scored against the period's AGGREGATE calorie
 // result rather than averaging each day's own score — so a day that ran slightly
