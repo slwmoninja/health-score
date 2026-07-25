@@ -41,6 +41,7 @@ input,select{font-family:inherit;}
   justify-content:space-between;padding:14px 16px 10px;}
 .topbar h1{font-size:19px;font-weight:800;letter-spacing:.01em;
   text-shadow:0 -1px 0 var(--btn-hi), 0 1px 1px var(--btn-lo);}
+.topbar-logo{height:34px;width:auto;display:block;border-radius:6px;flex:none;}
 .iconbtn{width:36px;height:36px;border-radius:10px;border:none;background:var(--surface);
   display:flex;align-items:center;justify-content:center;color:var(--text2);
   box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 var(--btn-hi), var(--shadow);
@@ -391,7 +392,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.11';
+const APP_VERSION = '1.4.12';
 
 function defaultState(){
   return {
@@ -3008,37 +3009,17 @@ function progRow(label, value, target, unit, color, targetLabel){
     <div class="prog-track"><div class="prog-fill" style="width:${pct}%;background:${color}"></div></div>
   </div>`;
 }
-// A running pattern-id counter (not just Math.random) so multiple checkered
-// rings rendered in the same document — e.g. Total and Activity both complete
-// on the same day — never collide on the same <pattern> id.
-let checkeredRingId = 0;
-function scoreRing(score, size, fixedColor, complete){
+function scoreRing(score, size, fixedColor){
   size = size||158;
   const sw = Math.max(6, Math.round(size*0.076));
   const r = size/2-sw, c = size/2;
   const circ = 2*Math.PI*r;
   const val = score===null? 0 : score;
   const color = fixedColor || (val>=80?'var(--good)':val>=60?'var(--yellow)':'var(--critical)');
-  // Goal-hit indicator: instead of a glow around the ring, the progress arc
-  // itself becomes a checkered-flag pattern (finish-line motif) — the tile
-  // size scales with the stroke width so it reads clearly at both the large
-  // Total ring and the smaller trio circles.
-  let stroke = color, defs = '';
-  if(complete){
-    const tile = Math.max(4, Math.round(sw*0.7)), half = tile/2;
-    const patId = `chk${checkeredRingId++}`;
-    defs = `<defs><pattern id="${patId}" width="${tile}" height="${tile}" patternUnits="userSpaceOnUse">
-      <rect width="${tile}" height="${tile}" fill="#f2f2f2"/>
-      <rect width="${half}" height="${half}" fill="#181818"/>
-      <rect x="${half}" y="${half}" width="${half}" height="${half}" fill="#181818"/>
-    </pattern></defs>`;
-    stroke = `url(#${patId})`;
-  }
   return `<svg viewBox="0 0 ${size} ${size}">
-    ${defs}
     <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--grid)" stroke-width="${sw}"
       style="filter:drop-shadow(0 1px 1px rgba(0,0,0,.12))"/>
-    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${stroke}" stroke-width="${sw}"
+    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${color}" stroke-width="${sw}"
       stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ*(1-val/100)}"
       style="filter:drop-shadow(0 1.5px 1.5px rgba(0,0,0,.28))"/>
   </svg>`;
@@ -3049,16 +3030,16 @@ function scoreRing(score, size, fixedColor, complete){
 // already a plain number like the Total Score) drives the ring fill + color, so
 // Activity/Nutrition can show a real value (steps, calories) with a goal-based fill
 // instead of a second abstract score.
-// `complete` swaps the ring's progress arc to a checkered-flag pattern for a day
-// the goal was hit — Total Score and Activity only (checked by callers), never
-// Calories/Nutrition.
+// `complete` marks a day the goal was hit — Total Score and Activity only
+// (checked by callers), never Calories/Nutrition — by turning the number gold
+// instead of the normal text color.
 function scoreCircle(displayText, size, pctForRing, color, complete){
   const pct = pctForRing===undefined ? displayText : pctForRing;
   const numPx = Math.round(size*0.235);
   return `<div class="ring-wrap" style="width:${size}px;height:${size}px;">
-    ${scoreRing(pct, size, color, complete)}
+    ${scoreRing(pct, size, color)}
     <div class="ring-label">
-      <div class="num" style="font-size:${numPx}px;">${displayText===null?'--':displayText}</div>
+      <div class="num" style="font-size:${numPx}px;${complete?'color:var(--gold);':''}">${displayText===null?'--':displayText}</div>
     </div>
   </div>`;
 }
@@ -3137,7 +3118,7 @@ function screenToday(){
   const activityGoalMet = (p.stepGoal>0 && d.activity.steps>=p.stepGoal) || (p.activeMinGoal>0 && effectiveActiveMin(t)>=p.activeMinGoal);
 
   return `
-  <div class="topbar"><h1>Health Score</h1>
+  <div class="topbar"><img class="topbar-logo" src="HealthScore.png" alt="Health Score">
     <div style="display:flex;align-items:center;gap:10px;">
       <div style="text-align:right;">
         <div class="muted" id="today-date"></div>
