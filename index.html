@@ -423,7 +423,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.0.1';
 
 function defaultState(){
   return {
@@ -3843,7 +3843,8 @@ function renderProfileIconPickerModal(){
 function settingsCardOpenAttr(key){ return openSettingsCards.has(key) ? 'open' : ''; }
 // Mirrors the same prog-row look used everywhere else amounts-vs-target are shown
 // (Today's Scorecard, Nutrition popup, Trends) — bold label, big right-aligned
-// current/target, colored fill bar. Main view is read-only except for reordering;
+// current/target, colored fill bar. Main view is read-only except for reordering
+// (a typed position number, left of the label — see data-nut-pos in attachHandlers);
 // every other edit (amount, unit, add/remove) lives in the 🔧 modal below. Since
 // Today/Trends/etc. all read through combinedNutrientRows (which sorts core+extras
 // together by `order`), a reorder/remove/add done here shows up everywhere else in
@@ -3856,14 +3857,14 @@ function nutRowHtml(row, idx, total, totals){
   const rowId = `${row.kind}:${row.key}`;
   return `<div class="prog-row">
     <div class="prog-top">
-      <span class="l">${row.label}</span>
+      <span class="l" style="display:flex;align-items:center;gap:8px;">
+        <input type="number" min="1" max="${total}" step="1" inputmode="numeric" data-nut-pos="${rowId}" value="${idx+1}"
+          style="width:2.3em;text-align:center;font:inherit;font-weight:700;color:inherit;background:var(--page);border:1px solid var(--border);border-radius:6px;padding:2px 0;flex:none;" title="Position in the list">
+        ${row.label}
+      </span>
       <span class="v">${Math.round(cur)}${row.unit} <span class="muted">/ ${formatNutNumber(tgt)}${row.unit}</span></span>
     </div>
     <div class="prog-track"><div class="prog-fill" style="width:${pct}%;background:${row.color}"></div></div>
-    <div style="display:flex;gap:4px;margin-top:6px;">
-      <button class="iconbtn" style="width:30px;height:30px;" data-nut-move="${rowId}:up" ${idx===0?'disabled':''} title="Move up">▲</button>
-      <button class="iconbtn" style="width:30px;height:30px;" data-nut-move="${rowId}:down" ${idx===total-1?'disabled':''} title="Move down">▼</button>
-    </div>
   </div>`;
 }
 function screenNutritionTrackingCard(p){
@@ -4934,23 +4935,24 @@ function attachHandlers(){
     e.preventDefault(); // stays inside a <summary> — don't also toggle the fold
     renderAddNutrientModal();
   });
-  // Swaps `order` with whichever neighbor is being hopped over, in the currently
-  // combined+sorted list (Protein/Iron/Calcium included) — simpler and
-  // conflict-free compared to letting someone type arbitrary/duplicate numbers.
+  // Typed 1-based position replaces the old up/down arrows (which were reportedly
+  // becoming unresponsive) — pull the row out of the current order, reinsert it at
+  // the requested spot (clamped to the list's bounds), then renumber everything
+  // sequentially so there's never a duplicate/tied order value to reason about.
   // This is the only edit the main Nutrition Tracking list allows directly —
   // everything else (amounts, units, add/remove) lives in the 🔧 modal, whose
   // own controls are wired inline in renderAddNutrientModal itself.
-  document.querySelectorAll('[data-nut-move]').forEach(b=>b.addEventListener('click', ()=>{
-    const [kind, key, dir] = b.dataset.nutMove.split(':');
+  document.querySelectorAll('[data-nut-pos]').forEach(inp=>inp.addEventListener('change', ()=>{
+    const [kind, key] = inp.dataset.nutPos.split(':');
     const ng = nutrientGoalsOf(state.profile);
-    const combined = combinedNutrientRows(state.profile);
-    const idx = combined.findIndex(r=>r.kind===kind && r.key===key);
-    const swapIdx = dir==='up' ? idx-1 : idx+1;
-    if(idx<0 || swapIdx<0 || swapIdx>=combined.length) return;
-    const a = combined[idx], b2 = combined[swapIdx];
-    const aOrder = a.order, bOrder = b2.order;
-    setRowOrder(ng, a.kind, a.key, bOrder);
-    setRowOrder(ng, b2.kind, b2.key, aOrder);
+    const rows = combinedNutrientRows(state.profile);
+    const idx = rows.findIndex(r=>r.kind===kind && r.key===key);
+    const typed = Number(inp.value);
+    if(idx<0 || isNaN(typed)){ render(); return; } // invalid entry — just redraw with the real position
+    const newIdx = clamp(Math.round(typed)-1, 0, rows.length-1);
+    const [moved] = rows.splice(idx, 1);
+    rows.splice(newIdx, 0, moved);
+    rows.forEach((r,i)=>setRowOrder(ng, r.kind, r.key, i));
     state.profile.nutrientGoals = ng;
     openSettingsCards.add('nutrition');
     saveState(); render();
