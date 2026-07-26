@@ -395,7 +395,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.13';
+const APP_VERSION = '1.4.17';
 
 function defaultState(){
   return {
@@ -420,7 +420,7 @@ function defaultState(){
       // across reloads of the SAME tab in the meantime.
       installPromptAccepted: false
     },
-    googleHealth: { accessToken:null, refreshToken:null, expiresAt:0, lastSyncAt:null, email:null },
+    googleHealth: { accessToken:null, refreshToken:null, expiresAt:0, lastSyncAt:null, email:null, lastRefreshError:null, lastSilentReconnectAttemptAt:null },
     errorLog: [], // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
     pendingCelebration: false, // a goal was hit but confetti hasn't played yet — shown on the next fresh page load
     pendingReinstallToast: false // set by reinstallApp() right before its reload, shown on the next fresh page load
@@ -1537,7 +1537,7 @@ function workoutsQuickCard(){
 // breakdown, just elapsed time — a brisk walk, a bike ride, a yoga class).
 // "Other" is a catch-all rather than free text, keeping this a fixed pick
 // list like the rest of the app's Log Activity form.
-const QUICK_START_TYPES = ['Walking','Indoor Bike','Outdoor Bike','Running','Weight Routine','Pilates/Yoga','Hiking','Swimming','Elliptical','Rowing','Stairmaster','Other'];
+const QUICK_START_TYPES = ['Walking','Indoor Bike','Outdoor Bike','Running','Weight Routine','Pilates/Yoga','Hiking','Swimming','Elliptical','Rowing','Stairmaster','Tennis','Other'];
 // Last 5 picks float to the top of the dropdown, most-recent-first, followed
 // by the rest of the fixed list in its normal order — so a repeat choice is
 // one tap away without hiding the full list.
@@ -2157,7 +2157,7 @@ function activityOnlyCaloriesForDay(iso){
 // the-range estimates, editable per session (see estimateWorkoutCalories).
 const ACTIVITY_MET = {
   'Walking':3.5, 'Indoor Bike':7, 'Outdoor Bike':8, 'Running':9.8, 'Weight Routine':5,
-  'Pilates/Yoga':3, 'Hiking':6, 'Swimming':7, 'Elliptical':5, 'Rowing':7, 'Stairmaster':8, 'Other':4
+  'Pilates/Yoga':3, 'Hiking':6, 'Swimming':7, 'Elliptical':5, 'Rowing':7, 'Stairmaster':8, 'Tennis':7, 'Other':4
 };
 // A routine/imported session has no single Quick Start type — infer a MET
 // from what its exercises actually are: mostly cardio-type (distance/
@@ -3459,7 +3459,8 @@ function connectFitbitStepsHtml(prefix){
   const connected = !!gh.refreshToken;
   return `
     <div class="muted" style="margin-bottom:12px;">Fitbit data now flows through a Google account — often not your everyday one. Follow these steps in order.</div>
-    ${connected ? `<div class="row" style="margin-bottom:12px;"><span class="badge good">Connected${gh.email ? ' as '+escapeHtml(gh.email) : ''} — auto-syncing</span></div>` : ''}
+    ${connected && gh.lastRefreshError ? `<div class="row" style="margin-bottom:12px;"><span class="badge focus">Connection expired${gh.email ? ' ('+escapeHtml(gh.email)+')' : ''} — tap Reconnect below</span></div>` : ''}
+    ${connected && !gh.lastRefreshError ? `<div class="row" style="margin-bottom:12px;"><span class="badge good">Connected${gh.email ? ' as '+escapeHtml(gh.email) : ''} — auto-syncing</span></div>` : ''}
 
     <div style="margin-bottom:14px;">
       <div style="font-weight:600;margin-bottom:4px;">Step 1 — Find your Fitbit's Google account</div>
@@ -3492,7 +3493,7 @@ function wireConnectFitbitCard(root, prefix){
     saveState(); alert('Credentials saved.');
   });
   const connect = root.querySelector('#'+prefix+'-fit-connect');
-  if(connect) connect.addEventListener('click', startGoogleHealthAuth);
+  if(connect) connect.addEventListener('click', ()=>startGoogleHealthAuth(false));
 }
 
 /* ---------- SETTINGS ---------- */
@@ -3609,17 +3610,35 @@ function decodeJwtEmail(idToken){
   }catch(e){ return null; }
 }
 
-async function startGoogleHealthAuth(){
+// sessionStorage (not a JS variable) because this flag has to survive a full
+// page navigation away to Google and back — round-trips through
+// handleGoogleHealthRedirect on the *next* page load, by which point any
+// in-memory state from this call is long gone.
+const GH_SILENT_FLAG_KEY = 'hs_gh_silent_attempt';
+// silent=true is the automatic self-heal path (see maybeAttemptSilentReconnect):
+// prompt=none asks Google to reissue a code with zero UI, which only succeeds
+// if the browser still has an active session for the previously-connected
+// account and that account hasn't revoked the app's access — it's a real
+// navigation away and back either way, just one that shows no Google screen
+// when it works. When it can't succeed silently, Google returns ?error=...
+// instead of ?code=... (handled below) rather than falling back to showing
+// a prompt, so this never surprises someone with an unexpected consent screen.
+async function startGoogleHealthAuth(silent){
   const {clientId} = state.settings;
-  if(!clientId){ alert('Add your Google Client ID first (see Step 2 below the button).'); return; }
+  if(!clientId){ if(!silent) alert('Add your Google Client ID first (see Step 2 below the button).'); return; }
   const params = new URLSearchParams({
     client_id: clientId, response_type:'code', redirect_uri: ghRedirectUri(),
     // select_account forces Google's account-chooser screen every single time,
     // even if the browser already has an active Google session — without it,
     // "Reconnect" can silently reuse whatever account is currently signed in
     // instead of letting the person pick the one their Fitbit actually uses.
-    scope: GH_SCOPES, access_type:'offline', prompt:'consent select_account', include_granted_scopes:'true'
+    // Silent attempts skip this (and skip 'consent') since any UI at all
+    // defeats the point — see prompt:'none' below.
+    scope: GH_SCOPES, access_type:'offline',
+    prompt: silent ? 'none' : 'consent select_account',
+    include_granted_scopes:'true'
   });
+  sessionStorage.setItem(GH_SILENT_FLAG_KEY, silent ? '1' : '0');
   // Regular navigation (not location.replace) — replace() turned out to destroy the
   // app's own history entry too (since Google's return redirect collapses into the
   // same slot), so back skipped past the app entirely instead of landing on it. A
@@ -3630,8 +3649,21 @@ async function startGoogleHealthAuth(){
 async function handleGoogleHealthRedirect(){
   const url = new URL(location.href);
   const code = url.searchParams.get('code');
-  if(!code) return;
-  history.replaceState({tab:'today', focus:null}, '', ghRedirectUri()); // strip ?code=, keep the tab-history convention consistent
+  const authError = url.searchParams.get('error');
+  if(!code && !authError) return;
+  const wasSilent = sessionStorage.getItem(GH_SILENT_FLAG_KEY)==='1';
+  sessionStorage.removeItem(GH_SILENT_FLAG_KEY);
+  history.replaceState({tab:'today', focus:null}, '', ghRedirectUri()); // strip ?code=/?error=, keep the tab-history convention consistent
+  if(authError){
+    // Expected outcome of a silent (prompt=none) attempt whenever the browser has
+    // no active session for that Google account, or access was revoked — not a bug,
+    // just means the automatic path can't help this time. The "Connection expired"
+    // banner (connectFitbitStepsHtml) stays up as the one-tap manual fallback either
+    // way, so nothing is lost by trying silently first.
+    logError((wasSilent ? 'Silent reconnect' : 'Connect') + ' failed: ' + authError);
+    if(!wasSilent) alert('Google Health connection failed: '+authError+'\n\nTry Reconnect again, or check with the app owner if it keeps happening.');
+    return;
+  }
   const {clientId, clientSecret} = state.settings;
   if(!clientId || !clientSecret) return;
   try{
@@ -3648,18 +3680,34 @@ async function handleGoogleHealthRedirect(){
     }
     const data = await res.json();
     const email = data.id_token ? decodeJwtEmail(data.id_token) : null;
-    state.googleHealth = {accessToken:data.access_token, refreshToken:data.refresh_token, expiresAt: Date.now()+data.expires_in*1000, email};
+    state.googleHealth = {accessToken:data.access_token, refreshToken:data.refresh_token, expiresAt: Date.now()+data.expires_in*1000, email, lastRefreshError:null, lastSilentReconnectAttemptAt:null};
     saveState();
     await fetchGoogleHealthToday(false);
   }catch(e){
-    logError('Connect failed: '+e.message);
-    alert('Google Health connection failed:\n\n'+e.message+'\n\nMost common causes: the app owner hasn\'t approved your email as a test user yet, or the Client ID/Secret was mistyped when you pasted it in Step 2. Check with the app owner if it keeps failing.');
+    logError((wasSilent ? 'Silent reconnect' : 'Connect') + ' failed: '+e.message);
+    if(!wasSilent) alert('Google Health connection failed:\n\n'+e.message+'\n\nMost common causes: the app owner hasn\'t approved your email as a test user yet, or the Client ID/Secret was mistyped when you pasted it in Step 2. Check with the app owner if it keeps failing.');
   }
 }
+// Google issues refresh tokens for unverified/"Testing"-mode OAuth apps (which
+// is what this is, per the app-owner-approves-each-email flow in Step 2 above)
+// that expire after ~7 days regardless of use. When that happens this refresh
+// call starts failing with invalid_grant forever, silently, until the person
+// reconnects — and the old code just returned null here with zero record of
+// why, so both the auto-sync (silent:true, no alert) and the "Connected —
+// auto-syncing" badge kept acting like nothing was wrong. That's the exact
+// failure shape behind the 2026-07-25 report of Fitbit showing Active Zone
+// Minutes that HealthScore never picked up. Now the real error is logged and
+// remembered so the Settings badge can tell the person to reconnect instead
+// of claiming to be fine.
+const GH_REFRESH_RETRY_BACKOFF_MS = 10*60*1000;
 async function ensureGoogleHealthToken(){
   const gh = state.googleHealth;
   if(gh.accessToken && Date.now() < gh.expiresAt-60000) return gh.accessToken;
   if(!gh.refreshToken) return null;
+  // Don't hammer Google's token endpoint every 8s (autoSyncGoogleHealthIfDue's
+  // gap) once refresh is known-broken — "Reconnect & sync now" bypasses this
+  // entirely via a fresh startGoogleHealthAuth, so it's never actually stuck.
+  if(gh.lastRefreshError && Date.now()-gh.lastRefreshError.ts < GH_REFRESH_RETRY_BACKOFF_MS) return null;
   const body = new URLSearchParams({
     client_id: state.settings.clientId, client_secret: state.settings.clientSecret,
     grant_type:'refresh_token', refresh_token: gh.refreshToken
@@ -3667,10 +3715,18 @@ async function ensureGoogleHealthToken(){
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body
   });
-  if(!res.ok) return null;
+  if(!res.ok){
+    const bodyText = await res.text().catch(()=>'');
+    const message = `Token refresh HTTP ${res.status}: ${bodyText.slice(0,300)}`;
+    gh.lastRefreshError = {message, ts: Date.now()};
+    saveState();
+    logError('Fitbit/Google Health '+message);
+    return null;
+  }
   const data = await res.json();
   gh.accessToken = data.access_token; gh.expiresAt = Date.now()+data.expires_in*1000;
   if(data.refresh_token) gh.refreshToken = data.refresh_token; // Google doesn't always reissue one
+  gh.lastRefreshError = null;
   saveState();
   return gh.accessToken;
 }
@@ -3736,6 +3792,17 @@ async function fetchGoogleHealthDataType(dataType, filterField, dateIso, token){
   const data = await res.json();
   return data.dataPoints || data.dataPoint || [];
 }
+// Soft-fails a single rollup metric to 0 (so one bad data type doesn't sink the
+// whole sync) while still logging the real HTTP error to the in-app Error log —
+// previously these swallowed the error entirely with .catch(()=>0), so a genuine
+// active-zone-minutes fetch failure (wrong scope, transient 4xx/5xx, etc.) was
+// indistinguishable from Fitbit truly reporting 0 minutes for the day. That gap
+// is exactly what made a real "AZM didn't count" report unactionable — see the
+// 2026-07-25 investigation this comment was added for.
+async function fetchGHRollupSoft(dataType, dateIso, token){
+  try{ return await fetchGoogleHealthRollup(dataType, dateIso, token); }
+  catch(e){ logError(`Sync (${dataType}) failed: `+e.message); return 0; }
+}
 async function fetchGoogleHealthToday(silent){
   const token = await ensureGoogleHealthToken();
   if(!token){ if(!silent) alert('Not connected to Google Health yet — tap "Connect & sync today" first.'); return; }
@@ -3743,9 +3810,9 @@ async function fetchGoogleHealthToday(silent){
   try{
     const [steps, activeMin, kcal, distanceMm] = await Promise.all([
       fetchGoogleHealthRollup('steps', t, token),
-      fetchGoogleHealthRollup('active-zone-minutes', t, token).catch(()=>0),
-      fetchGoogleHealthRollup('active-energy-burned', t, token).catch(()=>0),
-      fetchGoogleHealthRollup('distance', t, token).catch(()=>0) // returned in millimeters, per Google's field docs
+      fetchGHRollupSoft('active-zone-minutes', t, token),
+      fetchGHRollupSoft('active-energy-burned', t, token),
+      fetchGHRollupSoft('distance', t, token) // returned in millimeters, per Google's field docs
     ]);
     const d = getDay(t);
     d.activity = {
@@ -3802,6 +3869,26 @@ async function autoSyncGoogleHealthIfDue(){
   if(Date.now()-lastGHAutoSync < GH_AUTOSYNC_GAP_MS) return;
   lastGHAutoSync = Date.now();
   await fetchGoogleHealthToday(true);
+  maybeAttemptSilentReconnect();
+}
+// The self-heal step: fetchGoogleHealthToday just ran and, if the refresh token
+// was dead, left state.googleHealth.lastRefreshError set (see ensureGoogleHealthToken).
+// Rather than making the person open Settings and tap Reconnect, try once
+// automatically via startGoogleHealthAuth(true) (prompt=none — no visible Google
+// screen if it works). Gated hard because this is a full page navigation, not a
+// background fetch: skip it while someone's actively typing (would yank them out
+// of an in-progress entry), and only retry once/hour after a failed silent attempt
+// so a dead grant (revoked access, no active browser session) can't turn into a
+// navigate-away-and-back loop on every render.
+const GH_SILENT_RECONNECT_COOLDOWN_MS = 60*60*1000;
+function maybeAttemptSilentReconnect(){
+  const gh = state.googleHealth;
+  if(!gh.lastRefreshError) return;
+  if(isUserTyping()) return;
+  if(Date.now()-(gh.lastSilentReconnectAttemptAt||0) < GH_SILENT_RECONNECT_COOLDOWN_MS) return;
+  gh.lastSilentReconnectAttemptAt = Date.now();
+  saveState();
+  startGoogleHealthAuth(true);
 }
 // Label for the "Fitbit sync" readout in the Today card's top-right corner — Fitbit's
 // own data lives on Google Health now (see the block above), so this reads the same
@@ -3809,6 +3896,7 @@ async function autoSyncGoogleHealthIfDue(){
 function fitbitSyncLabel(){
   const gh = state.googleHealth;
   if(!gh.refreshToken) return 'Fitbit not connected';
+  if(gh.lastRefreshError) return 'Fitbit connection expired — reconnect in Settings';
   if(!gh.lastSyncAt) return 'Fitbit sync pending…';
   const d = new Date(gh.lastSyncAt);
   const time = d.toLocaleTimeString(undefined, {hour:'numeric', minute:'2-digit'});
