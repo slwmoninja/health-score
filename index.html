@@ -417,7 +417,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.28';
+const APP_VERSION = '1.5.0';
 
 function defaultState(){
   return {
@@ -475,6 +475,9 @@ function normalizeProfile(profile, days){
   // here, so it applies the moment this update is opened rather than needing a
   // fresh onboarding. A real pick later just overwrites profile.icon normally.
   if(profile && !profile.icon) profile.icon = defaultProfileIconForSex(profile.sex);
+  // Profiles saved before Settings > Nutrition Tracking existed have no nutrientGoals —
+  // default to "use the suggested values, nothing extra tracked" (see nutrientGoalsOf).
+  if(profile && !profile.nutrientGoals) profile.nutrientGoals = {proteinOverride:null, ironOverride:null, calciumOverride:null, extras:[]};
   return profile;
 }
 function loadState(){
@@ -941,81 +944,83 @@ function renderWeightGoalModal(){
    FOOD DATABASE  (per=amount the macros describe; unit 'g'/'ml'/'ea')
    ========================================================= */
 // ir = iron (mg), ca = calcium (mg) per the stated amount, alongside the existing macros
+// vitc(mg)/vitd(mcg)/b12(mcg)/potassium(mg)/fiber(g) are approximate ballpark values,
+// same "generic/curated" precision level as the ir/ca columns above — not lab-measured.
 const FOOD_DB = [
-{n:"Chicken breast, cooked",per:100,u:"g",k:165,p:31,c:0,f:3.6,ir:0.7,ca:15},
-{n:"Chicken thigh, cooked",per:100,u:"g",k:209,p:26,c:0,f:10.9,ir:1.3,ca:12},
-{n:"Ground beef 85/15, cooked",per:100,u:"g",k:215,p:26,c:0,f:12,ir:2.2,ca:18},
-{n:"Ground turkey 93/7, cooked",per:100,u:"g",k:176,p:27,c:0,f:7,ir:1.4,ca:15},
-{n:"Salmon, cooked",per:100,u:"g",k:206,p:22,c:0,f:12,ir:0.5,ca:12},
-{n:"Tuna, canned in water",per:100,u:"g",k:116,p:26,c:0,f:1,ir:1.0,ca:11},
-{n:"Shrimp, cooked",per:100,u:"g",k:99,p:24,c:0.2,f:0.3,ir:0.5,ca:70},
-{n:"Bacon",per:1,u:"slice",k:43,p:3,c:0.1,f:3.3,ir:0.2,ca:1},
-{n:"Egg, small",per:1,u:"egg",k:54,p:4.8,c:0.4,f:3.6,ir:0.6,ca:21},
-{n:"Egg, medium",per:1,u:"egg",k:63,p:5.5,c:0.4,f:4.2,ir:0.7,ca:24},
-{n:"Egg, large",per:1,u:"egg",k:72,p:6.3,c:0.4,f:4.8,ir:0.9,ca:28},
-{n:"Egg, extra large",per:1,u:"egg",k:80,p:7,c:0.4,f:5.4,ir:1.0,ca:31},
-{n:"Egg white",per:1,u:"egg white",k:17,p:3.6,c:0.2,f:0.1,ir:0.03,ca:2},
-{n:"Tofu, firm",per:100,u:"g",k:144,p:15.8,c:2.8,f:8.7,ir:5.4,ca:350},
-{n:"Greek yogurt, plain nonfat",per:100,u:"g",k:59,p:10,c:3.6,f:0.4,ir:0.1,ca:110},
-{n:"Cottage cheese, low fat",per:100,u:"g",k:72,p:10,c:4,f:1.5,ir:0.1,ca:83},
-{n:"Whey protein powder",per:1,u:"scoop (30g)",k:120,p:24,c:3,f:1.5,ir:0.5,ca:120},
-{n:"White rice, cooked",per:100,u:"g",k:130,p:2.7,c:28,f:0.3,ir:0.2,ca:10},
-{n:"Brown rice, cooked",per:100,u:"g",k:123,p:2.7,c:26,f:1,ir:0.5,ca:10},
-{n:"Quinoa, cooked",per:100,u:"g",k:120,p:4.4,c:21,f:1.9,ir:1.5,ca:17},
-{n:"Oats, dry",per:100,u:"g",k:389,p:16.9,c:66,f:6.9,ir:4.7,ca:54},
-{n:"Whole wheat bread",per:1,u:"slice",k:81,p:4,c:14,f:1.1,ir:0.9,ca:30},
-{n:"White bread",per:1,u:"slice",k:75,p:2.6,c:14,f:1,ir:0.7,ca:40},
-{n:"Pasta, cooked",per:100,u:"g",k:131,p:5,c:25,f:1.1,ir:0.5,ca:7},
-{n:"Tortilla, flour, medium",per:1,u:"tortilla",k:140,p:4,c:24,f:3.5,ir:1.3,ca:60},
-{n:"Sweet potato, baked",per:100,u:"g",k:90,p:2,c:21,f:0.1,ir:0.7,ca:30},
-{n:"Potato, baked",per:100,u:"g",k:93,p:2.5,c:21,f:0.1,ir:1.1,ca:12},
-{n:"Cereal, generic",per:100,u:"g",k:378,p:7,c:84,f:2,ir:8,ca:100},
-{n:"Banana",per:1,u:"banana",k:105,p:1.3,c:27,f:0.4,ir:0.3,ca:6},
-{n:"Apple",per:1,u:"apple",k:95,p:0.5,c:25,f:0.3,ir:0.2,ca:11},
-{n:"Orange",per:1,u:"orange",k:62,p:1.2,c:15,f:0.2,ir:0.2,ca:52},
-{n:"Blueberries",per:100,u:"g",k:57,p:0.7,c:14,f:0.3,ir:0.3,ca:6},
-{n:"Strawberries",per:100,u:"g",k:32,p:0.7,c:7.7,f:0.3,ir:0.4,ca:16},
-{n:"Broccoli, cooked",per:100,u:"g",k:35,p:2.4,c:7,f:0.4,ir:0.7,ca:40},
-{n:"Spinach, raw",per:100,u:"g",k:23,p:2.9,c:3.6,f:0.4,ir:2.7,ca:99},
-{n:"Mixed salad greens",per:100,u:"g",k:15,p:1.4,c:2.9,f:0.2,ir:0.9,ca:33},
-{n:"Carrots, raw",per:100,u:"g",k:41,p:0.9,c:10,f:0.2,ir:0.3,ca:33},
-{n:"Green beans, cooked",per:100,u:"g",k:35,p:1.8,c:8,f:0.2,ir:1.0,ca:37},
-{n:"Avocado",per:1,u:"avocado",k:234,p:2.9,c:12,f:21,ir:1.1,ca:24},
-{n:"Milk, 2%",per:100,u:"ml",k:50,p:3.3,c:4.8,f:2,ir:0.0,ca:120},
-{n:"Almond milk, unsweetened",per:100,u:"ml",k:13,p:0.4,c:0.6,f:1.1,ir:0.3,ca:180},
-{n:"Cheddar cheese",per:100,u:"g",k:403,p:25,c:1.3,f:33,ir:0.7,ca:720},
-{n:"Butter",per:1,u:"tbsp (14g)",k:102,p:0.1,c:0,f:11.5,ir:0.0,ca:3},
-{n:"Olive oil",per:1,u:"tbsp (14g)",k:119,p:0,c:0,f:13.5,ir:0.1,ca:0},
-{n:"Peanut butter",per:1,u:"tbsp (16g)",k:95,p:3.6,c:3.1,f:8.2,ir:0.3,ca:7},
-{n:"Almonds",per:100,u:"g",k:579,p:21,c:22,f:50,ir:3.7,ca:269},
-{n:"Hummus",per:100,u:"g",k:166,p:7.9,c:14,f:9.6,ir:1.6,ca:38},
-{n:"Big Mac",per:1,u:"sandwich",k:563,p:26,c:45,f:33,ir:4.0,ca:200},
-{n:"Chicken sandwich (fast food)",per:1,u:"sandwich",k:530,p:28,c:46,f:25,ir:2.5,ca:100},
-{n:"Cheese pizza",per:1,u:"slice",k:285,p:12,c:36,f:10,ir:1.5,ca:180},
-{n:"Burrito, chicken",per:1,u:"burrito",k:550,p:30,c:65,f:18,ir:3.5,ca:200},
-{n:"French fries, medium",per:1,u:"order",k:365,p:4,c:48,f:17,ir:0.8,ca:15},
-{n:"Caesar salad w/ chicken",per:1,u:"salad",k:350,p:30,c:12,f:20,ir:1.5,ca:150},
-{n:"Protein bar",per:1,u:"bar",k:200,p:20,c:22,f:7,ir:2.0,ca:100},
-{n:"Granola bar",per:1,u:"bar",k:140,p:3,c:22,f:5,ir:0.7,ca:20},
-{n:"Black coffee",per:1,u:"cup",k:2,p:0.3,c:0,f:0,ir:0.0,ca:5},
-{n:"Orange juice",per:100,u:"ml",k:45,p:0.7,c:10.4,f:0.2,ir:0.2,ca:11},
-{n:"Soda",per:100,u:"ml",k:42,p:0,c:10.6,f:0,ir:0.0,ca:0},
-{n:"Beer",per:1,u:"can (355ml)",k:153,p:1.6,c:13,f:0,ir:0.1,ca:14},
-{n:"Wine, red",per:1,u:"glass (150ml)",k:125,p:0.1,c:3.8,f:0,ir:0.5,ca:12},
-{n:"White rice, cooked, 1 cup",per:1,u:"cup",k:205,p:4.3,c:44.5,f:0.4,ir:0.4,ca:16},
-{n:"Brown rice, cooked, 1 cup",per:1,u:"cup",k:218,p:4.5,c:46,f:1.6,ir:0.8,ca:20},
-{n:"Oats, cooked",per:1,u:"cup",k:166,p:6,c:28,f:3.6,ir:2.0,ca:20},
-{n:"Pasta, cooked, 1 cup",per:1,u:"cup",k:220,p:8,c:43,f:1.3,ir:0.9,ca:10},
-{n:"Milk, 2%, 1 cup",per:1,u:"cup",k:122,p:8,c:12,f:4.8,ir:0.1,ca:293},
-{n:"Blueberries, 1 cup",per:1,u:"cup",k:84,p:1.1,c:21,f:0.5,ir:0.4,ca:9},
-{n:"Broccoli, cooked, 1 cup",per:1,u:"cup",k:55,p:3.7,c:11,f:0.6,ir:1.1,ca:62},
-{n:"Greek yogurt, plain nonfat, 1 cup",per:1,u:"cup",k:144,p:24,c:9,f:1,ir:0.2,ca:270},
-{n:"Cereal, generic, 1 cup",per:1,u:"cup",k:113,p:2,c:25,f:0.6,ir:2.4,ca:30},
-{n:"Sugar, granulated, 1 tsp",per:1,u:"tsp",k:16,p:0,c:4,f:0,ir:0,ca:0},
-{n:"Sugar, granulated, 1 tbsp",per:1,u:"tbsp",k:48,p:0,c:12.6,f:0,ir:0,ca:0},
-{n:"Butter, 1 tsp",per:1,u:"tsp",k:34,p:0,c:0,f:3.8,ir:0,ca:1},
-{n:"Honey, 1 tsp",per:1,u:"tsp",k:21,p:0,c:5.7,f:0,ir:0.03,ca:1},
-{n:"Honey, 1 tbsp",per:1,u:"tbsp",k:64,p:0.1,c:17,f:0,ir:0.1,ca:1}
+{n:"Chicken breast, cooked",per:100,u:"g",k:165,p:31,c:0,f:3.6,ir:0.7,ca:15,vitc:0,vitd:0.1,b12:0.3,potassium:256,fiber:0},
+{n:"Chicken thigh, cooked",per:100,u:"g",k:209,p:26,c:0,f:10.9,ir:1.3,ca:12,vitc:0,vitd:0.1,b12:0.3,potassium:229,fiber:0},
+{n:"Ground beef 85/15, cooked",per:100,u:"g",k:215,p:26,c:0,f:12,ir:2.2,ca:18,vitc:0,vitd:0.1,b12:2.4,potassium:270,fiber:0},
+{n:"Ground turkey 93/7, cooked",per:100,u:"g",k:176,p:27,c:0,f:7,ir:1.4,ca:15,vitc:0,vitd:0.1,b12:0.3,potassium:280,fiber:0},
+{n:"Salmon, cooked",per:100,u:"g",k:206,p:22,c:0,f:12,ir:0.5,ca:12,vitc:0,vitd:11,b12:2.8,potassium:384,fiber:0},
+{n:"Tuna, canned in water",per:100,u:"g",k:116,p:26,c:0,f:1,ir:1.0,ca:11,vitc:0,vitd:1,b12:2.5,potassium:237,fiber:0},
+{n:"Shrimp, cooked",per:100,u:"g",k:99,p:24,c:0.2,f:0.3,ir:0.5,ca:70,vitc:0,vitd:0.1,b12:1.3,potassium:220,fiber:0},
+{n:"Bacon",per:1,u:"slice",k:43,p:3,c:0.1,f:3.3,ir:0.2,ca:1,vitc:0,vitd:0,b12:0.1,potassium:30,fiber:0},
+{n:"Egg, small",per:1,u:"egg",k:54,p:4.8,c:0.4,f:3.6,ir:0.6,ca:21,vitc:0,vitd:0.8,b12:0.4,potassium:50,fiber:0},
+{n:"Egg, medium",per:1,u:"egg",k:63,p:5.5,c:0.4,f:4.2,ir:0.7,ca:24,vitc:0,vitd:1.0,b12:0.5,potassium:57,fiber:0},
+{n:"Egg, large",per:1,u:"egg",k:72,p:6.3,c:0.4,f:4.8,ir:0.9,ca:28,vitc:0,vitd:1.1,b12:0.6,potassium:63,fiber:0},
+{n:"Egg, extra large",per:1,u:"egg",k:80,p:7,c:0.4,f:5.4,ir:1.0,ca:31,vitc:0,vitd:1.2,b12:0.7,potassium:71,fiber:0},
+{n:"Egg white",per:1,u:"egg white",k:17,p:3.6,c:0.2,f:0.1,ir:0.03,ca:2,vitc:0,vitd:0,b12:0.02,potassium:54,fiber:0},
+{n:"Tofu, firm",per:100,u:"g",k:144,p:15.8,c:2.8,f:8.7,ir:5.4,ca:350,vitc:0.1,vitd:0,b12:0,potassium:121,fiber:1.9},
+{n:"Greek yogurt, plain nonfat",per:100,u:"g",k:59,p:10,c:3.6,f:0.4,ir:0.1,ca:110,vitc:0,vitd:0,b12:0.4,potassium:141,fiber:0},
+{n:"Cottage cheese, low fat",per:100,u:"g",k:72,p:10,c:4,f:1.5,ir:0.1,ca:83,vitc:0,vitd:0,b12:0.4,potassium:104,fiber:0},
+{n:"Whey protein powder",per:1,u:"scoop (30g)",k:120,p:24,c:3,f:1.5,ir:0.5,ca:120,vitc:0,vitd:0,b12:0.3,potassium:180,fiber:1},
+{n:"White rice, cooked",per:100,u:"g",k:130,p:2.7,c:28,f:0.3,ir:0.2,ca:10,vitc:0,vitd:0,b12:0,potassium:35,fiber:0.4},
+{n:"Brown rice, cooked",per:100,u:"g",k:123,p:2.7,c:26,f:1,ir:0.5,ca:10,vitc:0,vitd:0,b12:0,potassium:79,fiber:1.8},
+{n:"Quinoa, cooked",per:100,u:"g",k:120,p:4.4,c:21,f:1.9,ir:1.5,ca:17,vitc:0,vitd:0,b12:0,potassium:172,fiber:2.8},
+{n:"Oats, dry",per:100,u:"g",k:389,p:16.9,c:66,f:6.9,ir:4.7,ca:54,vitc:0,vitd:0,b12:0,potassium:429,fiber:10.6},
+{n:"Whole wheat bread",per:1,u:"slice",k:81,p:4,c:14,f:1.1,ir:0.9,ca:30,vitc:0,vitd:0,b12:0,potassium:69,fiber:1.9},
+{n:"White bread",per:1,u:"slice",k:75,p:2.6,c:14,f:1,ir:0.7,ca:40,vitc:0,vitd:0,b12:0,potassium:30,fiber:0.8},
+{n:"Pasta, cooked",per:100,u:"g",k:131,p:5,c:25,f:1.1,ir:0.5,ca:7,vitc:0,vitd:0,b12:0,potassium:44,fiber:1.8},
+{n:"Tortilla, flour, medium",per:1,u:"tortilla",k:140,p:4,c:24,f:3.5,ir:1.3,ca:60,vitc:0,vitd:0,b12:0,potassium:60,fiber:1.5},
+{n:"Sweet potato, baked",per:100,u:"g",k:90,p:2,c:21,f:0.1,ir:0.7,ca:30,vitc:20,vitd:0,b12:0,potassium:475,fiber:3.3},
+{n:"Potato, baked",per:100,u:"g",k:93,p:2.5,c:21,f:0.1,ir:1.1,ca:12,vitc:10,vitd:0,b12:0,potassium:535,fiber:2.2},
+{n:"Cereal, generic",per:100,u:"g",k:378,p:7,c:84,f:2,ir:8,ca:100,vitc:15,vitd:2,b12:1.5,potassium:150,fiber:6},
+{n:"Banana",per:1,u:"banana",k:105,p:1.3,c:27,f:0.4,ir:0.3,ca:6,vitc:10.3,vitd:0,b12:0,potassium:422,fiber:3.1},
+{n:"Apple",per:1,u:"apple",k:95,p:0.5,c:25,f:0.3,ir:0.2,ca:11,vitc:8.4,vitd:0,b12:0,potassium:195,fiber:4.4},
+{n:"Orange",per:1,u:"orange",k:62,p:1.2,c:15,f:0.2,ir:0.2,ca:52,vitc:70,vitd:0,b12:0,potassium:237,fiber:3.1},
+{n:"Blueberries",per:100,u:"g",k:57,p:0.7,c:14,f:0.3,ir:0.3,ca:6,vitc:9.7,vitd:0,b12:0,potassium:77,fiber:2.4},
+{n:"Strawberries",per:100,u:"g",k:32,p:0.7,c:7.7,f:0.3,ir:0.4,ca:16,vitc:59,vitd:0,b12:0,potassium:153,fiber:2},
+{n:"Broccoli, cooked",per:100,u:"g",k:35,p:2.4,c:7,f:0.4,ir:0.7,ca:40,vitc:65,vitd:0,b12:0,potassium:293,fiber:3.3},
+{n:"Spinach, raw",per:100,u:"g",k:23,p:2.9,c:3.6,f:0.4,ir:2.7,ca:99,vitc:28,vitd:0,b12:0,potassium:558,fiber:2.2},
+{n:"Mixed salad greens",per:100,u:"g",k:15,p:1.4,c:2.9,f:0.2,ir:0.9,ca:33,vitc:15,vitd:0,b12:0,potassium:194,fiber:1.5},
+{n:"Carrots, raw",per:100,u:"g",k:41,p:0.9,c:10,f:0.2,ir:0.3,ca:33,vitc:5.9,vitd:0,b12:0,potassium:320,fiber:2.8},
+{n:"Green beans, cooked",per:100,u:"g",k:35,p:1.8,c:8,f:0.2,ir:1.0,ca:37,vitc:9.7,vitd:0,b12:0,potassium:209,fiber:2.7},
+{n:"Avocado",per:1,u:"avocado",k:234,p:2.9,c:12,f:21,ir:1.1,ca:24,vitc:12,vitd:0,b12:0,potassium:690,fiber:9},
+{n:"Milk, 2%",per:100,u:"ml",k:50,p:3.3,c:4.8,f:2,ir:0.0,ca:120,vitc:0,vitd:1.2,b12:0.5,potassium:150,fiber:0},
+{n:"Almond milk, unsweetened",per:100,u:"ml",k:13,p:0.4,c:0.6,f:1.1,ir:0.3,ca:180,vitc:0,vitd:1,b12:0,potassium:70,fiber:0.5},
+{n:"Cheddar cheese",per:100,u:"g",k:403,p:25,c:1.3,f:33,ir:0.7,ca:720,vitc:0,vitd:0.6,b12:0.8,potassium:98,fiber:0},
+{n:"Butter",per:1,u:"tbsp (14g)",k:102,p:0.1,c:0,f:11.5,ir:0.0,ca:3,vitc:0,vitd:0,b12:0,potassium:3,fiber:0},
+{n:"Olive oil",per:1,u:"tbsp (14g)",k:119,p:0,c:0,f:13.5,ir:0.1,ca:0,vitc:0,vitd:0,b12:0,potassium:0,fiber:0},
+{n:"Peanut butter",per:1,u:"tbsp (16g)",k:95,p:3.6,c:3.1,f:8.2,ir:0.3,ca:7,vitc:0,vitd:0,b12:0,potassium:110,fiber:0.9},
+{n:"Almonds",per:100,u:"g",k:579,p:21,c:22,f:50,ir:3.7,ca:269,vitc:0,vitd:0,b12:0,potassium:733,fiber:12.5},
+{n:"Hummus",per:100,u:"g",k:166,p:7.9,c:14,f:9.6,ir:1.6,ca:38,vitc:1.5,vitd:0,b12:0,potassium:173,fiber:6},
+{n:"Big Mac",per:1,u:"sandwich",k:563,p:26,c:45,f:33,ir:4.0,ca:200,vitc:2,vitd:0,b12:1,potassium:380,fiber:3},
+{n:"Chicken sandwich (fast food)",per:1,u:"sandwich",k:530,p:28,c:46,f:25,ir:2.5,ca:100,vitc:2,vitd:0,b12:0.3,potassium:400,fiber:2},
+{n:"Cheese pizza",per:1,u:"slice",k:285,p:12,c:36,f:10,ir:1.5,ca:180,vitc:1,vitd:0.2,b12:0.5,potassium:180,fiber:2},
+{n:"Burrito, chicken",per:1,u:"burrito",k:550,p:30,c:65,f:18,ir:3.5,ca:200,vitc:5,vitd:0,b12:0.8,potassium:600,fiber:6},
+{n:"French fries, medium",per:1,u:"order",k:365,p:4,c:48,f:17,ir:0.8,ca:15,vitc:8,vitd:0,b12:0,potassium:620,fiber:4},
+{n:"Caesar salad w/ chicken",per:1,u:"salad",k:350,p:30,c:12,f:20,ir:1.5,ca:150,vitc:10,vitd:0.3,b12:0.5,potassium:500,fiber:3},
+{n:"Protein bar",per:1,u:"bar",k:200,p:20,c:22,f:7,ir:2.0,ca:100,vitc:0,vitd:1,b12:1,potassium:200,fiber:5},
+{n:"Granola bar",per:1,u:"bar",k:140,p:3,c:22,f:5,ir:0.7,ca:20,vitc:0,vitd:0,b12:0,potassium:80,fiber:1.5},
+{n:"Black coffee",per:1,u:"cup",k:2,p:0.3,c:0,f:0,ir:0.0,ca:5,vitc:0,vitd:0,b12:0,potassium:116,fiber:0},
+{n:"Orange juice",per:100,u:"ml",k:45,p:0.7,c:10.4,f:0.2,ir:0.2,ca:11,vitc:50,vitd:0,b12:0,potassium:200,fiber:0.2},
+{n:"Soda",per:100,u:"ml",k:42,p:0,c:10.6,f:0,ir:0.0,ca:0,vitc:0,vitd:0,b12:0,potassium:2,fiber:0},
+{n:"Beer",per:1,u:"can (355ml)",k:153,p:1.6,c:13,f:0,ir:0.1,ca:14,vitc:0,vitd:0,b12:0.1,potassium:96,fiber:0},
+{n:"Wine, red",per:1,u:"glass (150ml)",k:125,p:0.1,c:3.8,f:0,ir:0.5,ca:12,vitc:0,vitd:0,b12:0,potassium:187,fiber:0},
+{n:"White rice, cooked, 1 cup",per:1,u:"cup",k:205,p:4.3,c:44.5,f:0.4,ir:0.4,ca:16,vitc:0,vitd:0,b12:0,potassium:55,fiber:0.6},
+{n:"Brown rice, cooked, 1 cup",per:1,u:"cup",k:218,p:4.5,c:46,f:1.6,ir:0.8,ca:20,vitc:0,vitd:0,b12:0,potassium:154,fiber:3.5},
+{n:"Oats, cooked, 1 cup",per:1,u:"cup",k:166,p:6,c:28,f:3.6,ir:2.0,ca:20,vitc:0,vitd:0,b12:0,potassium:164,fiber:4},
+{n:"Pasta, cooked, 1 cup",per:1,u:"cup",k:220,p:8,c:43,f:1.3,ir:0.9,ca:10,vitc:0,vitd:0,b12:0,potassium:75,fiber:2.5},
+{n:"Milk, 2%, 1 cup",per:1,u:"cup",k:122,p:8,c:12,f:4.8,ir:0.1,ca:293,vitc:0,vitd:2.9,b12:1.2,potassium:366,fiber:0},
+{n:"Blueberries, 1 cup",per:1,u:"cup",k:84,p:1.1,c:21,f:0.5,ir:0.4,ca:9,vitc:14,vitd:0,b12:0,potassium:114,fiber:3.6},
+{n:"Broccoli, cooked, 1 cup",per:1,u:"cup",k:55,p:3.7,c:11,f:0.6,ir:1.1,ca:62,vitc:101,vitd:0,b12:0,potassium:457,fiber:5.1},
+{n:"Greek yogurt, plain nonfat, 1 cup",per:1,u:"cup",k:144,p:24,c:9,f:1,ir:0.2,ca:270,vitc:0,vitd:0,b12:1,potassium:350,fiber:0},
+{n:"Cereal, generic, 1 cup",per:1,u:"cup",k:113,p:2,c:25,f:0.6,ir:2.4,ca:30,vitc:6,vitd:0.6,b12:0.5,potassium:45,fiber:1.8},
+{n:"Sugar, granulated, 1 tsp",per:1,u:"tsp",k:16,p:0,c:4,f:0,ir:0,ca:0,vitc:0,vitd:0,b12:0,potassium:0,fiber:0},
+{n:"Sugar, granulated, 1 tbsp",per:1,u:"tbsp",k:48,p:0,c:12.6,f:0,ir:0,ca:0,vitc:0,vitd:0,b12:0,potassium:0,fiber:0},
+{n:"Butter, 1 tsp",per:1,u:"tsp",k:34,p:0,c:0,f:3.8,ir:0,ca:1,vitc:0,vitd:0,b12:0,potassium:1,fiber:0},
+{n:"Honey, 1 tsp",per:1,u:"tsp",k:21,p:0,c:5.7,f:0,ir:0.03,ca:1,vitc:0.1,vitd:0,b12:0,potassium:11,fiber:0},
+{n:"Honey, 1 tbsp",per:1,u:"tbsp",k:64,p:0.1,c:17,f:0,ir:0.1,ca:1,vitc:0.2,vitd:0,b12:0,potassium:11,fiber:0}
 ];
 function allFoods(){ return FOOD_DB.concat(state.myFoods); }
 
@@ -2092,6 +2097,14 @@ function fdcNutrient(f, names){
   const hit = (f.foodNutrients||[]).find(n=>names.includes(n.nutrientName));
   return hit ? (hit.value||0) : 0;
 }
+// NUTRIENT_CATALOG entries (Vitamin C/D, B12, Potassium, Fiber, ...) generically mapped
+// off their FDC nutrientName(s) — live-searched foods get real values for whichever
+// extra nutrients someone's tracking, same basis (ratio-scaled) as protein/iron/calcium.
+function fdcExtraNutrients(f, ratio){
+  const out = {};
+  NUTRIENT_CATALOG.forEach(n=>{ out[n.key] = fdcNutrient(f, n.fdc)*ratio; });
+  return out;
+}
 function normalizeFdcFood(f){
   const kcal = fdcNutrient(f, ['Energy']);
   if(!kcal) return null; // skip entries with no usable calorie data
@@ -2114,6 +2127,7 @@ function normalizeFdcFood(f){
       f: fdcNutrient(f, ['Total lipid (fat)'])*ratio,
       ir: fdcNutrient(f, ['Iron, Fe'])*ratio,
       ca: fdcNutrient(f, ['Calcium, Ca'])*ratio,
+      ...fdcExtraNutrients(f, ratio),
       fdc: true
     };
   }
@@ -2124,6 +2138,7 @@ function normalizeFdcFood(f){
     f: fdcNutrient(f, ['Total lipid (fat)']),
     ir: fdcNutrient(f, ['Iron, Fe']),
     ca: fdcNutrient(f, ['Calcium, Ca']),
+    ...fdcExtraNutrients(f, 1),
     fdc: true
   };
 }
@@ -2356,9 +2371,52 @@ function calorieGoalBreakdownText(dailyGoal, sexForFloorCheck){
 // activity — burning more calories doesn't buy a bigger intake budget. How
 // activity contributed toward the weight goal is still surfaced separately,
 // see weightGoalImpact/weightGoalImpactText.
+// Typical additional nutrients offered in Settings > Nutrition Tracking, on top of
+// the always-on Protein/Iron/Calcium core three. rda(p) mirrors defaultIronRDA/
+// defaultCalciumRDA's simplified sex/age-band style — ballpark adult RDAs (NIH ODS),
+// not full life-stage tables. `fdc` lists the matching USDA FoodData Central
+// nutrientName(s) so live-searched foods can populate this automatically.
+const NUTRIENT_CATALOG = [
+  {key:'vitc', label:'Vitamin C', unit:'mg', color:'var(--orange)',
+    fdc:['Vitamin C, total ascorbic acid'], rda:p=> p.sex==='male' ? 90 : 75},
+  {key:'vitd', label:'Vitamin D', unit:'mcg', color:'var(--gold)',
+    fdc:['Vitamin D (D2 + D3)','Vitamin D3 (cholecalciferol)'], rda:p=> p.age>=71 ? 20 : 15},
+  {key:'b12', label:'Vitamin B12', unit:'mcg', color:'var(--aqua)',
+    fdc:['Vitamin B-12'], rda:()=> 2.4},
+  {key:'potassium', label:'Potassium', unit:'mg', color:'var(--blue)',
+    fdc:['Potassium, K'], rda:p=> p.sex==='male' ? 3400 : 2600},
+  // Fiber's suggestion tracks the person's calorie target (the standard ~14g/1000kcal
+  // guideline) rather than a flat sex/age band, so it responds to goalType the same
+  // way protein does — a lower calorie target when losing suggests less fiber, a
+  // higher one when gaining suggests more. dailyTargets is a hoisted function
+  // declaration, so calling it here is safe even though it's defined further below.
+  {key:'fiber', label:'Fiber', unit:'g', color:'var(--green)',
+    fdc:['Fiber, total dietary'], rda:p=> Math.round(dailyTargets(p).kcal/1000*14)}
+];
+// {proteinOverride, ironOverride, calciumOverride}: null = use the suggested/computed
+// default. extras: [{key, target, enabled}] — nutrients added from NUTRIENT_CATALOG via
+// Settings > Nutrition Tracking; unchecking `enabled` (rather than removing) stops it
+// counting toward daily/weekly/monthly totals without losing the target the person set.
+function nutrientGoalsOf(p){
+  return (p && p.nutrientGoals) || {proteinOverride:null, ironOverride:null, calciumOverride:null, extras:[]};
+}
+function enabledExtraNutrients(p){
+  return nutrientGoalsOf(p).extras.filter(e=>e.enabled);
+}
+// g/kg multiplier scales with weight goal, not just body weight — a calorie deficit
+// (lose) needs more protein to protect lean mass, and building muscle (gain) also
+// benefits from a higher intake than plain maintenance. Sports-nutrition ballpark
+// figures (1.6 g/kg maintenance baseline), not a clinical prescription.
+function defaultProteinG(p){
+  const gPerKg = p.goalType==='lose' ? 1.8 : p.goalType==='gain' ? 1.7 : 1.6;
+  return Math.round(lbToKg(p.weightLb)*gPerKg);
+}
+function defaultIronRDA(p){ return p.sex==='male' ? 8 : 18; }
+function defaultCalciumRDA(p){ const olderThreshold = p.sex==='male' ? 71 : 51; return p.age>=olderThreshold ? 1200 : 1000; }
 function dailyTargets(p){
   const kcal = Math.round((p.calorieGoal!=null && p.calorieGoal>0) ? p.calorieGoal : suggestedCalorieGoal(p));
-  const proteinG = Math.round(lbToKg(p.weightLb)*1.6);
+  const proteinOverride = nutrientGoalsOf(p).proteinOverride;
+  const proteinG = Math.round(proteinOverride!=null ? proteinOverride : defaultProteinG(p));
   const proteinKcal = proteinG*4;
   const remaining = Math.max(kcal-proteinKcal, 200);
   const fatG = Math.round(remaining*0.35/9);
@@ -2370,17 +2428,20 @@ function calorieGoalBreakdown(kcal){
 }
 function dayTotals(iso){
   const d = getDay(iso);
-  const t = d.foods.reduce((a,f)=>({
-    kcal:a.kcal+f.kcal, protein:a.protein+f.protein, carbs:a.carbs+f.carbs, fat:a.fat+f.fat,
-    iron:a.iron+(f.iron||0), calcium:a.calcium+(f.calcium||0)
-  }), {kcal:0,protein:0,carbs:0,fat:0,iron:0,calcium:0});
+  const t = d.foods.reduce((a,f)=>{
+    a.kcal+=f.kcal; a.protein+=f.protein; a.carbs+=f.carbs; a.fat+=f.fat;
+    a.iron+=(f.iron||0); a.calcium+=(f.calcium||0);
+    NUTRIENT_CATALOG.forEach(n=>{ a[n.key] = (a[n.key]||0) + (f[n.key]||0); });
+    return a;
+  }, {kcal:0,protein:0,carbs:0,fat:0,iron:0,calcium:0});
   return t;
 }
 function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
 // Standard adult RDAs — iron is notably sex-dependent (higher for menstruating women);
 // calcium steps up later in life. Simplified age bands rather than full life-stage tables.
-function ironRDA(p){ return p.sex==='male' ? 8 : 18; }
-function calciumRDA(p){ const olderThreshold = p.sex==='male' ? 71 : 51; return p.age>=olderThreshold ? 1200 : 1000; }
+// Both fall back to the plain formula unless overridden in Settings > Nutrition Tracking.
+function ironRDA(p){ const ov = nutrientGoalsOf(p).ironOverride; return ov!=null ? ov : defaultIronRDA(p); }
+function calciumRDA(p){ const ov = nutrientGoalsOf(p).calciumOverride; return ov!=null ? ov : defaultCalciumRDA(p); }
 // Calories consumed vs. goal for the week so far (Monday through iso) — the goal
 // side is the same hard daily limit multiplied out, since it no longer flexes
 // with activity.
@@ -2407,16 +2468,27 @@ function periodNutrientTotals(dates){
   const proteinTarget = dailyTargets(p).proteinG;
   const ironTarget = ironRDA(p);
   const calciumTarget = calciumRDA(p);
+  const enabled = enabledExtraNutrients(p);
   let protein=0, iron=0, calcium=0;
-  dates.forEach(iso=>{ const t = dayTotals(iso); protein+=t.protein; iron+=t.iron; calcium+=t.calcium; });
+  const extras = {};
+  enabled.forEach(e=>{ extras[e.key] = {total:0, goal: e.target*dates.length}; });
+  dates.forEach(iso=>{
+    const t = dayTotals(iso);
+    protein+=t.protein; iron+=t.iron; calcium+=t.calcium;
+    enabled.forEach(e=>{ extras[e.key].total += (t[e.key]||0); });
+  });
   return {
     protein, proteinGoal: proteinTarget*dates.length,
     iron, ironGoal: ironTarget*dates.length,
-    calcium, calciumGoal: calciumTarget*dates.length
+    calcium, calciumGoal: calciumTarget*dates.length,
+    extras
   };
 }
 // Actionable, food-specific suggestions for whichever of the three fell short —
 // only surfaced for nutrients actually under target, not shown as a checklist regardless.
+// Extras (Settings > Nutrition Tracking additions) get a generic shortfall callout
+// since there's no per-nutrient food-suggestion list for those the way there is for
+// the built-in three.
 function nutrientShortfallTips(totals){
   const tips = [];
   if(totals.proteinGoal>0 && totals.protein < totals.proteinGoal*0.9){
@@ -2431,6 +2503,15 @@ function nutrientShortfallTips(totals){
     const gap = Math.round(totals.calciumGoal-totals.calcium);
     tips.push(`Calcium: ${hl(gap+'mg')} short > milk, yogurt, leafy greens.`);
   }
+  Object.keys(totals.extras||{}).forEach(key=>{
+    const {total, goal} = totals.extras[key];
+    if(goal<=0 || total >= goal*0.9) return;
+    const def = NUTRIENT_CATALOG.find(n=>n.key===key);
+    if(!def) return;
+    const gap = goal-total;
+    const gapText = gap>=10 ? Math.round(gap) : gap.toFixed(1);
+    tips.push(`${def.label}: ${hl(gapText+def.unit)} short of target.`);
+  });
   return tips;
 }
 // Purely informational — the calorie LIMIT itself is hard (baseGoal, see
@@ -3026,6 +3107,10 @@ function openTotalsModal(){
     ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--magenta)')}
     ${progRow('Iron', totals.iron, ironRDA(p), 'mg', 'var(--brown)')}
     ${progRow('Calcium', totals.calcium, calciumRDA(p), 'mg', 'var(--muted)')}
+    ${enabledExtraNutrients(p).map(e=>{
+      const def = NUTRIENT_CATALOG.find(c=>c.key===e.key);
+      return progRow(def.label, totals[e.key]||0, e.target, def.unit, def.color);
+    }).join('')}
   `);
 }
 function bigStatRow(value, label, sub){
@@ -3064,6 +3149,11 @@ function openNutritionModal(){
     ${bigStatRow(Math.round(totals.protein), 'Protein (g)', `/ ${targets.proteinG}g target`)}
     ${bigStatRow(totals.iron.toFixed(1), 'Iron (mg)', `/ ${ironRDA(p)}mg RDA`)}
     ${bigStatRow(Math.round(totals.calcium), 'Calcium (mg)', `/ ${calciumRDA(p)}mg RDA`)}
+    ${enabledExtraNutrients(p).map(e=>{
+      const def = NUTRIENT_CATALOG.find(c=>c.key===e.key);
+      const val = totals[e.key]||0;
+      return bigStatRow(val<10 ? val.toFixed(1) : Math.round(val), `${def.label} (${def.unit})`, `/ ${e.target}${def.unit} target`);
+    }).join('')}
   `);
 }
 function showTooltip(x, y, text){
@@ -3488,7 +3578,9 @@ function selectFoodIntoForm(food){
   // by name, looked up via allFoods()) keep working for it afterward, and so it's
   // still reachable without a network call if the API key is ever removed.
   if(food.fdc && !state.myFoods.some(f=>f.n===food.n)){
-    state.myFoods.push({n:food.n, per:food.per, u:food.u, k:food.k, p:food.p, c:food.c, f:food.f, ir:food.ir, ca:food.ca});
+    const cached = {n:food.n, per:food.per, u:food.u, k:food.k, p:food.p, c:food.c, f:food.f, ir:food.ir, ca:food.ca};
+    NUTRIENT_CATALOG.forEach(n=>{ cached[n.key] = food[n.key]||0; });
+    state.myFoods.push(cached);
   }
   const priorAmount = Number(foodAmountValue)||0;
   matchedFood = food;
@@ -3543,6 +3635,11 @@ function screenHistory(){
       ${progRow('Protein', nutrientTotals.protein, nutrientTotals.proteinGoal, 'g', 'var(--violet)')}
       ${progRow('Iron', nutrientTotals.iron, nutrientTotals.ironGoal, 'mg', 'var(--brown)')}
       ${progRow('Calcium', nutrientTotals.calcium, nutrientTotals.calciumGoal, 'mg', 'var(--muted)')}
+      ${Object.keys(nutrientTotals.extras).map(key=>{
+        const def = NUTRIENT_CATALOG.find(c=>c.key===key);
+        const {total, goal} = nutrientTotals.extras[key];
+        return progRow(def.label, total, goal, def.unit, def.color);
+      }).join('')}
       ${nutrientTips.length ? nutrientTips.map(tip=>`<div class="feedback-item" style="margin-top:8px;"><div class="dot" style="background:var(--warning)"></div><div>${tip}</div></div>`).join('') : `<div class="muted" style="margin-top:8px;">You're on pace with protein, iron, and calcium this ${historyMode==='week'?'week':'month'} — nice work.</div>`}
     </div>
   </div>`;
@@ -3669,6 +3766,48 @@ function renderProfileIconPickerModal(){
 
 /* ---------- SETTINGS ---------- */
 function settingsCardOpenAttr(key){ return openSettingsCards.has(key) ? 'open' : ''; }
+// Protein/Iron/Calcium are always tracked (baked into scoring/Trends elsewhere) — this
+// card only lets their suggested target be overridden. Everything in `extras` is fully
+// optional: added from NUTRIENT_CATALOG via the dropdown, and only counted toward
+// daily/weekly/monthly totals while its toggle stays on (see enabledExtraNutrients).
+function screenNutritionTrackingCard(p){
+  const ng = nutrientGoalsOf(p);
+  const availableToAdd = NUTRIENT_CATALOG.filter(c=>!ng.extras.some(e=>e.key===c.key));
+  return `
+    <details class="card" data-card-key="nutrition" ${settingsCardOpenAttr('nutrition')}>
+      <summary class="card-summary"><h3>Nutrition Tracking</h3><span class="chevron">⌄</span></summary>
+      <div class="muted" style="margin-bottom:10px;">Override the suggested daily targets below, or add other nutrients to track.</div>
+      <div class="field-row">
+        <div class="field"><label>Protein (g)</label><input type="number" id="s-nut-protein" value="${ng.proteinOverride!=null ? ng.proteinOverride : defaultProteinG(p)}"></div>
+        <div class="field"><label>Iron (mg)</label><input type="number" step="0.1" id="s-nut-iron" value="${ng.ironOverride!=null ? ng.ironOverride : defaultIronRDA(p)}"></div>
+        <div class="field"><label>Calcium (mg)</label><input type="number" id="s-nut-calcium" value="${ng.calciumOverride!=null ? ng.calciumOverride : defaultCalciumRDA(p)}"></div>
+      </div>
+      <button class="btn-secondary" id="s-nut-suggest" style="margin-bottom:14px;">Reset to suggested</button>
+
+      ${ng.extras.length ? ng.extras.map(e=>{
+        const def = NUTRIENT_CATALOG.find(c=>c.key===e.key);
+        if(!def) return '';
+        return `<div class="field-row" style="align-items:center;">
+          <div class="toggle-item" style="flex:1.3;"><span>${def.label}</span><button class="switch ${e.enabled?'on':''}" data-nut-toggle="${e.key}"></button></div>
+          <div class="field" style="flex:1;"><input type="number" step="any" data-nut-target="${e.key}" value="${e.target}"></div>
+          <span class="muted" style="flex:0 0 auto;">${def.unit}</span>
+          <button class="iconbtn" data-nut-remove="${e.key}" title="Remove">✕</button>
+        </div>`;
+      }).join('') : `<div class="muted" style="margin-bottom:10px;">No extra nutrients added yet.</div>`}
+
+      ${availableToAdd.length ? `<div class="field" style="margin-top:6px;">
+        <label>Add a nutrient to track</label>
+        <div class="field-row">
+          <select id="s-nut-add-select" style="flex:2;">
+            <option value="">Choose one…</option>
+            ${availableToAdd.map(c=>`<option value="${c.key}">${c.label}</option>`).join('')}
+          </select>
+          <button class="btn-secondary" id="s-nut-add-btn" style="flex:1;">Add</button>
+        </div>
+      </div>` : ''}
+      <button class="btn-primary" id="s-nut-save" style="margin-top:10px;">Save nutrition targets</button>
+    </details>`;
+}
 function screenSettings(){
   const p = state.profile;
   return `
@@ -3719,6 +3858,8 @@ function screenSettings(){
       </div>
       <button class="btn-primary" id="s-save">Save profile</button>
     </details>
+
+    ${screenNutritionTrackingCard(p)}
 
     ${state.errorLog.length ? `<details class="card" data-card-key="errors" ${settingsCardOpenAttr('errors')}>
       <summary class="card-summary"><div class="card-head"><h3>Error log</h3><button class="iconbtn" id="s-clear-errors" title="Clear">✕</button></div><span class="chevron">⌄</span></summary>
@@ -4366,10 +4507,13 @@ function attachHandlers(){
       return;
     }
     let protein=0, carbs=0, fat=0, iron=0, calcium=0, qtyLabel;
+    const extras = {};
+    NUTRIENT_CATALOG.forEach(n=>{ extras[n.key] = 0; });
     if(matchedFood && matchedFood.n===name){
       const ratio = amount/matchedFood.per;
       protein = matchedFood.p*ratio; carbs = matchedFood.c*ratio; fat = matchedFood.f*ratio;
       iron = (matchedFood.ir||0)*ratio; calcium = (matchedFood.ca||0)*ratio;
+      NUTRIENT_CATALOG.forEach(n=>{ extras[n.key] = (matchedFood[n.key]||0)*ratio; });
       qtyLabel = `${amount} ${matchedFood.u}`;
     }else{
       // Freeform name — nutrition is always estimated (search match or FDC), so an
@@ -4381,7 +4525,7 @@ function attachHandlers(){
       // pollute search suggestions and "last amount used" with meaningless data.
       if(rawName) state.myFoods.push({n:name, per:amount, u:unitLabel, k:kcal, p:0, c:0, f:0, ir:0, ca:0});
     }
-    getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel, kcal, protein, carbs, fat, iron, calcium});
+    getDay(today()).foods.push({id:Date.now()+Math.random(), name, qtyLabel, kcal, protein, carbs, fat, iron, calcium, ...extras});
     if(rawName) state.foodMemory[name] = {qty:amount, ts:Date.now()};
     logFoodQuery=''; matchedFood=null; foodUnitFilter='any'; foodAmountValue=''; foodKcalValue='';
     saveState(); render();
@@ -4555,7 +4699,8 @@ function attachHandlers(){
       calorieGoal: Number(document.getElementById('s-calgoal').value)||null,
       trackedDays: readDayCheckboxes(document, 's'),
       startedAt: state.profile.startedAt,
-      icon: state.profile.icon // this form has no icon field of its own — preserve whatever the picker last set, don't let this full-object rebuild silently wipe it
+      icon: state.profile.icon, // this form has no icon field of its own — preserve whatever the picker last set, don't let this full-object rebuild silently wipe it
+      nutrientGoals: state.profile.nutrientGoals // owned by the separate Nutrition Tracking card/save button — preserve it here too
     };
     if(wasWithinFirstWeek) backfillFirstWeekWeight(oldWeight, newWeight);
     // A genuinely new target/goal (e.g. picked via "Update Goal" after already
@@ -4566,6 +4711,54 @@ function attachHandlers(){
     const hitGoal = checkWeightGoalReached(newWeight);
     saveState(); alert('Profile saved.'); render();
     if(hitGoal) renderWeightGoalModal();
+  });
+  const nutSuggestBtn = document.getElementById('s-nut-suggest');
+  if(nutSuggestBtn) nutSuggestBtn.addEventListener('click', ()=>{
+    document.getElementById('s-nut-protein').value = defaultProteinG(state.profile);
+    document.getElementById('s-nut-iron').value = defaultIronRDA(state.profile);
+    document.getElementById('s-nut-calcium').value = defaultCalciumRDA(state.profile);
+  });
+  document.querySelectorAll('[data-nut-toggle]').forEach(b=>b.addEventListener('click', ()=>{
+    const ng = nutrientGoalsOf(state.profile);
+    const entry = ng.extras.find(e=>e.key===b.dataset.nutToggle);
+    if(entry) entry.enabled = !entry.enabled;
+    state.profile.nutrientGoals = ng;
+    openSettingsCards.add('nutrition');
+    saveState(); render();
+  }));
+  document.querySelectorAll('[data-nut-remove]').forEach(b=>b.addEventListener('click', ()=>{
+    const ng = nutrientGoalsOf(state.profile);
+    ng.extras = ng.extras.filter(e=>e.key!==b.dataset.nutRemove);
+    state.profile.nutrientGoals = ng;
+    openSettingsCards.add('nutrition');
+    saveState(); render();
+  }));
+  const nutAddBtn = document.getElementById('s-nut-add-btn');
+  if(nutAddBtn) nutAddBtn.addEventListener('click', ()=>{
+    const sel = document.getElementById('s-nut-add-select');
+    const key = sel.value;
+    const def = NUTRIENT_CATALOG.find(c=>c.key===key);
+    if(!def) return;
+    const ng = nutrientGoalsOf(state.profile);
+    if(ng.extras.some(e=>e.key===key)) return; // already added
+    ng.extras.push({key, target: Math.round(def.rda(state.profile)*10)/10, enabled:true});
+    state.profile.nutrientGoals = ng;
+    openSettingsCards.add('nutrition');
+    saveState(); render();
+  });
+  const nutSaveBtn = document.getElementById('s-nut-save');
+  if(nutSaveBtn) nutSaveBtn.addEventListener('click', ()=>{
+    const ng = nutrientGoalsOf(state.profile);
+    ng.proteinOverride = Number(document.getElementById('s-nut-protein').value)||null;
+    ng.ironOverride = Number(document.getElementById('s-nut-iron').value)||null;
+    ng.calciumOverride = Number(document.getElementById('s-nut-calcium').value)||null;
+    document.querySelectorAll('[data-nut-target]').forEach(inp=>{
+      const entry = ng.extras.find(e=>e.key===inp.dataset.nutTarget);
+      if(entry) entry.target = Number(inp.value)||entry.target;
+    });
+    state.profile.nutrientGoals = ng;
+    openSettingsCards.add('nutrition');
+    saveState(); alert('Nutrition targets saved.'); render();
   });
   wireConnectFitbitCard(document, 's');
   const fdcSave = document.getElementById('s-fdc-save');
