@@ -329,16 +329,18 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .switch.on{background:var(--blue);}
 /* ---- profile icon chip (Today topbar + Settings row) and its picker modal.
    The sprite's own background-image/size/position come from the inline style
-   profileIconSpriteStyle() generates — this class only handles the chip's own
-   appearance (background-color here is the chip's frame, not the icon).
-   Rounded-rect rather than a perfect circle: the sheet's cells are wider than
-   tall (~1.47:1), so a circular frame would render as an oval. ---- */
-.profile-icon-chip{border:none;background-color:var(--surface);border-radius:14px;flex:none;padding:6px;
-  box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 var(--btn-hi), var(--shadow);transition:transform .08s;}
-.profile-icon-chip:active{transform:translateY(1px);}
+   profileIconSpriteStyle() generates. No background-color here on purpose —
+   ProfileIcons.png is transparent-background line art, and an earlier version
+   of this that put a solid var(--surface) fill behind it turned every icon
+   into a colored badge instead of a floating transparent icon. Only a faint
+   tap-feedback tint on :active, nothing static. ---- */
+.profile-icon-chip{border:none;background:transparent;border-radius:14px;flex:none;padding:4px;transition:transform .08s;}
+.profile-icon-chip:active{transform:translateY(1px);background:color-mix(in srgb, var(--text) 8%, transparent);}
 .profile-icon-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px;max-height:60vh;overflow-y:auto;}
-.profile-icon-opt{border:2px solid transparent;border-radius:12px;background:var(--surface);padding:8px;
-  display:flex;align-items:center;justify-content:center;transition:border-color .1s;}
+.profile-icon-opt{border:2px solid transparent;border-radius:12px;background:transparent;padding:8px;
+  display:flex;align-items:center;justify-content:center;transition:border-color .1s, background .1s;}
+.profile-icon-opt:active{background:color-mix(in srgb, var(--text) 8%, transparent);}
+.profile-icon-opt.active{border-color:var(--blue);background:color-mix(in srgb, var(--blue) 12%, transparent);}
 .profile-icon-opt.active{border-color:var(--blue);}
 .switch.on::after{transform:translateX(17px);}
 
@@ -415,7 +417,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.25';
+const APP_VERSION = '1.4.26';
 
 function defaultState(){
   return {
