@@ -395,7 +395,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.18';
+const APP_VERSION = '1.4.22';
 
 function defaultState(){
   return {
@@ -424,7 +424,9 @@ function defaultState(){
     lastAzmBackfillWeekKey: null, // Sunday iso of the last week checked by backfillMissedActiveMinutesIfDue — see that function
     errorLog: [], // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
     pendingCelebration: false, // a goal was hit but confetti hasn't played yet — shown on the next fresh page load
-    pendingReinstallToast: false // set by reinstallApp() right before its reload, shown on the next fresh page load
+    pendingReinstallToast: false, // set by reinstallApp() right before its reload, shown on the next fresh page load
+    weightGoalCelebrated: false, // stops the weight-goal modal re-firing every subsequent weigh-in once already prompted for the current target — see checkWeightGoalReached
+    pendingWeightGoalPrompt: false // target crossed but the modal hasn't shown yet — shown on the next fresh page load, same convention as pendingCelebration
   };
 }
 
@@ -845,6 +847,61 @@ function checkGoalsAndCelebrate(iso){
     d.celebrated.totalScore = true; fired = true;
   }
   if(fired){ state.pendingCelebration = true; saveState(); }
+}
+// Returns true once when a newly-logged weight crosses targetWeightLb in the
+// direction goalType implies (lose: at/below target; gain: at/above target).
+// Maintain has no crossing to detect (there's no target to hit), and a null/0
+// target means no goal is set. weightGoalCelebrated gates repeats — every
+// subsequent weigh-in past the target shouldn't re-prompt "did you hit your
+// goal?" every week. It's reset (see the Settings s-save handler) whenever the
+// target/goal actually changes, so a new goal can trigger this again.
+// Direct/foreground callers (Sunday weigh-in, Settings save, history-table edit)
+// show renderWeightGoalModal() immediately off the return value — this is a
+// deliberate, on-topic weight action, unlike the general activity/food-logging
+// goals confetti covers. The one background caller (Google Health weight sync)
+// ignores the return value and just leaves pendingWeightGoalPrompt set, so a
+// silent sync can't pop a modal out from under whatever the person's actually
+// doing — surfaced on the next fresh page load instead, same as pendingCelebration.
+function checkWeightGoalReached(newWeightLb){
+  const p = state.profile;
+  if(!p || !p.targetWeightLb || p.goalType==='maintain') return false;
+  if(state.weightGoalCelebrated) return false;
+  const hit = p.goalType==='lose' ? newWeightLb<=p.targetWeightLb : newWeightLb>=p.targetWeightLb;
+  if(!hit) return false;
+  state.weightGoalCelebrated = true;
+  state.pendingWeightGoalPrompt = true;
+  saveState();
+  return true;
+}
+// The actual "you did it" prompt for checkWeightGoalReached. "Yes" switches
+// goalType to maintain (ratePerWeekLb reset to 0, matching every other place
+// maintain is set) and re-renders in place. "Update Goal" instead jumps to
+// Settings with the Profile Preferences card pre-expanded — see goToTab/
+// openSettingsCards — so a new target/goal is one scroll away, not a second
+// navigation. Either choice is a real profile change, so both save immediately.
+function renderWeightGoalModal(){
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+  <div class="modal-backdrop center">
+    <div class="modal">
+      <h2>Congratulations!</h2>
+      <div class="sub">You've reached your weight goal. Switch to Maintain?</div>
+      <button class="btn-primary" id="wg-yes">Yes, switch to Maintain</button>
+      <div style="height:8px"></div>
+      <button class="btn-secondary" id="wg-update">Update Goal</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+  wrap.querySelector('#wg-yes').addEventListener('click', ()=>{
+    state.profile.goalType = 'maintain';
+    state.profile.ratePerWeekLb = 0;
+    saveState(); wrap.remove(); render();
+  });
+  wrap.querySelector('#wg-update').addEventListener('click', ()=>{
+    wrap.remove();
+    openSettingsCards.add('profile');
+    goToTab('settings');
+  });
 }
 
 /* =========================================================
@@ -2655,7 +2712,9 @@ function renderWeighInModal(){
     if(!w){ alert('Enter a weight.'); return; }
     getDay(today()).weightLb = w;
     state.profile.weightLb = w;
+    const hitGoal = checkWeightGoalReached(w);
     saveState(); wrap.remove(); render();
+    if(hitGoal) renderWeightGoalModal();
   });
   wrap.querySelector('#wi-skip').addEventListener('click', ()=>{
     getDay(today()).weighInDismissed = true; saveState(); wrap.remove();
@@ -3460,18 +3519,18 @@ function connectFitbitStepsHtml(prefix){
   const gh = state.googleHealth;
   const connected = !!gh.refreshToken;
   return `
-    <div class="muted" style="margin-bottom:12px;">Fitbit data now flows through a Google account — often not your everyday one. Follow these steps in order.</div>
+    <div class="muted" style="margin-bottom:12px;">Fitbit data flows through a Google account — often not your everyday one.</div>
     ${connected && gh.lastRefreshError ? `<div class="row" style="margin-bottom:12px;"><span class="badge focus">Connection expired${gh.email ? ' ('+escapeHtml(gh.email)+')' : ''} — tap Reconnect below</span></div>` : ''}
     ${connected && !gh.lastRefreshError ? `<div class="row" style="margin-bottom:12px;"><span class="badge good">Connected${gh.email ? ' as '+escapeHtml(gh.email) : ''} — auto-syncing</span></div>` : ''}
 
     <div style="margin-bottom:14px;">
       <div style="font-weight:600;margin-bottom:4px;">Step 1 — Find your Fitbit's Google account</div>
-      <div class="muted">Fitbit app → profile photo → <strong>Account settings</strong> → <strong>Google account</strong> (or Link Google Account, if none shows yet). Note the exact email — not necessarily @gmail.com — for Steps 2 and 3.</div>
+      <div class="muted">Fitbit app → profile photo → <strong>Account settings</strong> → <strong>Google account</strong> (or Link Google Account). Note the email — not necessarily @gmail.com.</div>
     </div>
 
     <div style="margin-bottom:14px;">
-      <div style="font-weight:600;margin-bottom:4px;">Step 2 — Get approved and get your key</div>
-      <div class="muted">Send the app owner that email and ask to be added. They'll reply with a <strong>Client ID</strong> and <strong>Client Secret</strong> — paste both below and tap Save. One-time, per device.</div>
+      <div style="font-weight:600;margin-bottom:4px;">Step 2 — Get your key</div>
+      <div class="muted">Send that email to the app owner to get approved. Paste the <strong>Client ID</strong>/<strong>Secret</strong> they send back and tap Save (one-time, per device).</div>
     </div>
     <div class="field"><label>Google Client ID</label><input type="text" id="${prefix}-fit-client" placeholder="paste what the app owner sent you" value="${state.settings.clientId}"></div>
     <div class="field"><label>Google Client Secret</label><input type="text" id="${prefix}-fit-secret" placeholder="paste what the app owner sent you" value="${state.settings.clientSecret}"></div>
@@ -3479,12 +3538,12 @@ function connectFitbitStepsHtml(prefix){
     <div style="height:14px"></div>
 
     <div style="margin-bottom:10px;">
-      <div style="font-weight:600;margin-bottom:4px;">Step 3 — Connect and pick the right account</div>
-      <div class="muted">Tap below, then choose the <strong>exact email from Step 1</strong> in Google's picker — not whatever's already signed in — and tap Allow.</div>
-      <div class="muted" style="margin-top:6px;">Google says the app is "blocked" or "unverified"? You haven't been approved yet — check with the app owner.</div>
+      <div style="font-weight:600;margin-bottom:4px;">Step 3 — Connect</div>
+      <div class="muted">Tap below, pick the Step 1 email in Google's picker (not whatever's already signed in), and tap Allow.</div>
+      <div class="muted" style="margin-top:6px;">"Blocked"/"unverified" error → you're not approved yet.</div>
     </div>
     <button class="btn-primary" id="${prefix}-fit-connect">${connected ? 'Reconnect & sync now' : 'Connect & sync today'}</button>
-    ${connected ? `<div class="muted" style="margin-top:8px;">Connected the wrong account? Tap "Reconnect & sync now" and choose again.</div>` : ''}
+    ${connected ? `<div class="muted" style="margin-top:8px;">Wrong account connected? Tap Reconnect above and pick again.</div>` : ''}
   `;
 }
 function wireConnectFitbitCard(root, prefix){
@@ -3560,13 +3619,13 @@ function screenSettings(){
       </details>
 
       <details class="subcard" data-card-key="workouts" ${settingsCardOpenAttr('workouts')}>
-        <summary class="subcard-summary"><span>Workouts</span><span class="chevron">⌄</span></summary>
+        <summary class="subcard-summary"><span>Import Workout Data</span><span class="chevron">⌄</span></summary>
         <button class="btn-secondary" id="s-import-hevy">Import from Hevy.csv</button>
         <input type="file" id="s-import-hevy-input" accept=".csv,text/csv" class="hidden">
       </details>
 
       <details class="subcard" data-card-key="food" ${settingsCardOpenAttr('food')}>
-        <summary class="subcard-summary"><span>Food search</span><span class="chevron">⌄</span></summary>
+        <summary class="subcard-summary"><span>Food Database Connections</span><span class="chevron">⌄</span></summary>
         <div class="field"><label>USDA FoodData Central API key</label><input type="text" id="s-fdc-key" placeholder="paste your free key here" value="${state.settings.fdcApiKey}"></div>
         <button class="btn-secondary" id="s-fdc-save">Save key</button>
         <div class="muted" style="margin-top:8px;">${state.settings.fdcApiKey ? 'Food search pulls live results from FoodData Central, including branded/packaged foods as a fallback for generic-food misses.' : 'Without a key, food search only uses the small built-in list. Add a free key above for live USDA results.'}</div>
@@ -3828,7 +3887,7 @@ async function fetchGoogleHealthToday(silent){
         const last = weightPoints[weightPoints.length-1];
         // Google's field is weightGrams — grams, not kilograms.
         const grams = extractNumericField(last.weight||last, ['weightGrams','massGrams','grams','value']);
-        if(grams) d.weightLb = Math.round((grams/453.592)*10)/10;
+        if(grams){ d.weightLb = Math.round((grams/453.592)*10)/10; checkWeightGoalReached(d.weightLb); }
       }
     }catch(e){ /* weight scope/data may not be available yet — activity sync still succeeds */ }
 
@@ -3995,7 +4054,10 @@ function mountCharts(){
       const valuesRev = weightPoints.slice().reverse();
       openChartTableModal('Monthly Trends', ['Month','Total Score','Weight'], rows,
         [null,'var(--blue)','var(--orange)'],
-        { colIndex:2, values: valuesRev, unit:' lb', onSave:(ri, newVal)=>{ getDay(datesRev[ri]).weightLb = newVal; } }
+        { colIndex:2, values: valuesRev, unit:' lb', onSave:(ri, newVal)=>{
+          getDay(datesRev[ri]).weightLb = newVal;
+          if(newVal!=null && checkWeightGoalReached(newVal)) renderWeightGoalModal();
+        } }
       );
     });
   }else{
@@ -4318,6 +4380,8 @@ function attachHandlers(){
     // the first week — see backfillFirstWeekWeight for why.
     const wasWithinFirstWeek = isWithinFirstWeek();
     const oldWeight = state.profile.weightLb;
+    const oldTargetWeightLb = state.profile.targetWeightLb;
+    const oldGoalType = state.profile.goalType;
     const newWeight = Number(document.getElementById('s-weight').value);
     state.profile = {
       age: Number(document.getElementById('s-age').value),
@@ -4334,7 +4398,14 @@ function attachHandlers(){
       startedAt: state.profile.startedAt
     };
     if(wasWithinFirstWeek) backfillFirstWeekWeight(oldWeight, newWeight);
+    // A genuinely new target/goal (e.g. picked via "Update Goal" after already
+    // hitting the last one) should be able to trigger the congratulations again.
+    if(state.profile.targetWeightLb!==oldTargetWeightLb || state.profile.goalType!==oldGoalType){
+      state.weightGoalCelebrated = false;
+    }
+    const hitGoal = checkWeightGoalReached(newWeight);
     saveState(); alert('Profile saved.'); render();
+    if(hitGoal) renderWeightGoalModal();
   });
   wireConnectFitbitCard(document, 's');
   const fdcSave = document.getElementById('s-fdc-save');
@@ -4448,6 +4519,14 @@ if(state.pendingCelebration){
   state.pendingCelebration = false;
   saveState();
   fireConfetti();
+}
+// Same deferred-to-next-load convention, for a weight-goal crossing that came
+// from the silent Google Health background sync rather than a direct weigh-in
+// (those already show renderWeightGoalModal() immediately — see checkWeightGoalReached).
+if(state.pendingWeightGoalPrompt){
+  state.pendingWeightGoalPrompt = false;
+  saveState();
+  renderWeightGoalModal();
 }
 // Re-Install's own reload lands here — see reinstallApp(). Surfaced as a
 // toast (not a blocking modal, since the whole point of Re-Install is not
