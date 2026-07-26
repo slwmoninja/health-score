@@ -423,7 +423,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.0.1';
+const APP_VERSION = '2.1.0';
 
 function defaultState(){
   return {
@@ -2651,6 +2651,15 @@ function calorieDirectionScore(goalType, kcalDiff, target){
 // that was otherwise well within its calorie goal).
 function nutritionScore(iso){
   const p = state.profile; if(!p) return null;
+  const d = getDay(iso);
+  // A day with zero food logged would otherwise score a false 100 here for a
+  // 'lose' goal — undercutting target (including a total no-show) is never
+  // penalized by calorieDirectionScore, so silence reads identically to a
+  // perfectly-hit deficit. Stay unscored unless the person has explicitly
+  // confirmed it was a real fast via the calorie-tracking-gap prompt (see
+  // isUnresolvedCalorieGap/renderCalorieGapModal) — same treatment as a fully
+  // untracked day until proven otherwise.
+  if(d.foods.length===0 && d.calorieDayResolution!=='fasted') return null;
   const totals = dayTotals(iso);
   const targets = dailyTargets(p); // hard daily limit — activity doesn't buy score-free allowance
   // Starts at a full 100 (lose/gain: being on the right side of target is fully
@@ -2666,10 +2675,14 @@ function nutritionScore(iso){
 // over doesn't drag down an otherwise-successful week/month as long as the
 // period's overall result is still on the right side of goal. Unlogged days are
 // excluded entirely (not counted as "ate zero"), matching how avgScore already
-// skips days with no food logged.
+// skips days with no food logged — except a day confirmed as a real fast, which
+// counts as a genuine zero toward the period total instead of being dropped.
 function aggregateNutritionScore(dates){
   const p = state.profile; if(!p) return null;
-  const loggedDates = dates.filter(iso=>getDay(iso).foods.length>0);
+  const loggedDates = dates.filter(iso=>{
+    const d = getDay(iso);
+    return d.foods.length>0 || d.calorieDayResolution==='fasted';
+  });
   if(loggedDates.length===0) return null;
   let consumed=0, target=0;
   loggedDates.forEach(iso=>{
@@ -2933,6 +2946,71 @@ function renderWeighInModal(){
     saveState(); wrap.remove(); render();
     showToast('Weight tracking disabled.', 'good');
   });
+}
+
+/* =========================================================
+   CALORIE TRACKING GAPS — a tracked day with zero food logged would otherwise
+   score a false 100 for a 'lose' goal (calorieDirectionScore never penalizes
+   undercutting target, so total silence looks identical to a perfectly-hit
+   deficit — see nutritionScore). Rather than guessing, ask: "Yes" (ignore)
+   drops the day from calorie scoring, same as an untracked day; "No" means it
+   was a real fast, so the actual zero counts. Asked once per login while the
+   gap's own week is still open (through that Sunday); left unanswered past
+   that, autoResolveStaleCalorieGaps quietly ignores it instead of nagging
+   about an old gap forever.
+   ========================================================= */
+function isUnresolvedCalorieGap(iso){
+  const d = getDay(iso);
+  return !d.calorieDayResolution && isTrackedDay(iso) && d.foods.length===0 && iso<today();
+}
+// Sweeps every day whose own week has fully ended (we're past that Sunday) and
+// silently marks any still-unresolved gap as ignored — covers both "away from the
+// app for a while" and "opened it again right on that Monday" the same way.
+function autoResolveStaleCalorieGaps(){
+  if(!state.profile) return;
+  const t = today();
+  let changed = false;
+  Object.keys(state.days).forEach(iso=>{
+    if(!isUnresolvedCalorieGap(iso)) return;
+    if(t > weekRange(iso).end){ state.days[iso].calorieDayResolution = 'ignored'; changed = true; }
+  });
+  if(changed) saveState();
+}
+// Only the CURRENT week's gaps (Monday through yesterday) are still fair game to
+// ask about — anything older either already got answered or was just swept up by
+// autoResolveStaleCalorieGaps above.
+function pendingCalorieGapDates(){
+  if(!state.profile) return [];
+  const {start} = weekRange(today());
+  return trackedDatesBetween(start, addDays(today(),-1)).filter(isUnresolvedCalorieGap);
+}
+function shouldPromptCalorieGap(){
+  if(!state.profile) return false;
+  autoResolveStaleCalorieGaps();
+  return pendingCalorieGapDates().length>0;
+}
+function renderCalorieGapModal(dates){
+  const wrap = document.createElement('div');
+  const dayNames = dates.map(iso=>dateFromIso(iso).toLocaleDateString(undefined,{weekday:'long'}));
+  const listText = dayNames.length===1 ? dayNames[0] : dayNames.slice(0,-1).join(', ')+' and '+dayNames[dayNames.length-1];
+  wrap.innerHTML = `
+  <div class="modal-backdrop center">
+    <div class="modal">
+      <h2>Ignore ${listText} missed for Calorie tracking?</h2>
+      <div class="sub">No calories were logged. "No" means you were fasting that ${dates.length>1?'day (each counts as a real zero)':'day — it counts as a real zero'}; "Yes" leaves ${dates.length>1?'those days':'that day'} out of your calorie tracking entirely.</div>
+      <button class="btn-primary" id="cg-yes">Yes</button>
+      <div style="height:8px"></div>
+      <button class="btn-secondary" id="cg-no">No</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+  const resolve = (value)=>{
+    dates.forEach(iso=>{ getDay(iso).calorieDayResolution = value; });
+    saveState(); wrap.remove(); render();
+  };
+  wrap.querySelector('#cg-yes').addEventListener('click', ()=>resolve('ignored'));
+  wrap.querySelector('#cg-no').addEventListener('click', ()=>resolve('fasted'));
+  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) wrap.remove(); });
 }
 
 /* =========================================================
@@ -3473,6 +3551,7 @@ function render(){
   wireWorkoutTimer();
 
   if(shouldPromptWeighIn() && !document.querySelector('.modal-backdrop')) renderWeighInModal();
+  else if(shouldPromptCalorieGap() && !document.querySelector('.modal-backdrop')) renderCalorieGapModal(pendingCalorieGapDates());
 }
 
 /* ---------- TODAY ---------- */
