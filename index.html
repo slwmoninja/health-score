@@ -395,7 +395,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.22';
+const APP_VERSION = '1.4.24';
 
 function defaultState(){
   return {
@@ -421,12 +421,14 @@ function defaultState(){
       installPromptAccepted: false
     },
     googleHealth: { accessToken:null, refreshToken:null, expiresAt:0, lastSyncAt:null, email:null, lastRefreshError:null, lastSilentReconnectAttemptAt:null },
-    lastAzmBackfillWeekKey: null, // Sunday iso of the last week checked by backfillMissedActiveMinutesIfDue — see that function
+    lastAzmBackfillWeekKey: null, // Sunday iso of the last week fully checked by backfillMissedActiveMinutesIfDue — see that function
+    lastAzmBackfillAttemptAt: null, // ms timestamp of the last attempt (successful or not) — throttles retries after a rate-limited run
     errorLog: [], // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
     pendingCelebration: false, // a goal was hit but confetti hasn't played yet — shown on the next fresh page load
     pendingReinstallToast: false, // set by reinstallApp() right before its reload, shown on the next fresh page load
     weightGoalCelebrated: false, // stops the weight-goal modal re-firing every subsequent weigh-in once already prompted for the current target — see checkWeightGoalReached
-    pendingWeightGoalPrompt: false // target crossed but the modal hasn't shown yet — shown on the next fresh page load, same convention as pendingCelebration
+    pendingWeightGoalPrompt: false, // target crossed but the modal hasn't shown yet — shown on the next fresh page load, same convention as pendingCelebration
+    weighInRemindAt: null // iso date "Later" on the Sunday weigh-in should re-prompt on, even though that day isn't a Sunday — see shouldPromptWeighIn
   };
 }
 
@@ -2680,17 +2682,21 @@ function renderOnboardingFitbitStep(){
 /* =========================================================
    SUNDAY WEIGH-IN
    ========================================================= */
-// Dismissal is persisted per-day (not just an in-memory flag) so skipping it once
-// actually sticks across reloads for the rest of that Sunday — otherwise reopening
-// the app later the same day would show it again despite already being dismissed.
-// Only the weight itself being logged, or an explicit dismiss, stops it; simply
-// reloading/backgrounding the app does not.
+// Dismissal is persisted (not just an in-memory flag) so skipping it once actually
+// sticks across reloads — otherwise reopening the app later would show it again
+// despite already being dismissed. Only the weight itself being logged, an
+// explicit "Later"/disable, or the reminder date rolling past, stops it; simply
+// reloading/backgrounding the app does not. "Later" reprompts the very next day
+// (via weighInRemindAt) regardless of day-of-week, rather than waiting a full
+// week for the next Sunday — see renderWeighInModal.
 function shouldPromptWeighIn(){
   if(!state.profile || !state.settings.weightTrackingEnabled) return false;
   const t = today();
-  if(!isSunday(t)) return false;
   const d = getDay(t);
-  if(d.weightLb || d.weighInDismissed) return false;
+  if(d.weightLb) return false; // already logged today
+  if(state.weighInRemindAt===t) return true;
+  if(!isSunday(t)) return false;
+  if(d.weighInDismissed) return false;
   return true;
 }
 function renderWeighInModal(){
@@ -2701,9 +2707,11 @@ function renderWeighInModal(){
       <h2>Sunday weigh-in</h2>
       <div class="sub">Log today's weight to close out the week.</div>
       <div class="field"><label>Weight (lb)</label><input type="number" step="0.1" id="wi-weight" placeholder="${state.profile.weightLb}"></div>
-      <button class="btn-primary" id="wi-save">Save weight</button>
+      <button class="btn-primary" id="wi-save">Enter / Save</button>
       <div style="height:8px"></div>
-      <button class="btn-secondary" id="wi-skip">Skip for today</button>
+      <button class="btn-secondary" id="wi-later">Later (remind me tomorrow)</button>
+      <div style="height:8px"></div>
+      <button class="btn-secondary" id="wi-disable" style="color:var(--critical)">Disable weight tracking</button>
     </div>
   </div>`;
   document.body.appendChild(wrap);
@@ -2712,12 +2720,21 @@ function renderWeighInModal(){
     if(!w){ alert('Enter a weight.'); return; }
     getDay(today()).weightLb = w;
     state.profile.weightLb = w;
+    state.weighInRemindAt = null; // clear any pending "Later" — today's entry satisfies it
     const hitGoal = checkWeightGoalReached(w);
     saveState(); wrap.remove(); render();
     if(hitGoal) renderWeightGoalModal();
   });
-  wrap.querySelector('#wi-skip').addEventListener('click', ()=>{
-    getDay(today()).weighInDismissed = true; saveState(); wrap.remove();
+  wrap.querySelector('#wi-later').addEventListener('click', ()=>{
+    getDay(today()).weighInDismissed = true;
+    state.weighInRemindAt = addDays(today(), 1);
+    saveState(); wrap.remove();
+  });
+  wrap.querySelector('#wi-disable').addEventListener('click', ()=>{
+    state.settings.weightTrackingEnabled = false;
+    state.weighInRemindAt = null;
+    saveState(); wrap.remove(); render();
+    showToast('Weight tracking disabled.', 'good');
   });
 }
 
@@ -3273,10 +3290,6 @@ function screenToday(){
   return `
   <div class="topbar"><img class="topbar-logo" src="HealthScore.png" alt="Health Score">
     <div style="display:flex;align-items:center;gap:10px;">
-      <div style="text-align:right;">
-        <div class="muted" id="today-date"></div>
-        <div class="muted" style="font-size:11px;">${fitbitSyncLabel()}</div>
-      </div>
       ${activeSessionBannerHtml()}
       ${installTopbarBtnHtml()}
     </div>
@@ -3563,6 +3576,10 @@ function screenSettings(){
   const p = state.profile;
   return `
   <div class="topbar"><h1>Settings</h1>${activeSessionBannerHtml()}${installTopbarBtnHtml(true)}</div>
+  <div style="text-align:center;padding:0 16px 12px;">
+    <div class="muted" id="today-date"></div>
+    <div class="muted" style="font-size:11px;">${fitbitSyncLabel()}</div>
+  </div>
   <div class="screen">
     <details class="card profile-card" data-card-key="profile" ${settingsCardOpenAttr('profile')}>
       <summary class="card-summary"><h3>Profile Preferences</h3><span class="chevron">⌄</span></summary>
@@ -3963,34 +3980,73 @@ function maybeAttemptSilentReconnect(){
 // on/after a Sunday whose week hasn't been checked yet, whether that's Sunday
 // itself or the following Wednesday if nobody opened the app in between.
 const AZM_BACKFILL_LOOKBACK_DAYS = 7;
+// health.googleapis.com enforces a per-minute-per-user request quota that's easy
+// to blow through with 7 back-to-back day-by-day fetches, especially stacked right
+// after the same-render today-sync's own 4 parallel requests — spacing these out
+// keeps the combined burst from tripping it.
+const AZM_BACKFILL_REQUEST_GAP_MS = 2000;
+// Real backoff after a run that didn't fully finish (e.g. got rate-limited) —
+// without this, hitting the guard below on every render (8s-ish apart) would retry
+// against a quota that's still exhausted, just generating more 429s.
+const AZM_BACKFILL_RETRY_COOLDOWN_MS = 15*60*1000;
 function mostRecentSundayIso(iso){ return addDays(iso, -dayOfWeek(iso)); }
+function sleep(ms){ return new Promise(resolve=>setTimeout(resolve, ms)); }
+// Synchronous guard against overlapping runs. render() can call this several times
+// in a burst (e.g. a few state changes firing in quick succession) before the first
+// call's first `await` even resolves — since the "already checked this week" write
+// only happens after that await, a burst without this guard launches N concurrent
+// backfill loops, each doing its own 7 requests, which is exactly what exhausted
+// the quota and produced duplicate 429s in the 2026-07-26 report.
+let azmBackfillInFlight = false;
 async function backfillMissedActiveMinutesIfDue(){
+  if(azmBackfillInFlight) return;
   const gh = state.googleHealth;
   if(!gh.refreshToken) return;
   const weekKey = mostRecentSundayIso(today());
-  if(state.lastAzmBackfillWeekKey===weekKey) return; // already checked this week
-  const token = await ensureGoogleHealthToken();
-  if(!token) return; // connection currently broken — leave weekKey unset so this retries next render instead of silently skipping the week
-  state.lastAzmBackfillWeekKey = weekKey; // mark attempted now so a per-day fetch failure below can't retry-loop every render for the rest of the week
+  if(state.lastAzmBackfillWeekKey===weekKey) return; // already fully checked this week
+  if(Date.now()-(state.lastAzmBackfillAttemptAt||0) < AZM_BACKFILL_RETRY_COOLDOWN_MS) return;
+  azmBackfillInFlight = true;
+  state.lastAzmBackfillAttemptAt = Date.now();
   saveState();
-  let anyRaised = false;
-  for(let i=1; i<=AZM_BACKFILL_LOOKBACK_DAYS; i++){
-    const iso = addDays(today(), -i);
-    try{
-      const fitbitAzm = Math.round(await fetchGoogleHealthRollup('active-zone-minutes', iso, token));
-      const d = getDay(iso);
-      // Only ever raises the stored value — never overwrites a higher number from
-      // manual entry or a workout session with a lower Fitbit figure for the same day.
-      if(fitbitAzm > d.activity.activeMin){
-        d.activity.activeMin = fitbitAzm;
-        checkGoalsAndCelebrate(iso); // no per-day score cache to refresh — dayOverallScore/activityScore read d.activity live wherever they're displayed
-        anyRaised = true;
+  try{
+    const token = await ensureGoogleHealthToken();
+    if(!token) return; // connection currently broken — the cooldown above still applies, so this won't hammer ensureGoogleHealthToken's own retry either
+    let anyRaised = false;
+    let rateLimited = false;
+    for(let i=1; i<=AZM_BACKFILL_LOOKBACK_DAYS; i++){
+      const iso = addDays(today(), -i);
+      try{
+        if(i>1) await sleep(AZM_BACKFILL_REQUEST_GAP_MS);
+        const fitbitAzm = Math.round(await fetchGoogleHealthRollup('active-zone-minutes', iso, token));
+        const d = getDay(iso);
+        // Only ever raises the stored value — never overwrites a higher number from
+        // manual entry or a workout session with a lower Fitbit figure for the same day.
+        if(fitbitAzm > d.activity.activeMin){
+          d.activity.activeMin = fitbitAzm;
+          checkGoalsAndCelebrate(iso); // no per-day score cache to refresh — dayOverallScore/activityScore read d.activity live wherever they're displayed
+          anyRaised = true;
+        }
+      }catch(e){
+        if(/HTTP 429/.test(e.message)){
+          // Every remaining day would almost certainly 429 too (same exhausted
+          // quota) — stop instead of spamming the 3-slot error log with duplicates
+          // that crowd out anything else worth seeing.
+          logError('Backfill hit Google\'s rate limit — stopping early, will retry later.');
+          rateLimited = true;
+          break;
+        }
+        logError(`Backfill (${iso}) failed: `+e.message);
       }
-    }catch(e){
-      logError(`Backfill (${iso}) failed: `+e.message);
     }
+    // Only mark the whole week "checked" if the run actually got through it —
+    // a rate-limited run should retry (after the cooldown above), not silently
+    // give up on the week's remaining days.
+    if(!rateLimited) state.lastAzmBackfillWeekKey = weekKey;
+    if(anyRaised || rateLimited) saveState();
+    if(anyRaised && !isUserTyping()) render();
+  } finally {
+    azmBackfillInFlight = false;
   }
-  if(anyRaised){ saveState(); if(!isUserTyping()) render(); }
 }
 // Label for the "Fitbit sync" readout in the Today card's top-right corner — Fitbit's
 // own data lives on Google Health now (see the block above), so this reads the same
