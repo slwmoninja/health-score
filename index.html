@@ -48,6 +48,12 @@ input,select{font-family:inherit;}
   transition:transform .08s, box-shadow .08s;}
 .iconbtn:active{transform:translateY(1px);box-shadow:0 0 0 var(--btn-lo), inset 0 1px 0 var(--btn-hi);}
 .iconbtn svg{width:18px;height:18px;}
+/* Without this, a disabled button (e.g. the top row's "Move up" reorder arrow —
+   see nutRowHtml) looks pixel-identical to an enabled one, since every other
+   .iconbtn style here is custom and the browser's native disabled dimming gets
+   overridden — clicking it silently does nothing with zero visual explanation why. */
+.iconbtn:disabled{opacity:.35;cursor:not-allowed;box-shadow:none;}
+.iconbtn:disabled:active{transform:none;}
 
 /* ---- screens ---- */
 .screen{padding:4px 16px 12px;}
@@ -417,7 +423,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.8.1';
+const APP_VERSION = '1.8.2';
 
 function defaultState(){
   return {
@@ -3916,7 +3922,7 @@ function screenNutritionTrackingCard(p){
 function nutEditRowHtml(opts){
   const displayVal = formatNutNumber(nutrientDisplayValue(opts.amountCanonical, {unit:opts.defUnit, altUnit:opts.altUnit}, opts.unit));
   return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);">
-    ${opts.checkable ? `<input type="checkbox" data-add-check="${opts.id}" ${opts.checked?'checked':''}>` : `<span style="width:18px;flex:none;"></span>`}
+    ${opts.checkable ? `<input type="checkbox" data-add-check="${opts.id}" ${opts.checked?'checked':''} ${opts.disabled?'disabled title="Always tracked"':''}>` : `<span style="width:18px;flex:none;"></span>`}
     <span style="flex:1;font-weight:600;">${opts.label}</span>
     <input type="number" step="any" data-add-amount="${opts.id}" value="${displayVal}" style="width:64px;text-align:right;">
     <button type="button" data-add-unit-toggle="${opts.id}" data-def-unit="${opts.defUnit}" data-alt-unit="${opts.altUnit}" data-unit="${opts.unit}" style="padding:3px 8px;border-radius:8px;border:1px solid var(--border);background:var(--page);color:var(--text2);font-size:12px;font-weight:600;min-width:34px;">${opts.unit}</button>
@@ -3928,30 +3934,31 @@ function renderAddNutrientModal(){
   const ng = nutrientGoalsOf(p);
   const trackedKeys = new Set(ng.extras.map(e=>e.key));
   const untracked = NUTRIENT_CATALOG.filter(c=>!trackedKeys.has(c.key));
-  const tracked = sortedExtras(p).map(e=>({e, def:NUTRIENT_CATALOG.find(c=>c.key===e.key)})).filter(x=>x.def);
-
-  const coreRows = CORE_KEYS.map(key=>{
-    const meta = CORE_NUTRIENT_META[key];
-    const row = getNutRow(p, 'core', key);
-    return nutEditRowHtml({id:`core:${key}`, checkable:false, label:meta.label, amountCanonical:row.target, unit:row.unit, defUnit:meta.unit, altUnit:meta.altUnit, suggestedCanonical:CORE_DEFAULT_FN[key](p)});
-  }).join('');
+  // Protein/Iron/Calcium are permanently tracked (required by scoring elsewhere), but
+  // still show up in the "Currently tracked" section — checkbox checked-and-disabled,
+  // same visual treatment as any other tracked nutrient — rather than pinned in their
+  // own block above everything else. combinedNutrientRows already gives core+extras in
+  // the same order the main list displays them in, so this section mirrors that order.
   const untrackedRows = untracked.map(c=>nutEditRowHtml({
     id:`extra:${c.key}`, checkable:true, checked:false, label:c.label,
     amountCanonical:c.rda(p), unit:c.unit, defUnit:c.unit, altUnit:c.altUnit, suggestedCanonical:c.rda(p)
   })).join('');
-  const trackedRows = tracked.map(({e,def})=>nutEditRowHtml({
-    id:`extra:${e.key}`, checkable:true, checked:true, label:def.label,
-    amountCanonical:e.target, unit:extraDisplayUnit(e,def), defUnit:def.unit, altUnit:def.altUnit, suggestedCanonical:def.rda(p)
-  })).join('');
+  const trackedRows = combinedNutrientRows(p).map(row=>{
+    if(row.kind==='core'){
+      return nutEditRowHtml({id:`core:${row.key}`, checkable:true, checked:true, disabled:true, label:row.label, amountCanonical:row.target, unit:row.unit, defUnit:row.canonicalUnit, altUnit:row.altUnit, suggestedCanonical:CORE_DEFAULT_FN[row.key](p)});
+    }
+    const def = NUTRIENT_CATALOG.find(c=>c.key===row.key);
+    return nutEditRowHtml({id:`extra:${row.key}`, checkable:true, checked:true, label:row.label, amountCanonical:row.target, unit:row.unit, defUnit:row.canonicalUnit, altUnit:row.altUnit, suggestedCanonical:def.rda(p)});
+  }).join('');
 
   const wrap = document.createElement('div');
   wrap.innerHTML = `
   <div class="modal-backdrop center">
     <div class="modal">
       <h2>Nutrient targets</h2>
-      ${coreRows}
       ${untrackedRows}
-      ${tracked.length ? modalSectionLabel('Currently tracked') + trackedRows : ''}
+      ${modalSectionLabel('Currently tracked')}
+      ${trackedRows}
       <div style="height:16px"></div>
       <button class="btn-primary" id="add-nut-save">Save</button>
       <div style="height:8px"></div>
