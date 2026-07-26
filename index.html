@@ -310,16 +310,36 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid var(--grid);}
 .toggle-row:first-child{border-top:none;}
 .toggle-row span{font-size:14px;font-weight:600;}
-/* ---- two toggles sharing one row (Settings > Profile Preferences), instead of
-   each getting its own full-width row ---- */
-.toggle-row-split{justify-content:flex-start;gap:28px;}
+/* ---- toggles/controls sharing one row (Settings > Profile Preferences), instead
+   of each getting its own full-width row. Sized down from the base .toggle-item/
+   .switch so the Profile Icon picker fits alongside Weight Tracking and Trend
+   Charts as a third item without wrapping on a narrow phone screen. ---- */
+.toggle-row-split{justify-content:flex-start;gap:16px;}
 .toggle-item{display:flex;align-items:center;gap:8px;}
 .toggle-item span{font-size:14px;font-weight:600;}
+.toggle-row-split .toggle-item{gap:6px;}
+.toggle-row-split .toggle-item span{font-size:12px;}
+.toggle-row-split .switch{width:34px;height:20px;}
+.toggle-row-split .switch::after{width:16px;height:16px;}
+.toggle-row-split .switch.on::after{transform:translateX(14px);}
 .switch{width:42px;height:25px;border-radius:99px;border:none;background:var(--grid);position:relative;flex:none;
   box-shadow:inset 0 1px 3px rgba(0,0,0,.15);transition:background .15s;}
 .switch::after{content:'';position:absolute;top:2px;left:2px;width:21px;height:21px;border-radius:50%;background:#fff;
   box-shadow:0 1px 3px rgba(0,0,0,.35);transition:transform .15s;}
 .switch.on{background:var(--blue);}
+/* ---- profile icon chip (Today topbar + Settings row) and its picker modal.
+   The sprite's own background-image/size/position come from the inline style
+   profileIconSpriteStyle() generates — this class only handles the chip's own
+   appearance (background-color here is the chip's frame, not the icon).
+   Rounded-rect rather than a perfect circle: the sheet's cells are wider than
+   tall (~1.47:1), so a circular frame would render as an oval. ---- */
+.profile-icon-chip{border:none;background-color:var(--surface);border-radius:14px;flex:none;padding:6px;
+  box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 var(--btn-hi), var(--shadow);transition:transform .08s;}
+.profile-icon-chip:active{transform:translateY(1px);}
+.profile-icon-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px;max-height:60vh;overflow-y:auto;}
+.profile-icon-opt{border:2px solid transparent;border-radius:12px;background:var(--surface);padding:8px;
+  display:flex;align-items:center;justify-content:center;transition:border-color .1s;}
+.profile-icon-opt.active{border-color:var(--blue);}
 .switch.on::after{transform:translateX(17px);}
 
 /* ---- progress rows (totals infographic) ---- */
@@ -395,7 +415,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.24';
+const APP_VERSION = '1.4.25';
 
 function defaultState(){
   return {
@@ -438,12 +458,21 @@ let state = loadState();
 // field — default them to every day on, matching a brand-new onboarding's default.
 // Profiles saved before "startedAt" existed likewise get backfilled, from the
 // earliest logged day if there is one (otherwise today) — see isWithinFirstWeek().
+// 'tennis'/'barbell' are ids into PROFILE_ICONS (defined further down, alongside
+// the icon-picker UI) — a plain function declaration rather than relying on that
+// const being initialized yet, since normalizeProfile runs during the very first
+// loadState() call at script startup, before the rest of the file has executed.
+function defaultProfileIconForSex(sex){ return sex==='female' ? 'tennis' : 'barbell'; }
 function normalizeProfile(profile, days){
   if(profile && !profile.trackedDays) profile.trackedDays = [true,true,true,true,true,true,true];
   if(profile && !profile.startedAt){
     const dayKeys = days ? Object.keys(days).sort() : [];
     profile.startedAt = dayKeys.length ? dayKeys[0] : today();
   }
+  // Existing profiles predate the icon picker — assign the sex-based default once,
+  // here, so it applies the moment this update is opened rather than needing a
+  // fresh onboarding. A real pick later just overwrites profile.icon normally.
+  if(profile && !profile.icon) profile.icon = defaultProfileIconForSex(profile.sex);
   return profile;
 }
 function loadState(){
@@ -2636,7 +2665,8 @@ function renderOnboarding(){
       age, sex, heightIn: height, weightLb: weight,
       goalType, ratePerWeekLb: goalType==='maintain'?0:rate, targetWeightLb: targetWeight,
       stepGoal:steps, activeMinGoal:min, calorieGoal: calGoal,
-      trackedDays: readDayCheckboxes(wrap, 'ob'), startedAt: today()
+      trackedDays: readDayCheckboxes(wrap, 'ob'), startedAt: today(),
+      icon: defaultProfileIconForSex(sex)
     };
     getDay(today()).weightLb = weight;
     saveState();
@@ -3290,6 +3320,7 @@ function screenToday(){
   return `
   <div class="topbar"><img class="topbar-logo" src="HealthScore.png" alt="Health Score">
     <div style="display:flex;align-items:center;gap:10px;">
+      ${profileIconChipHtml(28)}
       ${activeSessionBannerHtml()}
       ${installTopbarBtnHtml()}
     </div>
@@ -3570,6 +3601,70 @@ function wireConnectFitbitCard(root, prefix){
   if(connect) connect.addEventListener('click', ()=>startGoogleHealthAuth(false));
 }
 
+/* =========================================================
+   PROFILE ICON — a 5x4 sprite sheet (ProfileIcons.png) of transparent-background
+   line-art sport icons. Rendered via CSS background-position rather than 20
+   separate image files, keeping this a one-PNG, no-build-step asset like the
+   rest of the app. Index order below must match the sheet's actual left-to-
+   right, top-to-bottom layout.
+   ========================================================= */
+const PROFILE_ICONS = [
+  {id:'soccer', label:'Soccer'}, {id:'basketball', label:'Basketball'}, {id:'running', label:'Running'}, {id:'tennis', label:'Tennis'}, {id:'swimming', label:'Swimming'},
+  {id:'barbell', label:'Barbell'}, {id:'cycling', label:'Cycling'}, {id:'baseball', label:'Baseball'}, {id:'yoga', label:'Yoga'}, {id:'volleyball', label:'Volleyball'},
+  {id:'strength', label:'Strength'}, {id:'golf', label:'Golf'}, {id:'boxing', label:'Boxing'}, {id:'pushup', label:'Push-up'}, {id:'football', label:'Football'},
+  {id:'skateboard', label:'Skateboarding'}, {id:'jumprope', label:'Jump Rope'}, {id:'badminton', label:'Badminton'}, {id:'situp', label:'Sit-up'}, {id:'tabletennis', label:'Table Tennis'}
+];
+const PROFILE_ICON_SHEET_COLS = 5, PROFILE_ICON_SHEET_ROWS = 4;
+// The sheet's own per-cell width:height ratio (1408x768 over a 5x4 grid) — scaling
+// both axes by this same ratio, whatever display size is picked, is what keeps the
+// line art from stretching/squishing.
+const PROFILE_ICON_CELL_ASPECT = (1408/PROFILE_ICON_SHEET_COLS) / (768/PROFILE_ICON_SHEET_ROWS);
+function profileIconIndex(id){
+  const i = PROFILE_ICONS.findIndex(ic=>ic.id===id);
+  return i<0 ? PROFILE_ICONS.findIndex(ic=>ic.id==='barbell') : i; // stale/unknown id (or none yet) — fall back rather than render a blank/wrong cell
+}
+function profileIconLabel(id){ const ic = PROFILE_ICONS[profileIconIndex(id)]; return ic ? ic.label : ''; }
+function profileIconSpriteStyle(id, heightPx){
+  const idx = profileIconIndex(id);
+  const col = idx % PROFILE_ICON_SHEET_COLS, row = Math.floor(idx/PROFILE_ICON_SHEET_COLS);
+  const cellH = heightPx, cellW = heightPx*PROFILE_ICON_CELL_ASPECT;
+  const sheetW = cellW*PROFILE_ICON_SHEET_COLS, sheetH = cellH*PROFILE_ICON_SHEET_ROWS;
+  return `width:${cellW.toFixed(2)}px;height:${cellH.toFixed(2)}px;background-image:url('ProfileIcons.png');`+
+    `background-repeat:no-repeat;background-size:${sheetW.toFixed(2)}px ${sheetH.toFixed(2)}px;`+
+    `background-position:-${(col*cellW).toFixed(2)}px -${(row*cellH).toFixed(2)}px;`;
+}
+// The clickable avatar chip itself — used both in the Today topbar and the
+// Profile Preferences row. Always opens the same picker modal regardless of
+// where it's tapped from, so there's one selection flow, not two.
+function profileIconChipHtml(heightPx){
+  const icon = state.profile ? state.profile.icon : null;
+  return `<button class="profile-icon-chip" id="profile-icon-chip" type="button" aria-label="Change profile icon" style="${profileIconSpriteStyle(icon, heightPx)}"></button>`;
+}
+function renderProfileIconPickerModal(){
+  const current = state.profile.icon;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+  <div class="modal-backdrop center">
+    <div class="modal">
+      <h2>Choose a profile icon</h2>
+      <div class="profile-icon-grid">
+        ${PROFILE_ICONS.map(ic=>`<button class="profile-icon-opt ${ic.id===current?'active':''}" data-icon-id="${ic.id}" type="button" title="${escapeHtml(ic.label)}">
+          <span style="${profileIconSpriteStyle(ic.id, 40)}"></span>
+        </button>`).join('')}
+      </div>
+      <div style="height:6px"></div>
+      <button class="btn-secondary" id="pi-close">Close</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+  wrap.querySelectorAll('[data-icon-id]').forEach(btn=>btn.addEventListener('click', ()=>{
+    state.profile.icon = btn.dataset.iconId;
+    saveState(); wrap.remove(); render();
+  }));
+  wrap.querySelector('#pi-close').addEventListener('click', ()=>wrap.remove());
+  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) wrap.remove(); });
+}
+
 /* ---------- SETTINGS ---------- */
 function settingsCardOpenAttr(key){ return openSettingsCards.has(key) ? 'open' : ''; }
 function screenSettings(){
@@ -3584,6 +3679,7 @@ function screenSettings(){
     <details class="card profile-card" data-card-key="profile" ${settingsCardOpenAttr('profile')}>
       <summary class="card-summary"><h3>Profile Preferences</h3><span class="chevron">⌄</span></summary>
       <div class="toggle-row toggle-row-split">
+        <div class="toggle-item">${profileIconChipHtml(24)}<span>Profile Icon</span></div>
         <div class="toggle-item"><span>Weight Tracking</span><button class="switch ${state.settings.weightTrackingEnabled?'on':''}" data-setting-toggle="weightTrackingEnabled"></button></div>
         <div class="toggle-item"><span>Trend Charts</span><button class="switch ${state.settings.charts.projection?'on':''}" data-chart-toggle="projection"></button></div>
       </div>
@@ -4142,6 +4238,11 @@ function mountCharts(){
 }
 
 function attachHandlers(){
+  // Can appear on Today's topbar and/or the Settings profile row, but only one
+  // screen's markup is ever mounted at a time, so the id is never actually
+  // duplicated in the live DOM.
+  const profileIconChip = document.getElementById('profile-icon-chip');
+  if(profileIconChip) profileIconChip.addEventListener('click', renderProfileIconPickerModal);
   document.querySelectorAll('.navbtn').forEach(b=>b.addEventListener('click', ()=>goToTab(b.dataset.tab)));
   document.querySelectorAll('[data-quick-nav]').forEach(b=>b.addEventListener('click', e=>{
     e.stopPropagation(); goToTab(b.dataset.quickNav, b.dataset.logFocus||null);
@@ -4451,7 +4552,8 @@ function attachHandlers(){
       activeMinGoal: Number(document.getElementById('s-min').value)||30,
       calorieGoal: Number(document.getElementById('s-calgoal').value)||null,
       trackedDays: readDayCheckboxes(document, 's'),
-      startedAt: state.profile.startedAt
+      startedAt: state.profile.startedAt,
+      icon: state.profile.icon // this form has no icon field of its own — preserve whatever the picker last set, don't let this full-object rebuild silently wipe it
     };
     if(wasWithinFirstWeek) backfillFirstWeekWeight(oldWeight, newWeight);
     // A genuinely new target/goal (e.g. picked via "Update Goal" after already
