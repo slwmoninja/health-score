@@ -422,7 +422,8 @@ function defaultState(){
     },
     googleHealth: { accessToken:null, refreshToken:null, expiresAt:0, lastSyncAt:null, email:null },
     errorLog: [], // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
-    pendingCelebration: false // a goal was hit but confetti hasn't played yet — shown on the next fresh page load
+    pendingCelebration: false, // a goal was hit but confetti hasn't played yet — shown on the next fresh page load
+    pendingReinstallToast: false // set by reinstallApp() right before its reload, shown on the next fresh page load
   };
 }
 
@@ -2784,9 +2785,20 @@ function openInstallActionsModal(){
     </div>
   </div>`;
   document.body.appendChild(wrap);
+  // The finger/mouse release that ends the long-press which opened this
+  // modal still has its own trailing "click" event to fire — and by the
+  // time it does, this backdrop is already sitting under that same point,
+  // so it would otherwise land right on the "click outside to close"
+  // handler below and close the sheet the instant it appears. Ignoring
+  // backdrop clicks in the first moment after opening (well under human
+  // reaction time, so a genuine second tap-outside is unaffected) is what
+  // keeps it open until an intentional dismiss.
+  const openedAt = Date.now();
   const close = ()=>wrap.remove();
   wrap.querySelector('#ia-close').addEventListener('click', close);
-  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) close(); });
+  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{
+    if(e.target===e.currentTarget && Date.now()-openedAt>350) close();
+  });
   wrap.querySelector('#ia-reinstall').addEventListener('click', ()=>{ close(); reinstallApp(); });
   wrap.querySelector('#ia-uninstall').addEventListener('click', ()=>{ close(); uninstallApp(); });
 }
@@ -2807,6 +2819,8 @@ function reinstallApp(){
   if(window.caches && caches.keys){
     caches.keys().then(keys=>keys.forEach(k=>caches.delete(k)));
   }
+  state.pendingReinstallToast = true;
+  saveState();
   location.href = location.pathname + '?_reinstall=' + Date.now();
 }
 // No web API lets a page force-remove its own Home Screen/taskbar shortcut —
@@ -4303,6 +4317,17 @@ if(state.pendingCelebration){
   state.pendingCelebration = false;
   saveState();
   fireConfetti();
+}
+// Re-Install's own reload lands here — see reinstallApp(). Surfaced as a
+// toast (not a blocking modal, since the whole point of Re-Install is not
+// stopping to explain itself) reminding that the Home Screen/taskbar icon
+// image is only ever captured once, at the OS level, when the shortcut is
+// first added — a reload alone, however "fresh," cannot make Android/Chrome
+// re-fetch it, so the old icon sticking around after this isn't a bug.
+if(state.pendingReinstallToast){
+  state.pendingReinstallToast = false;
+  saveState();
+  showToast('Code refreshed. To see a new icon, remove the Health Score shortcut and add it again.', 'good');
 }
 // sw.js is registered further down purely to make the site properly
 // installable (for storage-durability purposes, see the persist() block
