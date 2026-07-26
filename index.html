@@ -417,7 +417,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.4.27';
+const APP_VERSION = '1.4.28';
 
 function defaultState(){
   return {
@@ -3611,10 +3611,10 @@ function wireConnectFitbitCard(root, prefix){
    right, top-to-bottom layout.
    ========================================================= */
 const PROFILE_ICONS = [
-  {id:'soccer', label:'Soccer'}, {id:'basketball', label:'Basketball'}, {id:'running', label:'Running'}, {id:'tennis', label:'Tennis'}, {id:'swimming', label:'Swimming'},
-  {id:'barbell', label:'Barbell'}, {id:'cycling', label:'Cycling'}, {id:'baseball', label:'Baseball'}, {id:'yoga', label:'Yoga'}, {id:'volleyball', label:'Volleyball'},
-  {id:'strength', label:'Strength'}, {id:'golf', label:'Golf'}, {id:'boxing', label:'Boxing'}, {id:'pushup', label:'Push-up'}, {id:'football', label:'Football'},
-  {id:'skateboard', label:'Skateboarding'}, {id:'jumprope', label:'Jump Rope'}, {id:'badminton', label:'Badminton'}, {id:'situp', label:'Sit-up'}, {id:'tabletennis', label:'Table Tennis'}
+  {id:'running', label:'Running'}, {id:'soccer', label:'Soccer'}, {id:'tennis', label:'Tennis'}, {id:'basketball', label:'Basketball'}, {id:'whistle', label:'Whistle'},
+  {id:'barbell', label:'Barbell'}, {id:'kettlebell', label:'Kettlebell'}, {id:'yogamat', label:'Yoga Mat'}, {id:'dumbbell', label:'Dumbbell'}, {id:'stopwatch', label:'Stopwatch'},
+  {id:'baseball', label:'Baseball'}, {id:'hockey', label:'Hockey'}, {id:'boxing', label:'Boxing'}, {id:'badminton', label:'Badminton'}, {id:'golf', label:'Golf'},
+  {id:'swimming', label:'Swimming'}, {id:'jumprope', label:'Jump Rope'}, {id:'cycling', label:'Cycling'}, {id:'football', label:'Football'}, {id:'elliptical', label:'Elliptical'}
 ];
 const PROFILE_ICON_SHEET_COLS = 5, PROFILE_ICON_SHEET_ROWS = 4;
 // The sheet's own per-cell width:height ratio (1408x768 over a 5x4 grid) — scaling
