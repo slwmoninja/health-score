@@ -423,7 +423,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.8.2';
+const APP_VERSION = '1.9.0';
 
 function defaultState(){
   return {
@@ -2458,12 +2458,24 @@ const CORE_NUTRIENT_META = {
 };
 const CORE_DEFAULT_FN = {protein: defaultProteinG, iron: defaultIronRDA, calcium: defaultCalciumRDA};
 const CORE_KEYS = ['protein','iron','calcium'];
+// Protein/Iron/Calcium are removable/re-addable exactly like any extra — presence is
+// tracking, same rule as extras — via nutrientGoals.coreHidden (an array of hidden
+// core keys) rather than the extras array, since their override/default-formula
+// storage stays in dedicated fields (proteinOverride etc.) used elsewhere in the app
+// (dailyTargets still needs a protein figure internally for the carb/fat split even
+// when the row itself is hidden from view). Anywhere else Protein/Iron/Calcium are
+// unconditionally rendered (openTotalsModal, openNutritionModal, screenHistory,
+// nutrientShortfallTips) checks isCoreTracked first, the same way those spots already
+// check enabledExtraNutrients for the extras.
+function isCoreTracked(p, key){
+  return !(nutrientGoalsOf(p).coreHidden||[]).includes(key);
+}
 // One combined, order-sorted list of every row Settings > Nutrition Tracking shows —
-// Protein/Iron/Calcium plus every extra — so reordering/unit-editing is a single
-// mechanism instead of two. `order`/`unit` for the core three live directly on
-// nutrientGoals (coreOrder/coreUnit keyed by name) rather than in the extras array,
-// since they aren't removable/toggleable extras entries; both default gracefully
-// (array position / canonical unit) when absent, so no migration step is needed.
+// Protein/Iron/Calcium plus every extra — so reordering/unit-editing/removal is a
+// single mechanism instead of two. `order`/`unit` for the core three live directly on
+// nutrientGoals (coreOrder/coreUnit keyed by name) rather than in the extras array;
+// all three (order/unit/hidden) default gracefully when absent, so no migration step
+// is needed for profiles saved before this existed.
 function combinedNutrientRows(p){
   const ng = nutrientGoalsOf(p);
   const coreOrder = ng.coreOrder || {};
@@ -2477,7 +2489,7 @@ function combinedNutrientRows(p){
       unit: coreUnit[key] || meta.unit,
       target: override!=null ? override : CORE_DEFAULT_FN[key](p)
     };
-  });
+  }).filter(row=>isCoreTracked(p, row.key));
   const extras = sortedExtras(p).map(e=>{
     const def = NUTRIENT_CATALOG.find(c=>c.key===e.key);
     if(!def) return null;
@@ -2590,15 +2602,15 @@ function periodNutrientTotals(dates){
 // the built-in three.
 function nutrientShortfallTips(totals){
   const tips = [];
-  if(totals.proteinGoal>0 && totals.protein < totals.proteinGoal*0.9){
+  if(isCoreTracked(state.profile,'protein') && totals.proteinGoal>0 && totals.protein < totals.proteinGoal*0.9){
     const gap = Math.round(totals.proteinGoal-totals.protein);
     tips.push(`Protein: ${hl(gap+'g')} short > Greek yogurt, eggs, chicken breast.`);
   }
-  if(totals.ironGoal>0 && totals.iron < totals.ironGoal*0.9){
+  if(isCoreTracked(state.profile,'iron') && totals.ironGoal>0 && totals.iron < totals.ironGoal*0.9){
     const gap = (totals.ironGoal-totals.iron).toFixed(1);
     tips.push(`Iron: ${hl(gap+'mg')} short > red meat, spinach, lentils.`);
   }
-  if(totals.calciumGoal>0 && totals.calcium < totals.calciumGoal*0.9){
+  if(isCoreTracked(state.profile,'calcium') && totals.calciumGoal>0 && totals.calcium < totals.calciumGoal*0.9){
     const gap = Math.round(totals.calciumGoal-totals.calcium);
     tips.push(`Calcium: ${hl(gap+'mg')} short > milk, yogurt, leafy greens.`);
   }
@@ -3202,11 +3214,11 @@ function openTotalsModal(){
     ${progRow('Calories', totals.kcal, targets.kcal, '', 'var(--good)', calorieGoalBreakdown(targets.kcal))}
     ${progRow(`Steps <span style="background:var(--critical);color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px;margin-left:4px;">${(d.activity.distanceMi||0).toFixed(1)} mi</span>`, d.activity.steps, p.stepGoal, '', 'var(--critical)')}
     ${progRow('Active min', effectiveActiveMin(t), p.activeMinGoal, '', 'var(--critical)')}
-    ${progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)')}
+    ${isCoreTracked(p,'protein') ? progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)') : ''}
     ${progRow('Carbs', totals.carbs, targets.carbG, 'g', 'var(--yellow)')}
     ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--magenta)')}
-    ${progRow('Iron', totals.iron, ironRDA(p), 'mg', 'var(--brown)')}
-    ${progRow('Calcium', totals.calcium, calciumRDA(p), 'mg', 'var(--muted)')}
+    ${isCoreTracked(p,'iron') ? progRow('Iron', totals.iron, ironRDA(p), 'mg', 'var(--brown)') : ''}
+    ${isCoreTracked(p,'calcium') ? progRow('Calcium', totals.calcium, calciumRDA(p), 'mg', 'var(--muted)') : ''}
     ${enabledExtraNutrients(p).map(e=>{
       const def = NUTRIENT_CATALOG.find(c=>c.key===e.key);
       const dUnit = extraDisplayUnit(e, def);
@@ -3247,9 +3259,9 @@ function openNutritionModal(){
     ${bigStatRow(Math.round(totals.kcal).toLocaleString(), 'Calories today', `/ ${calorieGoalBreakdown(targets.kcal)}`)}
     ${bigStatRow(Math.round(week.consumed).toLocaleString(), 'Calories this week', `/ ${calorieGoalBreakdown(week.goal)}`)}
     ${bigStatRow(Math.round(month.consumed).toLocaleString(), 'Calories this month', `/ ${calorieGoalBreakdown(month.goal)}`)}
-    ${bigStatRow(Math.round(totals.protein), 'Protein (g)', `/ ${targets.proteinG}g target`)}
-    ${bigStatRow(totals.iron.toFixed(1), 'Iron (mg)', `/ ${ironRDA(p)}mg RDA`)}
-    ${bigStatRow(Math.round(totals.calcium), 'Calcium (mg)', `/ ${calciumRDA(p)}mg RDA`)}
+    ${isCoreTracked(p,'protein') ? bigStatRow(Math.round(totals.protein), 'Protein (g)', `/ ${targets.proteinG}g target`) : ''}
+    ${isCoreTracked(p,'iron') ? bigStatRow(totals.iron.toFixed(1), 'Iron (mg)', `/ ${ironRDA(p)}mg RDA`) : ''}
+    ${isCoreTracked(p,'calcium') ? bigStatRow(Math.round(totals.calcium), 'Calcium (mg)', `/ ${calciumRDA(p)}mg RDA`) : ''}
     ${enabledExtraNutrients(p).map(e=>{
       const def = NUTRIENT_CATALOG.find(c=>c.key===e.key);
       const dUnit = extraDisplayUnit(e, def);
@@ -3735,9 +3747,9 @@ function screenHistory(){
 
     <div class="card">
       <h3>Nutrition</h3>
-      ${progRow('Protein', nutrientTotals.protein, nutrientTotals.proteinGoal, 'g', 'var(--violet)')}
-      ${progRow('Iron', nutrientTotals.iron, nutrientTotals.ironGoal, 'mg', 'var(--brown)')}
-      ${progRow('Calcium', nutrientTotals.calcium, nutrientTotals.calciumGoal, 'mg', 'var(--muted)')}
+      ${isCoreTracked(state.profile,'protein') ? progRow('Protein', nutrientTotals.protein, nutrientTotals.proteinGoal, 'g', 'var(--violet)') : ''}
+      ${isCoreTracked(state.profile,'iron') ? progRow('Iron', nutrientTotals.iron, nutrientTotals.ironGoal, 'mg', 'var(--brown)') : ''}
+      ${isCoreTracked(state.profile,'calcium') ? progRow('Calcium', nutrientTotals.calcium, nutrientTotals.calciumGoal, 'mg', 'var(--muted)') : ''}
       ${Object.keys(nutrientTotals.extras).map(key=>{
         const def = NUTRIENT_CATALOG.find(c=>c.key===key);
         const {total, goal, unit} = nutrientTotals.extras[key];
@@ -3933,19 +3945,30 @@ function renderAddNutrientModal(){
   const p = state.profile;
   const ng = nutrientGoalsOf(p);
   const trackedKeys = new Set(ng.extras.map(e=>e.key));
-  const untracked = NUTRIENT_CATALOG.filter(c=>!trackedKeys.has(c.key));
-  // Protein/Iron/Calcium are permanently tracked (required by scoring elsewhere), but
-  // still show up in the "Currently tracked" section — checkbox checked-and-disabled,
-  // same visual treatment as any other tracked nutrient — rather than pinned in their
-  // own block above everything else. combinedNutrientRows already gives core+extras in
-  // the same order the main list displays them in, so this section mirrors that order.
-  const untrackedRows = untracked.map(c=>nutEditRowHtml({
-    id:`extra:${c.key}`, checkable:true, checked:false, label:c.label,
-    amountCanonical:c.rda(p), unit:c.unit, defUnit:c.unit, altUnit:c.altUnit, suggestedCanonical:c.rda(p)
-  })).join('');
-  const trackedRows = combinedNutrientRows(p).map(row=>{
+  const untrackedCatalog = NUTRIENT_CATALOG.filter(c=>!trackedKeys.has(c.key));
+  const untrackedCore = CORE_KEYS.filter(key=>!isCoreTracked(p, key));
+  // Protein/Iron/Calcium are removable/re-addable exactly like any extra — see
+  // isCoreTracked — so they show up in whichever section (untracked/tracked) matches
+  // their current state, same as everything else. combinedNutrientRows already gives
+  // core+extras in the same order the main list displays them in, so the "Currently
+  // tracked" section mirrors that order.
+  const untrackedRows = [
+    ...untrackedCore.map(key=>{
+      const meta = CORE_NUTRIENT_META[key];
+      const override = ng[key+'Override'];
+      const unit = (ng.coreUnit && ng.coreUnit[key]) || meta.unit;
+      const target = override!=null ? override : CORE_DEFAULT_FN[key](p);
+      return nutEditRowHtml({id:`core:${key}`, checkable:true, checked:false, label:meta.label, amountCanonical:target, unit, defUnit:meta.unit, altUnit:meta.altUnit, suggestedCanonical:CORE_DEFAULT_FN[key](p)});
+    }),
+    ...untrackedCatalog.map(c=>nutEditRowHtml({
+      id:`extra:${c.key}`, checkable:true, checked:false, label:c.label,
+      amountCanonical:c.rda(p), unit:c.unit, defUnit:c.unit, altUnit:c.altUnit, suggestedCanonical:c.rda(p)
+    }))
+  ].join('');
+  const combinedTracked = combinedNutrientRows(p);
+  const trackedRows = combinedTracked.map(row=>{
     if(row.kind==='core'){
-      return nutEditRowHtml({id:`core:${row.key}`, checkable:true, checked:true, disabled:true, label:row.label, amountCanonical:row.target, unit:row.unit, defUnit:row.canonicalUnit, altUnit:row.altUnit, suggestedCanonical:CORE_DEFAULT_FN[row.key](p)});
+      return nutEditRowHtml({id:`core:${row.key}`, checkable:true, checked:true, label:row.label, amountCanonical:row.target, unit:row.unit, defUnit:row.canonicalUnit, altUnit:row.altUnit, suggestedCanonical:CORE_DEFAULT_FN[row.key](p)});
     }
     const def = NUTRIENT_CATALOG.find(c=>c.key===row.key);
     return nutEditRowHtml({id:`extra:${row.key}`, checkable:true, checked:true, label:row.label, amountCanonical:row.target, unit:row.unit, defUnit:row.canonicalUnit, altUnit:row.altUnit, suggestedCanonical:def.rda(p)});
@@ -3957,8 +3980,7 @@ function renderAddNutrientModal(){
     <div class="modal">
       <h2>Nutrient targets</h2>
       ${untrackedRows}
-      ${modalSectionLabel('Currently tracked')}
-      ${trackedRows}
+      ${combinedTracked.length ? modalSectionLabel('Currently tracked') + trackedRows : ''}
       <div style="height:16px"></div>
       <button class="btn-primary" id="add-nut-save">Save</button>
       <div style="height:8px"></div>
@@ -3998,9 +4020,13 @@ function renderAddNutrientModal(){
   const saveBtn = wrap.querySelector('#add-nut-save');
   if(saveBtn) saveBtn.addEventListener('click', ()=>{
     const ng2 = nutrientGoalsOf(state.profile);
+    const hiddenCore = new Set(ng2.coreHidden||[]);
     CORE_KEYS.forEach(key=>{
       const id = `core:${key}`;
       const meta = CORE_NUTRIENT_META[key];
+      const cb = wrap.querySelector(`[data-add-check="${id}"]`);
+      if(cb && !cb.checked){ hiddenCore.add(key); return; } // unchecked -> stop tracking, don't bother saving its amount
+      hiddenCore.delete(key);
       const amountInput = wrap.querySelector(`[data-add-amount="${id}"]`);
       const unitBtn = wrap.querySelector(`[data-add-unit-toggle="${id}"]`);
       const unit = unitBtn ? unitBtn.dataset.unit : meta.unit;
@@ -4008,6 +4034,7 @@ function renderAddNutrientModal(){
       if(!isNaN(displayVal)) setRowTarget(ng2, 'core', key, nutrientCanonicalValue(displayVal, {unit:meta.unit, altUnit:meta.altUnit}, unit));
       setRowUnit(ng2, 'core', key, unit);
     });
+    ng2.coreHidden = Array.from(hiddenCore);
     const combined = combinedNutrientRows(state.profile);
     const minOrder = combined.length ? Math.min(...combined.map(r=>r.order)) : 0;
     const newlyChecked = [];
