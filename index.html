@@ -423,7 +423,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.9.0';
+const APP_VERSION = '1.9.1';
 
 function defaultState(){
   return {
@@ -5147,7 +5147,15 @@ if(state.pendingReinstallToast){
 // mid-typing; localStorage data itself is untouched by a reload either way,
 // since every change is already saved as it happens (see saveState() calls
 // throughout).
-let deployedVersionTag = null;
+// Persisted (not just in-memory) since sw.js started caching the shell — without
+// this, a stale cache entry served on a brand-new session would just get silently
+// adopted as "the baseline" on the first check (nothing to compare against yet) and
+// never get corrected unless the server happened to change *again* while that tab
+// stayed open. Remembering the last confirmed tag across sessions means the very
+// first check of a new session can catch "what got served just now is already
+// behind what's on the server" instead of only catching drift that happens later.
+const DEPLOYED_TAG_KEY = 'hs_deployed_tag';
+let deployedVersionTag = (function(){ try{ return localStorage.getItem(DEPLOYED_TAG_KEY); }catch(e){ return null; } })();
 // Returns a status string so callers that want feedback (pull-to-refresh) can
 // react — existing callers (the interval below, visibilitychange) just ignore it.
 async function checkForUpdate(){
@@ -5155,9 +5163,17 @@ async function checkForUpdate(){
     const res = await fetch(location.pathname+'?_='+Date.now(), {cache:'no-store', method:'HEAD'});
     const tag = res.headers.get('etag') || res.headers.get('last-modified');
     if(!tag) return 'unknown';
-    if(deployedVersionTag===null){ deployedVersionTag = tag; return 'up-to-date'; } // first check just records the baseline
+    // Only true if this device has genuinely never checked before — nothing stale
+    // to correct in that case, so just record the baseline.
+    if(deployedVersionTag===null){
+      deployedVersionTag = tag;
+      try{ localStorage.setItem(DEPLOYED_TAG_KEY, tag); }catch(e){}
+      return 'up-to-date';
+    }
     if(tag===deployedVersionTag) return 'up-to-date';
     if(isUserTyping()) return 'deferred'; // try again next check instead of interrupting active input
+    deployedVersionTag = tag;
+    try{ localStorage.setItem(DEPLOYED_TAG_KEY, tag); }catch(e){}
     location.reload();
     return 'reloading';
   }catch(e){ return 'offline'; } // offline or blocked — silently skip, next successful check catches up
