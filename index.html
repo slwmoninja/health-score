@@ -352,12 +352,6 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .prog-top .v{font-weight:700;}
 .prog-track{height:8px;border-radius:99px;background:var(--grid);overflow:hidden;box-shadow:inset 0 1px 2px rgba(0,0,0,.12);}
 .prog-fill{height:100%;border-radius:99px;transition:width .3s;}
-/* ---- Settings > Nutrition Tracking's inline editable target, sitting inside a
-   .prog-top .v the same way the plain text target does everywhere else ---- */
-.nut-target-input{width:3.6em;font:inherit;font-weight:700;color:inherit;text-align:right;
-  background:transparent;border:none;border-bottom:1px dashed var(--axis);padding:0 1px;-moz-appearance:textfield;}
-.nut-target-input::-webkit-inner-spin-button,.nut-target-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}
-.nut-target-input:focus{outline:none;border-bottom-color:var(--blue);}
 
 /* ---- inline stat (This Week/Month score, shown next to the card title) ---- */
 .card-head .inline-stat{font-size:14px;font-weight:700;white-space:nowrap;}
@@ -423,7 +417,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.8.0';
 
 function defaultState(){
   return {
@@ -2419,19 +2413,22 @@ function nutrientCanonicalValue(displayVal, def, displayUnit){ return displayUni
 // to the catalog's canonical unit rather than needing a migration step for it.
 function extraDisplayUnit(e, def){ return e.unit || (def && def.unit); }
 // {proteinOverride, ironOverride, calciumOverride}: null = use the suggested/computed
-// default. extras: [{key, target, enabled, order, unit}] — nutrients added from
-// NUTRIENT_CATALOG via Settings > Nutrition Tracking; unchecking `enabled` (rather
-// than removing) stops it counting toward daily/weekly/monthly totals without losing
-// the target the person set. `order` controls display order everywhere in the app,
-// not just in Settings — see sortedExtras/enabledExtraNutrients.
+// default. extras: [{key, target, order, unit}] — nutrients added from
+// NUTRIENT_CATALOG via the 🔧 modal; presence in this array is what makes one
+// tracked, so removing (unchecking there, or via combinedNutrientRows) is the only
+// on/off state. `order` controls display order everywhere in the app, not just in
+// Settings — see sortedExtras/enabledExtraNutrients.
 function nutrientGoalsOf(p){
   return (p && p.nutrientGoals) || {proteinOverride:null, ironOverride:null, calciumOverride:null, extras:[]};
 }
 function sortedExtras(p){
   return nutrientGoalsOf(p).extras.slice().sort((a,b)=>(a.order||0)-(b.order||0));
 }
+// Presence in extras means tracked — there's no separate on/off state anymore
+// (removing IS the "stop tracking" action, via the 🔧 modal's checkbox or the
+// main list... see screenNutritionTrackingCard/renderAddNutrientModal).
 function enabledExtraNutrients(p){
-  return sortedExtras(p).filter(e=>e.enabled);
+  return sortedExtras(p);
 }
 // g/kg multiplier scales with weight goal, not just body weight — a calorie deficit
 // (lose) needs more protein to protect lean mass, and building muscle (gain) also
@@ -2443,6 +2440,69 @@ function defaultProteinG(p){
 }
 function defaultIronRDA(p){ return p.sex==='male' ? 8 : 18; }
 function defaultCalciumRDA(p){ const olderThreshold = p.sex==='male' ? 71 : 51; return p.age>=olderThreshold ? 1200 : 1000; }
+// Same shape as a NUTRIENT_CATALOG entry (label/color/unit/altUnit) so Protein/Iron/
+// Calcium can share the same rendering + unit-conversion code as the extras in
+// Settings > Nutrition Tracking, even though their target storage (a dedicated
+// override field, not an extras-array entry) and default-value formula (weight/sex/
+// age-based, not a flat rda(p)) stay separate.
+const CORE_NUTRIENT_META = {
+  protein: {label:'Protein', color:'var(--violet)', unit:'g', altUnit:'mg'},
+  iron:    {label:'Iron',    color:'var(--brown)',  unit:'mg', altUnit:'g'},
+  calcium: {label:'Calcium', color:'var(--muted)',  unit:'mg', altUnit:'g'}
+};
+const CORE_DEFAULT_FN = {protein: defaultProteinG, iron: defaultIronRDA, calcium: defaultCalciumRDA};
+const CORE_KEYS = ['protein','iron','calcium'];
+// One combined, order-sorted list of every row Settings > Nutrition Tracking shows —
+// Protein/Iron/Calcium plus every extra — so reordering/unit-editing is a single
+// mechanism instead of two. `order`/`unit` for the core three live directly on
+// nutrientGoals (coreOrder/coreUnit keyed by name) rather than in the extras array,
+// since they aren't removable/toggleable extras entries; both default gracefully
+// (array position / canonical unit) when absent, so no migration step is needed.
+function combinedNutrientRows(p){
+  const ng = nutrientGoalsOf(p);
+  const coreOrder = ng.coreOrder || {};
+  const coreUnit = ng.coreUnit || {};
+  const core = CORE_KEYS.map((key,i)=>{
+    const meta = CORE_NUTRIENT_META[key];
+    const override = ng[key+'Override'];
+    return {
+      kind:'core', key, order: coreOrder[key]!=null ? coreOrder[key] : i,
+      label: meta.label, color: meta.color, canonicalUnit: meta.unit, altUnit: meta.altUnit,
+      unit: coreUnit[key] || meta.unit,
+      target: override!=null ? override : CORE_DEFAULT_FN[key](p)
+    };
+  });
+  const extras = sortedExtras(p).map(e=>{
+    const def = NUTRIENT_CATALOG.find(c=>c.key===e.key);
+    if(!def) return null;
+    return {
+      kind:'extra', key:e.key, order: e.order||0,
+      label: def.label, color: def.color, canonicalUnit: def.unit, altUnit: def.altUnit,
+      unit: extraDisplayUnit(e, def), target: e.target
+    };
+  }).filter(Boolean);
+  return [...core, ...extras].sort((a,b)=>a.order-b.order);
+}
+function getNutRow(p, kind, key){
+  return combinedNutrientRows(p).find(r=>r.kind===kind && r.key===key);
+}
+function setRowOrder(ng, kind, key, newOrder){
+  if(kind==='core'){ ng.coreOrder = ng.coreOrder||{}; ng.coreOrder[key] = newOrder; }
+  else { const e = ng.extras.find(x=>x.key===key); if(e) e.order = newOrder; }
+}
+function setRowUnit(ng, kind, key, unit){
+  if(kind==='core'){ ng.coreUnit = ng.coreUnit||{}; ng.coreUnit[key] = unit; }
+  else { const e = ng.extras.find(x=>x.key===key); if(e) e.unit = unit; }
+}
+function setRowTarget(ng, kind, key, canonicalVal){
+  if(kind==='core'){
+    if(key==='protein') ng.proteinOverride = canonicalVal;
+    else if(key==='iron') ng.ironOverride = canonicalVal;
+    else if(key==='calcium') ng.calciumOverride = canonicalVal;
+  } else {
+    const e = ng.extras.find(x=>x.key===key); if(e) e.target = canonicalVal;
+  }
+}
 function dailyTargets(p){
   const kcal = Math.round((p.calorieGoal!=null && p.calorieGoal>0) ? p.calorieGoal : suggestedCalorieGoal(p));
   const proteinOverride = nutrientGoalsOf(p).proteinOverride;
@@ -3815,81 +3875,83 @@ function settingsCardOpenAttr(key){ return openSettingsCards.has(key) ? 'open' :
 // separate "Save" step) so what's on screen always matches what's stored, and
 // since Today/Trends/etc. all read through enabledExtraNutrients (which sorts by
 // `order`), edits here show up everywhere else in the app right away.
+// Main view is read-only except for reordering — every other edit (amount, unit,
+// add/remove) lives in the 🔧 modal below.
+function nutRowHtml(row, idx, total, totals){
+  const defLike = {unit: row.canonicalUnit, altUnit: row.altUnit};
+  const cur = nutrientDisplayValue(totals[row.key]||0, defLike, row.unit);
+  const tgt = nutrientDisplayValue(row.target, defLike, row.unit);
+  const pct = clamp(tgt>0 ? (cur/tgt*100) : 0, 0, 100);
+  const rowId = `${row.kind}:${row.key}`;
+  return `<div class="prog-row">
+    <div class="prog-top">
+      <span class="l">${row.label}</span>
+      <span class="v">${Math.round(cur)}${row.unit} <span class="muted">/ ${formatNutNumber(tgt)}${row.unit}</span></span>
+    </div>
+    <div class="prog-track"><div class="prog-fill" style="width:${pct}%;background:${row.color}"></div></div>
+    <div style="display:flex;gap:4px;margin-top:6px;">
+      <button class="iconbtn" style="width:30px;height:30px;" data-nut-move="${rowId}:up" ${idx===0?'disabled':''} title="Move up">▲</button>
+      <button class="iconbtn" style="width:30px;height:30px;" data-nut-move="${rowId}:down" ${idx===total-1?'disabled':''} title="Move down">▼</button>
+    </div>
+  </div>`;
+}
 function screenNutritionTrackingCard(p){
-  const ng = nutrientGoalsOf(p);
   const totals = dayTotals(today());
-  const extras = sortedExtras(p);
-  const coreRow = (label, current, targetVal, unit, color, coreKey)=>{
-    const pct = clamp(targetVal>0 ? (current/targetVal*100) : 0, 0, 100);
-    return `<div class="prog-row">
-      <div class="prog-top">
-        <span class="l">${label}</span>
-        <span class="v">${Math.round(current)}${unit} <span class="muted">/</span> <input type="number" step="any" class="nut-target-input" data-nut-core="${coreKey}" value="${formatNutNumber(targetVal)}">${unit}</span>
-      </div>
-      <div class="prog-track"><div class="prog-fill" style="width:${pct}%;background:${color}"></div></div>
-    </div>`;
-  };
-  const extraRow = (e, i)=>{
-    const def = NUTRIENT_CATALOG.find(c=>c.key===e.key);
-    if(!def) return '';
-    const dUnit = extraDisplayUnit(e, def);
-    const cur = nutrientDisplayValue(totals[e.key]||0, def, dUnit);
-    const tgt = nutrientDisplayValue(e.target, def, dUnit);
-    const pct = clamp(tgt>0 ? (cur/tgt*100) : 0, 0, 100);
-    const altUnitOf = dUnit===def.unit ? def.altUnit : def.unit;
-    return `<div class="prog-row" style="opacity:${e.enabled?1:.55};">
-      <div class="prog-top">
-        <span class="l" style="display:flex;align-items:center;gap:8px;">
-          <button class="switch" style="width:34px;height:20px;flex:none;${e.enabled?'':'background:var(--grid);'}" data-nut-toggle="${e.key}"></button>
-          ${def.label}
-        </span>
-        <span class="v">${Math.round(cur)}${dUnit} <span class="muted">/</span> <input type="number" step="any" class="nut-target-input" data-nut-target="${e.key}" value="${formatNutNumber(tgt)}">${dUnit}</span>
-      </div>
-      <div class="prog-track"><div class="prog-fill" style="width:${pct}%;background:${def.color}"></div></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
-        <div style="display:flex;gap:4px;">
-          <button class="iconbtn" style="width:30px;height:30px;" data-nut-move="${e.key}:up" ${i===0?'disabled':''} title="Move up">▲</button>
-          <button class="iconbtn" style="width:30px;height:30px;" data-nut-move="${e.key}:down" ${i===extras.length-1?'disabled':''} title="Move down">▼</button>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <button type="button" style="padding:4px 10px;border-radius:8px;border:1px solid var(--border);background:var(--page);color:var(--text2);font-size:12px;font-weight:600;" data-nut-unit="${e.key}" title="Switch to ${altUnitOf}">${dUnit}</button>
-          <button class="iconbtn" style="width:30px;height:30px;" data-nut-remove="${e.key}" title="Remove">✕</button>
-        </div>
-      </div>
-    </div>`;
-  };
-  const availableToAdd = NUTRIENT_CATALOG.filter(c=>!ng.extras.some(e=>e.key===c.key));
+  const rows = combinedNutrientRows(p);
   return `
     <details class="card" data-card-key="nutrition" ${settingsCardOpenAttr('nutrition')}>
       <summary class="card-summary">
-        <div class="card-head"><h3>Nutrition Tracking</h3>${availableToAdd.length ? `<button class="iconbtn" id="s-nut-add-open" type="button" style="color:var(--critical);font-size:20px;font-weight:700;line-height:1;" title="Add a nutrient">+</button>` : ''}</div>
+        <div class="card-head"><h3>Nutrition Tracking</h3><button class="iconbtn" id="s-nut-add-open" type="button" style="color:var(--critical);font-size:16px;line-height:1;" title="Manage tracked nutrients">🔧</button></div>
         <span class="chevron">⌄</span>
       </summary>
-      <div class="muted" style="margin-bottom:12px;">Today's amount vs. target for everything you're tracking — edit a number, flip a switch, or reorder below; it's reflected everywhere else in the app right away.</div>
-      ${coreRow('Protein', totals.protein, ng.proteinOverride!=null ? ng.proteinOverride : defaultProteinG(p), 'g', 'var(--violet)', 'protein')}
-      ${coreRow('Iron', totals.iron, ng.ironOverride!=null ? ng.ironOverride : defaultIronRDA(p), 'mg', 'var(--brown)', 'iron')}
-      ${coreRow('Calcium', totals.calcium, ng.calciumOverride!=null ? ng.calciumOverride : defaultCalciumRDA(p), 'mg', 'var(--muted)', 'calcium')}
-      <button class="btn-secondary" id="s-nut-suggest" style="margin:2px 0 14px;">Reset to suggested</button>
-      ${extras.length ? extras.map(extraRow).join('') : `<div class="muted" style="margin:4px 0 6px;">No extra nutrients added yet — tap + above to add Vitamin C, D, and more.</div>`}
+      ${rows.map((row,i)=>nutRowHtml(row, i, rows.length, totals)).join('')}
     </details>`;
+}
+// One row template shared by every editable nutrient in the 🔧 modal — Protein/Iron/
+// Calcium (never checkable, always present), untracked catalog nutrients (checkable,
+// unchecked, suggested amount), and currently-tracked extras (checkable, checked, in
+// their current display order — see renderAddNutrientModal). The unit-toggle button
+// converts the amount input live, client-side, without a re-render; Save is what
+// actually reads/commits everything, in whichever unit each button currently shows.
+function nutEditRowHtml(opts){
+  const displayVal = formatNutNumber(nutrientDisplayValue(opts.amountCanonical, {unit:opts.defUnit, altUnit:opts.altUnit}, opts.unit));
+  return `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);">
+    ${opts.checkable ? `<input type="checkbox" data-add-check="${opts.id}" ${opts.checked?'checked':''}>` : `<span style="width:18px;flex:none;"></span>`}
+    <span style="flex:1;font-weight:600;">${opts.label}</span>
+    <input type="number" step="any" data-add-amount="${opts.id}" value="${displayVal}" style="width:64px;text-align:right;">
+    <button type="button" data-add-unit-toggle="${opts.id}" data-def-unit="${opts.defUnit}" data-alt-unit="${opts.altUnit}" data-unit="${opts.unit}" style="padding:3px 8px;border-radius:8px;border:1px solid var(--border);background:var(--page);color:var(--text2);font-size:12px;font-weight:600;min-width:34px;">${opts.unit}</button>
+    <button type="button" class="iconbtn" style="width:28px;height:28px;flex:none;" data-add-reset="${opts.id}" data-suggested="${opts.suggestedCanonical}" data-def-unit="${opts.defUnit}" data-alt-unit="${opts.altUnit}" title="Reset to suggested value?">↺</button>
+  </div>`;
 }
 function renderAddNutrientModal(){
   const p = state.profile;
   const ng = nutrientGoalsOf(p);
-  const available = NUTRIENT_CATALOG.filter(c=>!ng.extras.some(e=>e.key===c.key));
+  const trackedKeys = new Set(ng.extras.map(e=>e.key));
+  const untracked = NUTRIENT_CATALOG.filter(c=>!trackedKeys.has(c.key));
+  const tracked = sortedExtras(p).map(e=>({e, def:NUTRIENT_CATALOG.find(c=>c.key===e.key)})).filter(x=>x.def);
+
+  const coreRows = CORE_KEYS.map(key=>{
+    const meta = CORE_NUTRIENT_META[key];
+    const row = getNutRow(p, 'core', key);
+    return nutEditRowHtml({id:`core:${key}`, checkable:false, label:meta.label, amountCanonical:row.target, unit:row.unit, defUnit:meta.unit, altUnit:meta.altUnit, suggestedCanonical:CORE_DEFAULT_FN[key](p)});
+  }).join('');
+  const untrackedRows = untracked.map(c=>nutEditRowHtml({
+    id:`extra:${c.key}`, checkable:true, checked:false, label:c.label,
+    amountCanonical:c.rda(p), unit:c.unit, defUnit:c.unit, altUnit:c.altUnit, suggestedCanonical:c.rda(p)
+  })).join('');
+  const trackedRows = tracked.map(({e,def})=>nutEditRowHtml({
+    id:`extra:${e.key}`, checkable:true, checked:true, label:def.label,
+    amountCanonical:e.target, unit:extraDisplayUnit(e,def), defUnit:def.unit, altUnit:def.altUnit, suggestedCanonical:def.rda(p)
+  })).join('');
+
   const wrap = document.createElement('div');
   wrap.innerHTML = `
   <div class="modal-backdrop center">
     <div class="modal">
-      <h2>Add nutrients to track</h2>
-      <div class="sub">Check any you'd like to track — the amount is pre-filled from your profile, but you can adjust it here before saving.</div>
-      ${available.length ? available.map(c=>`
-        <label style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);">
-          <input type="checkbox" data-add-check="${c.key}">
-          <span style="flex:1;font-weight:600;">${c.label}</span>
-          <input type="number" step="any" data-add-amount="${c.key}" value="${formatNutNumber(c.rda(p))}" style="width:64px;text-align:right;">
-          <span class="muted" style="width:28px;">${c.unit}</span>
-        </label>`).join('') : `<div class="muted">You're already tracking every nutrient on the list.</div>`}
+      <h2>Nutrient targets</h2>
+      ${coreRows}
+      ${untrackedRows}
+      ${tracked.length ? modalSectionLabel('Currently tracked') + trackedRows : ''}
       <div style="height:16px"></div>
       <button class="btn-primary" id="add-nut-save">Save</button>
       <div style="height:8px"></div>
@@ -3900,18 +3962,76 @@ function renderAddNutrientModal(){
   const close = ()=>wrap.remove();
   wrap.querySelector('#add-nut-cancel').addEventListener('click', close);
   wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) close(); });
+
+  // Live, local unit conversion — no re-render, so it doesn't disturb anything else
+  // being edited elsewhere in the same modal.
+  wrap.querySelectorAll('[data-add-unit-toggle]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const id = btn.dataset.addUnitToggle;
+    const defUnit = btn.dataset.defUnit, altUnit = btn.dataset.altUnit;
+    const currentUnit = btn.dataset.unit;
+    const newUnit = currentUnit===defUnit ? altUnit : defUnit;
+    const amountInput = wrap.querySelector(`[data-add-amount="${id}"]`);
+    const canonical = nutrientCanonicalValue(Number(amountInput.value)||0, {unit:defUnit, altUnit}, currentUnit);
+    amountInput.value = formatNutNumber(nutrientDisplayValue(canonical, {unit:defUnit, altUnit}, newUnit));
+    btn.dataset.unit = newUnit;
+    btn.textContent = newUnit;
+  }));
+  // Resets just that row back to its suggested value AND its canonical unit —
+  // also live/local, same as the unit toggle above.
+  wrap.querySelectorAll('[data-add-reset]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const id = btn.dataset.addReset;
+    const suggested = Number(btn.dataset.suggested);
+    const defUnit = btn.dataset.defUnit;
+    const amountInput = wrap.querySelector(`[data-add-amount="${id}"]`);
+    const unitBtn = wrap.querySelector(`[data-add-unit-toggle="${id}"]`);
+    if(unitBtn){ unitBtn.dataset.unit = defUnit; unitBtn.textContent = defUnit; }
+    amountInput.value = formatNutNumber(suggested);
+  }));
+
   const saveBtn = wrap.querySelector('#add-nut-save');
   if(saveBtn) saveBtn.addEventListener('click', ()=>{
     const ng2 = nutrientGoalsOf(state.profile);
-    let nextOrder = ng2.extras.reduce((m,e)=>Math.max(m, e.order||0), -1)+1;
+    CORE_KEYS.forEach(key=>{
+      const id = `core:${key}`;
+      const meta = CORE_NUTRIENT_META[key];
+      const amountInput = wrap.querySelector(`[data-add-amount="${id}"]`);
+      const unitBtn = wrap.querySelector(`[data-add-unit-toggle="${id}"]`);
+      const unit = unitBtn ? unitBtn.dataset.unit : meta.unit;
+      const displayVal = Number(amountInput.value);
+      if(!isNaN(displayVal)) setRowTarget(ng2, 'core', key, nutrientCanonicalValue(displayVal, {unit:meta.unit, altUnit:meta.altUnit}, unit));
+      setRowUnit(ng2, 'core', key, unit);
+    });
+    const combined = combinedNutrientRows(state.profile);
+    const minOrder = combined.length ? Math.min(...combined.map(r=>r.order)) : 0;
+    const newlyChecked = [];
     wrap.querySelectorAll('[data-add-check]').forEach(cb=>{
-      if(!cb.checked) return;
-      const key = cb.dataset.addCheck;
+      const key = cb.dataset.addCheck.split(':')[1];
+      const id = cb.dataset.addCheck;
       const def = NUTRIENT_CATALOG.find(c=>c.key===key);
-      if(!def || ng2.extras.some(e=>e.key===key)) return;
-      const amountInput = wrap.querySelector(`[data-add-amount="${key}"]`);
-      const target = Number(amountInput.value)||def.rda(state.profile);
-      ng2.extras.push({key, target, enabled:true, order: nextOrder++, unit: def.unit});
+      if(!def) return;
+      const wasTracked = ng2.extras.some(e=>e.key===key);
+      const amountInput = wrap.querySelector(`[data-add-amount="${id}"]`);
+      const unitBtn = wrap.querySelector(`[data-add-unit-toggle="${id}"]`);
+      const unit = unitBtn ? unitBtn.dataset.unit : def.unit;
+      const displayVal = Number(amountInput.value);
+      const canonicalVal = isNaN(displayVal) ? null : nutrientCanonicalValue(displayVal, def, unit);
+      if(cb.checked){
+        if(wasTracked){
+          const entry = ng2.extras.find(e=>e.key===key);
+          if(entry){ if(canonicalVal!=null) entry.target = canonicalVal; entry.unit = unit; }
+        } else {
+          newlyChecked.push({key, canonicalVal, unit});
+        }
+      } else if(wasTracked){
+        ng2.extras = ng2.extras.filter(e=>e.key!==key);
+      }
+    });
+    // New picks go to the very top of the list (above Protein/Iron/Calcium and
+    // every existing extra), in the order they're listed here.
+    const base = minOrder - newlyChecked.length;
+    newlyChecked.forEach(({key,canonicalVal,unit}, i)=>{
+      const def = NUTRIENT_CATALOG.find(c=>c.key===key);
+      ng2.extras.push({key, target: canonicalVal!=null?canonicalVal:def.rda(state.profile), order: base+i, unit});
     });
     state.profile.nutrientGoals = ng2;
     openSettingsCards.add('nutrition');
@@ -4827,75 +4947,23 @@ function attachHandlers(){
     e.preventDefault(); // stays inside a <summary> — don't also toggle the fold
     renderAddNutrientModal();
   });
-  const nutSuggestBtn = document.getElementById('s-nut-suggest');
-  if(nutSuggestBtn) nutSuggestBtn.addEventListener('click', ()=>{
-    const ng = nutrientGoalsOf(state.profile);
-    ng.proteinOverride = null; ng.ironOverride = null; ng.calciumOverride = null;
-    state.profile.nutrientGoals = ng;
-    openSettingsCards.add('nutrition');
-    saveState(); render();
-  });
-  document.querySelectorAll('[data-nut-core]').forEach(inp=>inp.addEventListener('change', ()=>{
-    const ng = nutrientGoalsOf(state.profile);
-    const key = inp.dataset.nutCore; // 'protein'|'iron'|'calcium'
-    const val = Number(inp.value)||null;
-    if(key==='protein') ng.proteinOverride = val;
-    if(key==='iron') ng.ironOverride = val;
-    if(key==='calcium') ng.calciumOverride = val;
-    state.profile.nutrientGoals = ng;
-    openSettingsCards.add('nutrition');
-    saveState(); render();
-  }));
-  document.querySelectorAll('[data-nut-toggle]').forEach(b=>b.addEventListener('click', ()=>{
-    const ng = nutrientGoalsOf(state.profile);
-    const entry = ng.extras.find(e=>e.key===b.dataset.nutToggle);
-    if(entry) entry.enabled = !entry.enabled;
-    state.profile.nutrientGoals = ng;
-    openSettingsCards.add('nutrition');
-    saveState(); render();
-  }));
-  document.querySelectorAll('[data-nut-remove]').forEach(b=>b.addEventListener('click', ()=>{
-    const ng = nutrientGoalsOf(state.profile);
-    ng.extras = ng.extras.filter(e=>e.key!==b.dataset.nutRemove);
-    state.profile.nutrientGoals = ng;
-    openSettingsCards.add('nutrition');
-    saveState(); render();
-  }));
   // Swaps `order` with whichever neighbor is being hopped over, in the currently
-  // sorted list — simpler and conflict-free compared to letting someone type
-  // arbitrary/duplicate order numbers directly.
+  // combined+sorted list (Protein/Iron/Calcium included) — simpler and
+  // conflict-free compared to letting someone type arbitrary/duplicate numbers.
+  // This is the only edit the main Nutrition Tracking list allows directly —
+  // everything else (amounts, units, add/remove) lives in the 🔧 modal, whose
+  // own controls are wired inline in renderAddNutrientModal itself.
   document.querySelectorAll('[data-nut-move]').forEach(b=>b.addEventListener('click', ()=>{
-    const [key, dir] = b.dataset.nutMove.split(':');
+    const [kind, key, dir] = b.dataset.nutMove.split(':');
     const ng = nutrientGoalsOf(state.profile);
-    const sorted = ng.extras.slice().sort((x,y)=>(x.order||0)-(y.order||0));
-    const idx = sorted.findIndex(e=>e.key===key);
-    const swapWith = dir==='up' ? idx-1 : idx+1;
-    if(idx<0 || swapWith<0 || swapWith>=sorted.length) return;
-    const a = sorted[idx], bE = sorted[swapWith];
-    const tmp = a.order; a.order = bE.order; bE.order = tmp;
-    state.profile.nutrientGoals = ng;
-    openSettingsCards.add('nutrition');
-    saveState(); render();
-  }));
-  document.querySelectorAll('[data-nut-unit]').forEach(b=>b.addEventListener('click', ()=>{
-    const ng = nutrientGoalsOf(state.profile);
-    const key = b.dataset.nutUnit;
-    const entry = ng.extras.find(e=>e.key===key);
-    const def = NUTRIENT_CATALOG.find(c=>c.key===key);
-    if(entry && def) entry.unit = (extraDisplayUnit(entry, def)===def.unit) ? def.altUnit : def.unit;
-    state.profile.nutrientGoals = ng;
-    openSettingsCards.add('nutrition');
-    saveState(); render();
-  }));
-  document.querySelectorAll('[data-nut-target]').forEach(inp=>inp.addEventListener('change', ()=>{
-    const ng = nutrientGoalsOf(state.profile);
-    const key = inp.dataset.nutTarget;
-    const entry = ng.extras.find(e=>e.key===key);
-    const def = NUTRIENT_CATALOG.find(c=>c.key===key);
-    if(entry && def){
-      const displayVal = Number(inp.value);
-      if(!isNaN(displayVal)) entry.target = nutrientCanonicalValue(displayVal, def, extraDisplayUnit(entry, def));
-    }
+    const combined = combinedNutrientRows(state.profile);
+    const idx = combined.findIndex(r=>r.kind===kind && r.key===key);
+    const swapIdx = dir==='up' ? idx-1 : idx+1;
+    if(idx<0 || swapIdx<0 || swapIdx>=combined.length) return;
+    const a = combined[idx], b2 = combined[swapIdx];
+    const aOrder = a.order, bOrder = b2.order;
+    setRowOrder(ng, a.kind, a.key, bOrder);
+    setRowOrder(ng, b2.kind, b2.key, aOrder);
     state.profile.nutrientGoals = ng;
     openSettingsCards.add('nutrition');
     saveState(); render();
