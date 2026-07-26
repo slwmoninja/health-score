@@ -423,7 +423,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.9.1';
+const APP_VERSION = '2.0.0';
 
 function defaultState(){
   return {
@@ -2386,7 +2386,7 @@ function calorieGoalBreakdownText(dailyGoal, sexForFloorCheck){
 // activity contributed toward the weight goal is still surfaced separately,
 // see weightGoalImpact/weightGoalImpactText.
 // Typical additional nutrients offered in Settings > Nutrition Tracking, on top of
-// the always-on Protein/Iron/Calcium core three. rda(p) mirrors defaultIronRDA/
+// the Protein/Carbs/Fat/Iron/Calcium core five (see CORE_KEYS below). rda(p) mirrors defaultIronRDA/
 // defaultCalciumRDA's simplified sex/age-band style — ballpark adult RDAs (NIH ODS),
 // not full life-stage tables. `fdc` lists the matching USDA FoodData Central
 // nutrientName(s) so live-searched foods can populate this automatically.
@@ -2418,23 +2418,17 @@ function nutrientCanonicalValue(displayVal, def, displayUnit){ return displayUni
 // Legacy extras (saved before the unit toggle existed) have no `.unit` — fall back
 // to the catalog's canonical unit rather than needing a migration step for it.
 function extraDisplayUnit(e, def){ return e.unit || (def && def.unit); }
-// {proteinOverride, ironOverride, calciumOverride}: null = use the suggested/computed
-// default. extras: [{key, target, order, unit}] — nutrients added from
-// NUTRIENT_CATALOG via the 🔧 modal; presence in this array is what makes one
-// tracked, so removing (unchecking there, or via combinedNutrientRows) is the only
-// on/off state. `order` controls display order everywhere in the app, not just in
-// Settings — see sortedExtras/enabledExtraNutrients.
+// {proteinOverride, carbsOverride, fatOverride, ironOverride, calciumOverride}: null =
+// use the suggested/computed default. extras: [{key, target, order, unit}] —
+// nutrients added from NUTRIENT_CATALOG via the 🔧 modal; presence in this array is
+// what makes one tracked, so removing (unchecking there, or via the main list) is the
+// only on/off state. `order` controls display order everywhere in the app, not just
+// in Settings — see sortedExtras/combinedNutrientRows.
 function nutrientGoalsOf(p){
-  return (p && p.nutrientGoals) || {proteinOverride:null, ironOverride:null, calciumOverride:null, extras:[]};
+  return (p && p.nutrientGoals) || {proteinOverride:null, carbsOverride:null, fatOverride:null, ironOverride:null, calciumOverride:null, extras:[]};
 }
 function sortedExtras(p){
   return nutrientGoalsOf(p).extras.slice().sort((a,b)=>(a.order||0)-(b.order||0));
-}
-// Presence in extras means tracked — there's no separate on/off state anymore
-// (removing IS the "stop tracking" action, via the 🔧 modal's checkbox or the
-// main list... see screenNutritionTrackingCard/renderAddNutrientModal).
-function enabledExtraNutrients(p){
-  return sortedExtras(p);
 }
 // g/kg multiplier scales with weight goal, not just body weight — a calorie deficit
 // (lose) needs more protein to protect lean mass, and building muscle (gain) also
@@ -2446,36 +2440,45 @@ function defaultProteinG(p){
 }
 function defaultIronRDA(p){ return p.sex==='male' ? 8 : 18; }
 function defaultCalciumRDA(p){ const olderThreshold = p.sex==='male' ? 71 : 51; return p.age>=olderThreshold ? 1200 : 1000; }
-// Same shape as a NUTRIENT_CATALOG entry (label/color/unit/altUnit) so Protein/Iron/
-// Calcium can share the same rendering + unit-conversion code as the extras in
-// Settings > Nutrition Tracking, even though their target storage (a dedicated
-// override field, not an extras-array entry) and default-value formula (weight/sex/
-// age-based, not a flat rda(p)) stay separate.
+// Same shape as a NUTRIENT_CATALOG entry (label/color/unit/altUnit) so these five
+// share the same rendering + unit-conversion code as the extras in Settings >
+// Nutrition Tracking, even though their target storage (a dedicated override field,
+// not an extras-array entry) and default-value formula stay separate. Carbs/Fat's
+// "suggested" figure is whatever's left of the calorie budget after Protein (see
+// dailyTargets) rather than an independent RDA — overriding them here is purely a
+// display-target override and does NOT feed back into that internal calorie split.
 const CORE_NUTRIENT_META = {
-  protein: {label:'Protein', color:'var(--violet)', unit:'g', altUnit:'mg'},
-  iron:    {label:'Iron',    color:'var(--brown)',  unit:'mg', altUnit:'g'},
-  calcium: {label:'Calcium', color:'var(--muted)',  unit:'mg', altUnit:'g'}
+  protein: {label:'Protein', color:'var(--violet)',  unit:'g',  altUnit:'mg'},
+  carbs:   {label:'Carbs',   color:'var(--yellow)',  unit:'g',  altUnit:'mg'},
+  fat:     {label:'Fat',     color:'var(--magenta)', unit:'g',  altUnit:'mg'},
+  iron:    {label:'Iron',    color:'var(--brown)',   unit:'mg', altUnit:'g'},
+  calcium: {label:'Calcium', color:'var(--muted)',   unit:'mg', altUnit:'g'}
 };
-const CORE_DEFAULT_FN = {protein: defaultProteinG, iron: defaultIronRDA, calcium: defaultCalciumRDA};
-const CORE_KEYS = ['protein','iron','calcium'];
-// Protein/Iron/Calcium are removable/re-addable exactly like any extra — presence is
-// tracking, same rule as extras — via nutrientGoals.coreHidden (an array of hidden
-// core keys) rather than the extras array, since their override/default-formula
-// storage stays in dedicated fields (proteinOverride etc.) used elsewhere in the app
-// (dailyTargets still needs a protein figure internally for the carb/fat split even
-// when the row itself is hidden from view). Anywhere else Protein/Iron/Calcium are
-// unconditionally rendered (openTotalsModal, openNutritionModal, screenHistory,
-// nutrientShortfallTips) checks isCoreTracked first, the same way those spots already
-// check enabledExtraNutrients for the extras.
+const CORE_DEFAULT_FN = {
+  protein: defaultProteinG, carbs: p=>dailyTargets(p).carbG, fat: p=>dailyTargets(p).fatG,
+  iron: defaultIronRDA, calcium: defaultCalciumRDA
+};
+const CORE_KEYS = ['protein','carbs','fat','iron','calcium'];
+// All five are removable/re-addable exactly like any extra — presence is tracking,
+// same rule as extras — via nutrientGoals.coreHidden (an array of hidden core keys)
+// rather than the extras array, since their override/default-formula storage stays
+// in dedicated fields (proteinOverride etc.) used elsewhere in the app (dailyTargets
+// still needs a protein figure internally for the carb/fat split even when the row
+// itself is hidden from view). Anywhere else these are rendered (openTotalsModal,
+// openNutritionModal, screenHistory, nutrientShortfallTips) goes through
+// combinedNutrientRows, the same way extras always have, so order/removal/units stay
+// consistent across every screen instead of each one hardcoding its own sequence.
 function isCoreTracked(p, key){
   return !(nutrientGoalsOf(p).coreHidden||[]).includes(key);
 }
-// One combined, order-sorted list of every row Settings > Nutrition Tracking shows —
-// Protein/Iron/Calcium plus every extra — so reordering/unit-editing/removal is a
-// single mechanism instead of two. `order`/`unit` for the core three live directly on
-// nutrientGoals (coreOrder/coreUnit keyed by name) rather than in the extras array;
-// all three (order/unit/hidden) default gracefully when absent, so no migration step
-// is needed for profiles saved before this existed.
+// One combined, order-sorted list of every nutrient row the app shows anywhere
+// (Settings' main list, Today's Scorecard/Nutrition popups, Trends) — Protein/Carbs/
+// Fat/Iron/Calcium plus every extra — so reordering/unit-editing/removal done once in
+// Settings is reflected identically everywhere else, not just in Settings itself.
+// `order`/`unit` for the five core ones live directly on nutrientGoals (coreOrder/
+// coreUnit keyed by name) rather than in the extras array; all three (order/unit/
+// hidden) default gracefully when absent, so no migration step is needed for
+// profiles saved before this existed.
 function combinedNutrientRows(p){
   const ng = nutrientGoalsOf(p);
   const coreOrder = ng.coreOrder || {};
@@ -2513,11 +2516,8 @@ function setRowUnit(ng, kind, key, unit){
   else { const e = ng.extras.find(x=>x.key===key); if(e) e.unit = unit; }
 }
 function setRowTarget(ng, kind, key, canonicalVal){
-  if(kind==='core'){
-    if(key==='protein') ng.proteinOverride = canonicalVal;
-    else if(key==='iron') ng.ironOverride = canonicalVal;
-    else if(key==='calcium') ng.calciumOverride = canonicalVal;
-  } else {
+  if(kind==='core'){ ng[key+'Override'] = canonicalVal; }
+  else {
     const e = ng.extras.find(x=>x.key===key); if(e) e.target = canonicalVal;
   }
 }
@@ -2545,11 +2545,6 @@ function dayTotals(iso){
   return t;
 }
 function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
-// Standard adult RDAs — iron is notably sex-dependent (higher for menstruating women);
-// calcium steps up later in life. Simplified age bands rather than full life-stage tables.
-// Both fall back to the plain formula unless overridden in Settings > Nutrition Tracking.
-function ironRDA(p){ const ov = nutrientGoalsOf(p).ironOverride; return ov!=null ? ov : defaultIronRDA(p); }
-function calciumRDA(p){ const ov = nutrientGoalsOf(p).calciumOverride; return ov!=null ? ov : defaultCalciumRDA(p); }
 // Calories consumed vs. goal for the week so far (Monday through iso) — the goal
 // side is the same hard daily limit multiplied out, since it no longer flexes
 // with activity.
@@ -2568,61 +2563,38 @@ function monthCalorieProgress(iso){
   const goal = dailyTargets(state.profile).kcal * monthDates.length;
   return {consumed, goal};
 }
-// Protein/iron/calcium totals for a date range vs. the per-day target summed across
-// every date in range (not just logged days), matching weekCalorieProgress's approach
-// so an un-logged day pulls the period average down instead of being skipped.
+// Every tracked nutrient's total-vs-target for a date range, in the same order
+// combinedNutrientRows displays them everywhere else — summed across every date in
+// range (not just logged days), matching weekCalorieProgress's approach so an
+// un-logged day pulls the period average down instead of being skipped. Returns an
+// array (order-preserving) rather than a shape keyed by name, since that's exactly
+// what Trends' Nutrition card and nutrientShortfallTips need to render/scan in order.
 function periodNutrientTotals(dates){
   const p = state.profile;
-  const proteinTarget = dailyTargets(p).proteinG;
-  const ironTarget = ironRDA(p);
-  const calciumTarget = calciumRDA(p);
-  const enabled = enabledExtraNutrients(p);
-  let protein=0, iron=0, calcium=0;
-  const extras = {};
-  enabled.forEach(e=>{
-    const def = NUTRIENT_CATALOG.find(c=>c.key===e.key);
-    extras[e.key] = {total:0, goal: e.target*dates.length, unit: extraDisplayUnit(e, def)};
-  });
+  const list = combinedNutrientRows(p).map(row=>({...row, total:0, goal: row.target*dates.length}));
   dates.forEach(iso=>{
     const t = dayTotals(iso);
-    protein+=t.protein; iron+=t.iron; calcium+=t.calcium;
-    enabled.forEach(e=>{ extras[e.key].total += (t[e.key]||0); });
+    list.forEach(row=>{ row.total += (t[row.key]||0); });
   });
-  return {
-    protein, proteinGoal: proteinTarget*dates.length,
-    iron, ironGoal: ironTarget*dates.length,
-    calcium, calciumGoal: calciumTarget*dates.length,
-    extras
-  };
+  return list;
 }
-// Actionable, food-specific suggestions for whichever of the three fell short —
-// only surfaced for nutrients actually under target, not shown as a checklist regardless.
-// Extras (Settings > Nutrition Tracking additions) get a generic shortfall callout
-// since there's no per-nutrient food-suggestion list for those the way there is for
-// the built-in three.
-function nutrientShortfallTips(totals){
+// Actionable, food-specific suggestions for whichever tracked nutrient fell short —
+// only surfaced for ones actually under target, not shown as a checklist regardless.
+// Protein/Iron/Calcium get a food-specific hint; everything else (Carbs/Fat/extras)
+// gets a generic "short of target" callout since there's no per-nutrient
+// food-suggestion list for those.
+const NUTRIENT_SHORTFALL_HINTS = {
+  protein: 'Greek yogurt, eggs, chicken breast', iron: 'red meat, spinach, lentils', calcium: 'milk, yogurt, leafy greens'
+};
+function nutrientShortfallTips(list){
   const tips = [];
-  if(isCoreTracked(state.profile,'protein') && totals.proteinGoal>0 && totals.protein < totals.proteinGoal*0.9){
-    const gap = Math.round(totals.proteinGoal-totals.protein);
-    tips.push(`Protein: ${hl(gap+'g')} short > Greek yogurt, eggs, chicken breast.`);
-  }
-  if(isCoreTracked(state.profile,'iron') && totals.ironGoal>0 && totals.iron < totals.ironGoal*0.9){
-    const gap = (totals.ironGoal-totals.iron).toFixed(1);
-    tips.push(`Iron: ${hl(gap+'mg')} short > red meat, spinach, lentils.`);
-  }
-  if(isCoreTracked(state.profile,'calcium') && totals.calciumGoal>0 && totals.calcium < totals.calciumGoal*0.9){
-    const gap = Math.round(totals.calciumGoal-totals.calcium);
-    tips.push(`Calcium: ${hl(gap+'mg')} short > milk, yogurt, leafy greens.`);
-  }
-  Object.keys(totals.extras||{}).forEach(key=>{
-    const {total, goal, unit} = totals.extras[key];
-    if(goal<=0 || total >= goal*0.9) return;
-    const def = NUTRIENT_CATALOG.find(n=>n.key===key);
-    if(!def) return;
-    const dUnit = unit || def.unit;
-    const gap = nutrientDisplayValue(goal-total, def, dUnit);
+  list.forEach(row=>{
+    if(row.goal<=0 || row.total >= row.goal*0.9) return;
+    const defLike = {unit: row.canonicalUnit, altUnit: row.altUnit};
+    const gap = nutrientDisplayValue(row.goal-row.total, defLike, row.unit);
     const gapText = gap>=10 ? Math.round(gap) : gap.toFixed(gap<1?2:1);
-    tips.push(`${def.label}: ${hl(gapText+dUnit)} short of target.`);
+    const hint = NUTRIENT_SHORTFALL_HINTS[row.key];
+    tips.push(`${row.label}: ${hl(gapText+row.unit)} short${hint ? ' > '+hint+'.' : ' of target.'}`);
   });
   return tips;
 }
@@ -3214,15 +3186,11 @@ function openTotalsModal(){
     ${progRow('Calories', totals.kcal, targets.kcal, '', 'var(--good)', calorieGoalBreakdown(targets.kcal))}
     ${progRow(`Steps <span style="background:var(--critical);color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px;margin-left:4px;">${(d.activity.distanceMi||0).toFixed(1)} mi</span>`, d.activity.steps, p.stepGoal, '', 'var(--critical)')}
     ${progRow('Active min', effectiveActiveMin(t), p.activeMinGoal, '', 'var(--critical)')}
-    ${isCoreTracked(p,'protein') ? progRow('Protein', totals.protein, targets.proteinG, 'g', 'var(--violet)') : ''}
-    ${progRow('Carbs', totals.carbs, targets.carbG, 'g', 'var(--yellow)')}
-    ${progRow('Fat', totals.fat, targets.fatG, 'g', 'var(--magenta)')}
-    ${isCoreTracked(p,'iron') ? progRow('Iron', totals.iron, ironRDA(p), 'mg', 'var(--brown)') : ''}
-    ${isCoreTracked(p,'calcium') ? progRow('Calcium', totals.calcium, calciumRDA(p), 'mg', 'var(--muted)') : ''}
-    ${enabledExtraNutrients(p).map(e=>{
-      const def = NUTRIENT_CATALOG.find(c=>c.key===e.key);
-      const dUnit = extraDisplayUnit(e, def);
-      return progRow(def.label, nutrientDisplayValue(totals[e.key]||0, def, dUnit), nutrientDisplayValue(e.target, def, dUnit), dUnit, def.color);
+    ${combinedNutrientRows(p).map(row=>{
+      const defLike = {unit: row.canonicalUnit, altUnit: row.altUnit};
+      const cur = nutrientDisplayValue(totals[row.key]||0, defLike, row.unit);
+      const tgt = nutrientDisplayValue(row.target, defLike, row.unit);
+      return progRow(row.label, cur, tgt, row.unit, row.color);
     }).join('')}
   `);
 }
@@ -3259,15 +3227,11 @@ function openNutritionModal(){
     ${bigStatRow(Math.round(totals.kcal).toLocaleString(), 'Calories today', `/ ${calorieGoalBreakdown(targets.kcal)}`)}
     ${bigStatRow(Math.round(week.consumed).toLocaleString(), 'Calories this week', `/ ${calorieGoalBreakdown(week.goal)}`)}
     ${bigStatRow(Math.round(month.consumed).toLocaleString(), 'Calories this month', `/ ${calorieGoalBreakdown(month.goal)}`)}
-    ${isCoreTracked(p,'protein') ? bigStatRow(Math.round(totals.protein), 'Protein (g)', `/ ${targets.proteinG}g target`) : ''}
-    ${isCoreTracked(p,'iron') ? bigStatRow(totals.iron.toFixed(1), 'Iron (mg)', `/ ${ironRDA(p)}mg RDA`) : ''}
-    ${isCoreTracked(p,'calcium') ? bigStatRow(Math.round(totals.calcium), 'Calcium (mg)', `/ ${calciumRDA(p)}mg RDA`) : ''}
-    ${enabledExtraNutrients(p).map(e=>{
-      const def = NUTRIENT_CATALOG.find(c=>c.key===e.key);
-      const dUnit = extraDisplayUnit(e, def);
-      const val = nutrientDisplayValue(totals[e.key]||0, def, dUnit);
-      const tgt = formatNutNumber(nutrientDisplayValue(e.target, def, dUnit));
-      return bigStatRow(val<10 ? val.toFixed(1) : Math.round(val), `${def.label} (${dUnit})`, `/ ${tgt}${dUnit} target`);
+    ${combinedNutrientRows(p).map(row=>{
+      const defLike = {unit: row.canonicalUnit, altUnit: row.altUnit};
+      const val = nutrientDisplayValue(totals[row.key]||0, defLike, row.unit);
+      const tgt = formatNutNumber(nutrientDisplayValue(row.target, defLike, row.unit));
+      return bigStatRow(val<10 ? val.toFixed(1) : Math.round(val), `${row.label} (${row.unit})`, `/ ${tgt}${row.unit} target`);
     }).join('')}
   `);
 }
@@ -3747,16 +3711,11 @@ function screenHistory(){
 
     <div class="card">
       <h3>Nutrition</h3>
-      ${isCoreTracked(state.profile,'protein') ? progRow('Protein', nutrientTotals.protein, nutrientTotals.proteinGoal, 'g', 'var(--violet)') : ''}
-      ${isCoreTracked(state.profile,'iron') ? progRow('Iron', nutrientTotals.iron, nutrientTotals.ironGoal, 'mg', 'var(--brown)') : ''}
-      ${isCoreTracked(state.profile,'calcium') ? progRow('Calcium', nutrientTotals.calcium, nutrientTotals.calciumGoal, 'mg', 'var(--muted)') : ''}
-      ${Object.keys(nutrientTotals.extras).map(key=>{
-        const def = NUTRIENT_CATALOG.find(c=>c.key===key);
-        const {total, goal, unit} = nutrientTotals.extras[key];
-        const dUnit = unit || def.unit;
-        return progRow(def.label, nutrientDisplayValue(total,def,dUnit), nutrientDisplayValue(goal,def,dUnit), dUnit, def.color);
+      ${nutrientTotals.map(row=>{
+        const defLike = {unit: row.canonicalUnit, altUnit: row.altUnit};
+        return progRow(row.label, nutrientDisplayValue(row.total,defLike,row.unit), nutrientDisplayValue(row.goal,defLike,row.unit), row.unit, row.color);
       }).join('')}
-      ${nutrientTips.length ? nutrientTips.map(tip=>`<div class="feedback-item" style="margin-top:8px;"><div class="dot" style="background:var(--warning)"></div><div>${tip}</div></div>`).join('') : `<div class="muted" style="margin-top:8px;">You're on pace with protein, iron, and calcium this ${historyMode==='week'?'week':'month'} — nice work.</div>`}
+      ${nutrientTips.length ? nutrientTips.map(tip=>`<div class="feedback-item" style="margin-top:8px;"><div class="dot" style="background:var(--warning)"></div><div>${tip}</div></div>`).join('') : `<div class="muted" style="margin-top:8px;">You're on pace with everything you're tracking this ${historyMode==='week'?'week':'month'} — nice work.</div>`}
     </div>
   </div>`;
 }
@@ -3882,19 +3841,13 @@ function renderProfileIconPickerModal(){
 
 /* ---------- SETTINGS ---------- */
 function settingsCardOpenAttr(key){ return openSettingsCards.has(key) ? 'open' : ''; }
-// Protein/Iron/Calcium are always tracked (baked into scoring/Trends elsewhere) — this
-// card only lets their suggested target be overridden. Everything in `extras` is fully
-// optional: added from NUTRIENT_CATALOG via the dropdown, and only counted toward
-// daily/weekly/monthly totals while its toggle stays on (see enabledExtraNutrients).
 // Mirrors the same prog-row look used everywhere else amounts-vs-target are shown
 // (Today's Scorecard, Nutrition popup, Trends) — bold label, big right-aligned
-// current/target, colored fill bar — but with the target replaced by an editable
-// number input. Every control in this card saves+re-renders immediately (no
-// separate "Save" step) so what's on screen always matches what's stored, and
-// since Today/Trends/etc. all read through enabledExtraNutrients (which sorts by
-// `order`), edits here show up everywhere else in the app right away.
-// Main view is read-only except for reordering — every other edit (amount, unit,
-// add/remove) lives in the 🔧 modal below.
+// current/target, colored fill bar. Main view is read-only except for reordering;
+// every other edit (amount, unit, add/remove) lives in the 🔧 modal below. Since
+// Today/Trends/etc. all read through combinedNutrientRows (which sorts core+extras
+// together by `order`), a reorder/remove/add done here shows up everywhere else in
+// the app right away — one list, one order, no separate mechanism per screen.
 function nutRowHtml(row, idx, total, totals){
   const defLike = {unit: row.canonicalUnit, altUnit: row.altUnit};
   const cur = nutrientDisplayValue(totals[row.key]||0, defLike, row.unit);
