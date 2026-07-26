@@ -2778,7 +2778,7 @@ function openInstallActionsModal(){
       <div class="row" style="margin-bottom:10px;"><h2 style="margin:0;">Installed</h2>
         <button class="iconbtn" id="ia-close">✕</button></div>
       <button class="btn-primary" id="ia-reinstall">Re-Install</button>
-      <div class="muted" style="font-size:12px;margin:8px 0 14px;">Keeps your data — just refreshes the app's code and picks up the latest desktop icon.</div>
+      <div class="muted" style="font-size:12px;margin:8px 0 14px;">Keeps your data — refreshes the app's code immediately, no confirmation needed.</div>
       <button class="btn-secondary" id="ia-uninstall" style="color:var(--critical)">Uninstall</button>
       <div class="muted" style="font-size:12px;margin-top:8px;">Keeps your data too, by default — you'll be asked separately if you also want it deleted.</div>
     </div>
@@ -2790,15 +2790,16 @@ function openInstallActionsModal(){
   wrap.querySelector('#ia-reinstall').addEventListener('click', ()=>{ close(); reinstallApp(); });
   wrap.querySelector('#ia-uninstall').addEventListener('click', ()=>{ close(); uninstallApp(); });
 }
-// Clears every cache layer this page can reach (the no-op service worker's
-// own registration plus the Cache Storage entries it's allowed to make,
-// see sw.js) so the very next load is guaranteed fresh — same intent as
-// checkForUpdate()'s no-store check, just forced immediately instead of
-// waiting for the next visibilitychange. What it can't do is make the OS
-// re-fetch the *icon* for an already-placed Home Screen/taskbar shortcut;
-// that image is only ever captured once, at install time, so picking up a
-// newly-pushed icon genuinely requires removing and re-adding it — hence
-// the manual steps below rather than pretending a reload alone covers it.
+// Fires immediately on click, no confirmation/instructions text — clears
+// every cache layer this page can reach (the no-op service worker's own
+// registration plus the Cache Storage entries it's allowed to make, see
+// sw.js) then forces a cache-busted reload right now, same intent as
+// checkForUpdate()'s no-store check just forced instead of waiting for the
+// next visibilitychange. Data is untouched (nothing here ever touches
+// localStorage). This can't make the OS re-fetch the *icon* for an
+// already-placed Home Screen/taskbar shortcut — that image is only ever
+// captured once, at install time — but the code it launches next time is
+// guaranteed fresh either way.
 function reinstallApp(){
   if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
     navigator.serviceWorker.getRegistrations().then(regs=>regs.forEach(r=>r.unregister()));
@@ -2806,12 +2807,7 @@ function reinstallApp(){
   if(window.caches && caches.keys){
     caches.keys().then(keys=>keys.forEach(k=>caches.delete(k)));
   }
-  openInfoModal('Re-Install on Home Screen', `
-    Your data is untouched — this only refreshes the app's code and readies the newest icon.<br><br>
-    <strong>1.</strong> Remove the current Health Score icon: iPhone/iPad — touch and hold it, then "Remove App"; Android — touch and hold it, then "Uninstall"; Desktop Chrome/Edge — right-click it, then "Uninstall".<br><br>
-    <strong>2.</strong> Reopen this page and tap Install again (or your browser's ⋮ menu → "Install app" / Share → "Add to Home Screen").<br><br>
-    The freshest code and icon are already waiting — nothing you've logged is lost.
-  `);
+  location.href = location.pathname + '?_reinstall=' + Date.now();
 }
 // No web API lets a page force-remove its own Home Screen/taskbar shortcut —
 // that's an OS-level action only the user can take (steps below) — so this
