@@ -423,7 +423,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 
 function defaultState(){
   return {
@@ -1643,8 +1643,11 @@ function workoutsQuickCard(){
 // Common activity types for a timed Quick Start session (no routine/exercise
 // breakdown, just elapsed time — a brisk walk, a bike ride, a yoga class).
 // "Other" is a catch-all rather than free text, keeping this a fixed pick
-// list like the rest of the app's Log Activity form.
-const QUICK_START_TYPES = ['Walking','Indoor Bike','Outdoor Bike','Running','Weight Routine','Pilates/Yoga','Hiking','Swimming','Elliptical','Rowing','Stairmaster','Tennis','Other'];
+// list like the rest of the app's Log Activity form. Tennis leads the list —
+// the default top suggestion until real picks start accumulating in
+// recentQuickStartTypes, at which point orderedQuickStartTypes floats those
+// above it same as anything else in this base order.
+const QUICK_START_TYPES = ['Tennis','Walking','Indoor Bike','Outdoor Bike','Running','Weight Routine','Pilates/Yoga','Hiking','Swimming','Elliptical','Rowing','Stairmaster','Other'];
 // Last 5 picks float to the top of the dropdown, most-recent-first, followed
 // by the rest of the fixed list in its normal order — so a repeat choice is
 // one tap away without hiding the full list.
@@ -5069,13 +5072,14 @@ document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='hidden'){ autoSyncGoogleHealthIfDue(); }
   if(document.visibilityState==='visible') checkForUpdate();
 });
-// Registering a (deliberately no-op/no-cache, see sw.js) service worker is
-// what lets Chrome on Android offer a real "Install app" rather than a plain
-// bookmark shortcut — installed apps get Chrome's strongest guarantee against
-// silently evicting a site's storage under disk pressure, which is the most
-// likely cause of data disappearing on an ordinary close/reopen (as opposed
-// to the user deliberately clearing history — no web API can opt out of that
-// one, install or not).
+// Registering a service worker (see sw.js — precaches the shell and serves it
+// stale-while-revalidate for fast/offline-capable loads) is also what lets
+// Chrome on Android offer a real "Install app" rather than a plain bookmark
+// shortcut — installed apps get Chrome's strongest guarantee against silently
+// evicting a site's storage under disk pressure, which is the most likely
+// cause of data disappearing on an ordinary close/reopen (as opposed to the
+// user deliberately clearing history — no web API can opt out of that one,
+// install or not).
 if(navigator.serviceWorker && navigator.serviceWorker.register) navigator.serviceWorker.register('sw.js').catch(()=>{});
 // True once actually running as the installed/home-screen app rather than a
 // regular browser tab — display-mode covers Chrome/Edge/Android,
