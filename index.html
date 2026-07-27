@@ -146,6 +146,14 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .food-row .sub{font-size:12px;color:var(--muted);}
 .food-row .kcal{font-size:14px;font-weight:700;text-align:right;}
 .food-row .del{background:none;border:none;color:var(--muted);font-size:18px;padding:4px 8px;}
+/* Inline-editable food entries — always live (no separate edit-mode toggle), matching
+   the typed-position-number convention used for nutrient reordering: a plain input
+   until focused, committing on change (blur/Enter) rather than needing a Save button. */
+.food-edit-input{border:none;background:transparent;color:inherit;font:inherit;padding:2px 3px;border-radius:6px;width:100%;min-width:0;}
+.food-edit-input:focus{background:var(--page);outline:1px solid var(--border);}
+.food-row .name-input{font-size:14px;font-weight:600;}
+.food-row .sub-input{font-size:12px;color:var(--muted);}
+.food-row .kcal-input{font-size:14px;font-weight:700;text-align:right;width:52px;flex:none;}
 /* ---- generic list row (routines, custom exercises, workout history) ---- */
 .list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px solid var(--grid);gap:10px;}
 .list-row:first-child{border-top:none;}
@@ -423,7 +431,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.1.1';
 
 function defaultState(){
   return {
@@ -3670,8 +3678,11 @@ function getFoodResults(){
   };
 }
 let foodSortMode = 'logged'; // 'logged' | 'kcal'
-// Shared with the Today tab, which shows the same list read-only-ish (still deletable)
-// alongside the score rings, so today's log is visible without switching tabs.
+// Shared with the Today tab, which shows the same full list (every entry, no cap)
+// alongside the score rings, so today's log is visible and editable without
+// switching tabs. Each entry is directly editable in place — see the .food-edit-input
+// convention below, same "plain input, no separate edit-mode toggle, commit on
+// change" pattern as the nutrient reorder position input in nutRowHtml.
 function todaysFoodsCard(){
   const d = getDay(today());
   const foods = foodSortMode==='kcal' ? d.foods.slice().sort((a,b)=>b.kcal-a.kcal) : d.foods.slice().reverse();
@@ -3683,7 +3694,17 @@ function todaysFoodsCard(){
         </button>
       </div>
       ${foods.length===0?'<div class="muted">Nothing logged yet today.</div>':
-        foods.map(f=>`<div class="food-row"><div><div class="name">${f.name}</div><div class="sub">${f.qtyLabel}</div></div><div style="display:flex;align-items:center;gap:8px;"><div class="kcal">${Math.round(f.kcal)} kcal</div><button class="del" data-food="${f.id}">×</button></div></div>`).join('')}
+        foods.map(f=>`<div class="food-row">
+          <div style="flex:1;min-width:0;">
+            <input class="food-edit-input name-input" type="text" data-food-edit="${f.id}:name" value="${escapeHtml(f.name)}">
+            <input class="food-edit-input sub-input" type="text" data-food-edit="${f.id}:qtyLabel" value="${escapeHtml(f.qtyLabel)}">
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;flex:none;">
+            <input class="food-edit-input kcal-input" type="number" min="0" step="1" inputmode="numeric" data-food-edit="${f.id}:kcal" value="${Math.round(f.kcal)}">
+            <span class="muted" style="font-size:12px;">kcal</span>
+            <button class="del" data-food="${f.id}">×</button>
+          </div>
+        </div>`).join('')}
     </div>`;
 }
 function screenLog(){
@@ -4835,6 +4856,28 @@ function attachHandlers(){
       const id = Number(el.dataset.food);
       const d = getDay(today());
       d.foods = d.foods.filter(f=>f.id!==id);
+      saveState(); render();
+    });
+  });
+  // Inline edit of a logged food's name/quantity/calories, directly in the
+  // Today's Foods list (Today tab and Log screen both use this same card) —
+  // commits on change (blur/Enter), same convention as the nutrient
+  // reorder position input. Name/quantity are free text; calories clamps to
+  // a non-negative whole number, reverting to the stored value on bad input
+  // rather than silently saving garbage.
+  document.querySelectorAll('[data-food-edit]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const [idStr, field] = el.dataset.foodEdit.split(':');
+      const id = Number(idStr);
+      const food = getDay(today()).foods.find(f=>f.id===id);
+      if(!food) return;
+      if(field==='kcal'){
+        const val = Math.round(Number(el.value));
+        if(isNaN(val) || val<0){ render(); return; }
+        food.kcal = val;
+      } else {
+        food[field] = el.value.trim();
+      }
       saveState(); render();
     });
   });
