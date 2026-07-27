@@ -431,7 +431,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.1.1';
+const APP_VERSION = '2.1.2';
 
 function defaultState(){
   return {
@@ -4434,8 +4434,26 @@ async function fetchGoogleHealthDataType(dataType, filterField, dateIso, token){
 // indistinguishable from Fitbit truly reporting 0 minutes for the day. That gap
 // is exactly what made a real "AZM didn't count" report unactionable — see the
 // 2026-07-25 investigation this comment was added for.
+// Retries a rollup fetch on transient failures — a bare network drop ("Failed to
+// fetch", no HTTP response received at all — the recurring symptom on a weak mobile
+// connection) or a 429/5xx from Google's side. Auth failures (401/403) and other 4xx
+// are never retried, since retrying those just delays the real, fixable error
+// (reconnect / check the granted scope) instead of surfacing it.
+async function fetchGoogleHealthRollupWithRetry(dataType, dateIso, token, retries){
+  retries = retries==null ? 2 : retries;
+  for(let attempt=0; ; attempt++){
+    try{ return await fetchGoogleHealthRollup(dataType, dateIso, token); }
+    catch(e){
+      const isNetworkError = e instanceof TypeError;
+      const status = Number((/^HTTP (\d+)/.exec(e.message||'')||[])[1]);
+      const isRetryable = isNetworkError || status===429 || (status>=500 && status<600);
+      if(!isRetryable || attempt>=retries) throw e;
+      await new Promise(r=>setTimeout(r, 500*(attempt+1)));
+    }
+  }
+}
 async function fetchGHRollupSoft(dataType, dateIso, token){
-  try{ return await fetchGoogleHealthRollup(dataType, dateIso, token); }
+  try{ return await fetchGoogleHealthRollupWithRetry(dataType, dateIso, token); }
   catch(e){ logError(`Sync (${dataType}) failed: `+e.message); return 0; }
 }
 async function fetchGoogleHealthToday(silent){
@@ -4444,7 +4462,7 @@ async function fetchGoogleHealthToday(silent){
   const t = today();
   try{
     const [steps, activeMin, kcal, distanceMm] = await Promise.all([
-      fetchGoogleHealthRollup('steps', t, token),
+      fetchGoogleHealthRollupWithRetry('steps', t, token),
       fetchGHRollupSoft('active-zone-minutes', t, token),
       fetchGHRollupSoft('active-energy-burned', t, token),
       fetchGHRollupSoft('distance', t, token) // returned in millimeters, per Google's field docs
