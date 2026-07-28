@@ -434,7 +434,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.4.5';
+const APP_VERSION = '2.5.0';
 
 function defaultState(){
   return {
@@ -904,6 +904,13 @@ function getDay(iso){
   if(state.days[iso].activity.distanceMi===undefined) state.days[iso].activity.distanceMi = 0; // upgrade older saved days
   if(!state.days[iso].celebrated) state.days[iso].celebrated = {};
   if(!state.days[iso].workouts) state.days[iso].workouts = []; // upgrade older saved days
+  // Manual recovery values for the 7-day trend table (see mountCharts) —
+  // take precedence over the normal computed figures specifically so a
+  // user who lost data (cleared history before backing up) has a way to
+  // hand-restore what the trend line showed, without needing to fake
+  // individual food entries or activity syncs to get there.
+  if(state.days[iso].kcalBurnedOverride===undefined) state.days[iso].kcalBurnedOverride = null;
+  if(state.days[iso].kcalInOverride===undefined) state.days[iso].kcalInOverride = null;
   return state.days[iso];
 }
 // Edit/delete on a saved workout (Today's card or History) look it up by id
@@ -3045,6 +3052,8 @@ function workoutCaloriesForDay(iso){
 // user-edited) calorie figure. Used both for display and for the
 // weight-goal-impact math, so both stay consistent with each other.
 function caloriesBurnedForDay(iso){
+  const override = getDay(iso).kcalBurnedOverride;
+  if(override!=null) return override;
   return activityOnlyCaloriesForDay(iso) + workoutCaloriesForDay(iso);
 }
 // Workout minutes are kept OUT of d.activity entirely (see startWorkoutSession)
@@ -3280,6 +3289,14 @@ function dayTotals(iso){
     NUTRIENT_CATALOG.forEach(n=>{ a[n.key] = (a[n.key]||0) + (f[n.key]||0); });
     return a;
   }, {kcal:0,protein:0,carbs:0,fat:0,iron:0,calcium:0});
+  // Manual recovery value (see getDay) overrides just the kcal total — every
+  // OTHER nutrient still reflects actual logged foods, since this is about
+  // restoring the calories-in trend number, not reconstructing a lost
+  // day's exact macro breakdown. Applied here (not a separate helper) so
+  // every existing consumer of dayTotals — calorie-limit tracking, nutrient
+  // shortfall tips, the weekly/nutrition score, calorie-gap prompts —
+  // automatically recalculates off it, not just the trend chart itself.
+  if(d.kcalInOverride!=null) t.kcal = d.kcalInOverride;
   return t;
 }
 function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
@@ -3808,40 +3825,51 @@ function openSuggestGoalModal(suggested, onApply){
 // single stored value per row — a derived/aggregate figure (a score, a sum of
 // several food entries) has no one field to write an edit back to, so those
 // columns stay plain text.
-function openChartTableModal(title, columns, rows, colColors, editableCol){
+// editableCols: array of {colIndex, values, unit, onSave, editableRows}.
+// editableRows (optional) is a Set of row indices allowed to be edited —
+// e.g. the 7-day trend excludes today (still live/actively tracked, not a
+// recovery scenario) even though the rest of the week is editable. Omit it
+// to make every row in that column editable, same as the original
+// single-editableCol behavior this replaced (both call sites below just
+// pass a one-element array where a bare object used to work).
+function openChartTableModal(title, columns, rows, colColors, editableCols){
   colColors = colColors || [];
+  editableCols = editableCols || [];
+  const byColIndex = {};
+  editableCols.forEach(ec=>{ byColIndex[ec.colIndex] = ec; });
   const cellStyle = i=>`padding:7px 8px;font-size:13.5px;border-bottom:1px solid var(--grid);white-space:nowrap;${colColors[i]?`color:${colColors[i]};font-weight:700;`:''}`;
   const head = columns.map(c=>`<th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid var(--grid);">${c}</th>`).join('');
   const body = rows.map((r,ri)=>`<tr>${r.map((cell,i)=>{
-    if(editableCol && i===editableCol.colIndex){
-      const v = editableCol.values[ri];
-      return `<td style="${cellStyle(i)}"><input type="number" step="0.1" inputmode="decimal" class="chart-table-edit" data-row="${ri}" value="${v!=null?v:''}" placeholder="--" style="width:64px;background:transparent;border:none;border-bottom:1px dashed var(--muted);color:inherit;font:inherit;font-weight:inherit;padding:2px 0;"></td>`;
+    const ec = byColIndex[i];
+    if(ec && (!ec.editableRows || ec.editableRows.has(ri))){
+      const v = ec.values[ri];
+      return `<td style="${cellStyle(i)}"><input type="number" step="0.1" inputmode="decimal" class="chart-table-edit" data-row="${ri}" data-col="${i}" value="${v!=null?v:''}" placeholder="--" style="width:64px;background:transparent;border:none;border-bottom:1px dashed var(--muted);color:inherit;font:inherit;font-weight:inherit;padding:2px 0;"></td>`;
     }
     return `<td style="${cellStyle(i)}">${cell}</td>`;
   }).join('')}</tr>`).join('');
-  const wrap = openInfoModal(title, `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${editableCol ? `<div class="muted" style="margin-top:8px;">Tap a ${escapeHtml(columns[editableCol.colIndex])} value to correct it.</div>` : ''}`);
-  if(editableCol){
-    wrap.querySelectorAll('.chart-table-edit').forEach(inp=>{
-      inp.addEventListener('change', ()=>{
-        const ri = Number(inp.dataset.row);
-        const raw = inp.value.trim();
-        if(raw!==''){
-          const n = Number(raw);
-          if(isNaN(n) || n<=0){
-            showToast('Enter a valid number.', 'critical');
-            inp.value = editableCol.values[ri]!=null ? editableCol.values[ri] : '';
-            return;
-          }
+  const editableNames = editableCols.map(ec=>columns[ec.colIndex]);
+  const wrap = openInfoModal(title, `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${editableNames.length ? `<div class="muted" style="margin-top:8px;">Tap a ${editableNames.map(escapeHtml).join('/')} value to correct it.</div>` : ''}`);
+  wrap.querySelectorAll('.chart-table-edit').forEach(inp=>{
+    inp.addEventListener('change', ()=>{
+      const ri = Number(inp.dataset.row);
+      const ec = byColIndex[Number(inp.dataset.col)];
+      const raw = inp.value.trim();
+      if(raw!==''){
+        const n = Number(raw);
+        if(isNaN(n) || n<=0){
+          showToast('Enter a valid number.', 'critical');
+          inp.value = ec.values[ri]!=null ? ec.values[ri] : '';
+          return;
         }
-        const v = raw===''? null : Math.round(Number(raw)*10)/10;
-        editableCol.onSave(ri, v);
-        editableCol.values[ri] = v;
-        saveState();
-        render();
-        showToast('Updated.', 'good');
-      });
+      }
+      const v = raw===''? null : Math.round(Number(raw)*10)/10;
+      ec.onSave(ri, v);
+      ec.values[ri] = v;
+      saveState();
+      render();
+      showToast('Updated.', 'good');
     });
-  }
+  });
 }
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
 // Shown top-right on every screen's topbar, same row as the heading, so the
@@ -5466,10 +5494,10 @@ function mountCharts(){
       const valuesRev = weightPoints.slice().reverse();
       openChartTableModal('Monthly Trends', ['Month','Total Score','Weight'], rows,
         [null,'var(--blue)','var(--orange)'],
-        { colIndex:2, values: valuesRev, unit:' lb', onSave:(ri, newVal)=>{
+        [{ colIndex:2, values: valuesRev, unit:' lb', onSave:(ri, newVal)=>{
           getDay(datesRev[ri]).weightLb = newVal;
           if(newVal!=null && checkWeightGoalReached(newVal)) renderWeightGoalModal();
-        } }
+        } }]
       );
     });
   }else{
@@ -5481,19 +5509,39 @@ function mountCharts(){
     // as "100"), which hides exactly the swings someone would want to see
     // on a trend chart. Same null-when-unlogged behavior as the scores had
     // (a day with nothing logged is a gap in the line, not a literal 0).
+    // A manual recovery override (see getDay/caloriesBurnedForDay/dayTotals)
+    // counts as "logged" for this null-gate even when the underlying
+    // steps/activeMin/foods are genuinely still zero — that's exactly the
+    // data-loss scenario this is for, so the recovered number should show
+    // on the line, not get hidden as a gap.
     const calBurnedPoints = dates.map(d=>{
-      const a = getDay(d).activity;
-      return (a.steps===0 && a.activeMin===0) ? null : Math.round(caloriesBurnedForDay(d));
+      const day = getDay(d);
+      if(day.kcalBurnedOverride==null && day.activity.steps===0 && day.activity.activeMin===0) return null;
+      return Math.round(caloriesBurnedForDay(d));
     });
-    const calInPoints = dates.map(d=> getDay(d).foods.length===0 ? null : Math.round(dayTotals(d).kcal));
+    const calInPoints = dates.map(d=>{
+      const day = getDay(d);
+      if(day.kcalInOverride==null && day.foods.length===0) return null;
+      return Math.round(dayTotals(d).kcal);
+    });
     trendEl.appendChild(trendLineChart([
       {name:'Calories Burned', color:'var(--critical)', points: calBurnedPoints, unit:' kcal'},
       {name:'Calories In', color:'var(--good)', points: calInPoints, unit:' kcal'}
     ], labels, {dashLastSegment:true}));
-    trendEl.addEventListener('click', ()=>openChartTableModal('7-day trend', ['Day','Calories Burned','Calories In'],
-      dates.map((d,i)=>[dateFromIso(d).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}), calBurnedPoints[i]===null?'--':calBurnedPoints[i].toLocaleString()+' kcal', calInPoints[i]===null?'--':calInPoints[i].toLocaleString()+' kcal']),
-      [null,'var(--critical)','var(--good)']
-    ));
+    trendEl.addEventListener('click', ()=>{
+      // Today (the last entry) stays read-only — it's still live/actively
+      // being tracked through the normal logging flows, not a past day
+      // needing recovery.
+      const editableRows = new Set(dates.map((_,i)=>i).filter(i=>i<dates.length-1));
+      openChartTableModal('7-day trend', ['Day','Calories Burned','Calories In'],
+        dates.map((d,i)=>[dateFromIso(d).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}), calBurnedPoints[i]===null?'--':calBurnedPoints[i].toLocaleString()+' kcal', calInPoints[i]===null?'--':calInPoints[i].toLocaleString()+' kcal']),
+        [null,'var(--critical)','var(--good)'],
+        [
+          { colIndex:1, values: calBurnedPoints, unit:' kcal', editableRows, onSave:(ri, newVal)=>{ getDay(dates[ri]).kcalBurnedOverride = newVal; } },
+          { colIndex:2, values: calInPoints, unit:' kcal', editableRows, onSave:(ri, newVal)=>{ getDay(dates[ri]).kcalInOverride = newVal; } }
+        ]
+      );
+    });
   }
 }
 
