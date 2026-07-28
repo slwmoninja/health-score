@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.2.3';
+const APP_VERSION = '2.2.4';
 
 function defaultState(){
   return {
@@ -2249,10 +2249,14 @@ function workoutScoreSummaries(w){
   });
   return parts;
 }
+// data-open-workout on the row itself (not just the ✎ button) — tapping
+// anywhere on the row opens the edit modal, the ✎/× icons are the two
+// explicit exceptions, same closest()-exclusion convention as the routine
+// tile tap-vs-icon handling.
 function workoutListRowHtml(w){
   const scoreParts = workoutScoreSummaries(w);
   const scoreSummary = scoreParts.length ? ` · ${escapeHtml(scoreParts.join(' | '))}` : '';
-  return `<div class="list-row"><div><div class="name">${escapeHtml(w.title)}</div><div class="sub">${w.exercises.length} exercise${w.exercises.length===1?'':'s'} · ${formatElapsed(workoutDurationMs(w))} · ${(w.caloriesBurned||0).toLocaleString()} kcal${scoreSummary}</div></div><button class="iconbtn" data-edit-workout="${w.id}" type="button" title="Edit" style="width:30px;height:30px;">✎</button><button class="del" data-del-workout="${w.id}" type="button">×</button></div>`;
+  return `<div class="list-row" data-open-workout="${w.id}"><div><div class="name">${escapeHtml(w.title)}</div><div class="sub">${w.exercises.length} exercise${w.exercises.length===1?'':'s'} · ${formatElapsed(workoutDurationMs(w))} · ${(w.caloriesBurned||0).toLocaleString()} kcal${scoreSummary}</div></div><button class="iconbtn" data-edit-workout="${w.id}" type="button" title="Edit" style="width:30px;height:30px;">✎</button><button class="del" data-del-workout="${w.id}" type="button">×</button></div>`;
 }
 function todaysWorkoutsCard(){
   const workouts = getDay(today()).workouts;
@@ -4161,56 +4165,26 @@ function screenLog(){
     ` : ''}
   </div>`;
 }
-// Flat, cross-workout, most-recent-first — unlike Today's/History cards
-// (grouped by whole session), this is per EXERCISE, capped at 10, and
-// directly editable in the row itself (same convention as Today's Foods —
-// see todaysFoodsCard — no separate edit icon/modal, the inputs ARE the
-// display). id alone is enough to find an entry's parent workout again
-// (findLoggedExerciseById scans every day) since exercise ids are already
-// unique across the whole app (Date.now()+Math.random()+i at creation).
-function recentLoggedExercises(limit){
+// Cross-day, most-recent-first, capped at 10 — one row per WORKOUT
+// OCCURRENCE (routine or Quick Start), not per individual exercise: a
+// routine's exercises collapse into one row named for the routine, and a
+// Quick Start activity (e.g. Tennis) is already just one row on its own
+// (it never populates .exercises — see startWorkoutSession). Reuses
+// workoutListRowHtml/data-open-workout — tapping a row opens the exact same
+// Edit Workout modal as Today's/History (duration, exercises, score sheet,
+// all editable there), regardless of which kind of workout it is.
+function recentWorkouts(limit){
   const entries = [];
-  for(const iso in state.days){
-    (state.days[iso].workouts||[]).forEach(w=>{
-      w.exercises.forEach(ex=>entries.push({ex, iso, startTime:w.startTime, workout:w}));
-    });
-  }
+  for(const iso in state.days) (state.days[iso].workouts||[]).forEach(w=>entries.push(w));
   entries.sort((a,b)=>b.startTime-a.startTime);
   return entries.slice(0, limit);
 }
-function findLoggedExerciseById(id){
-  for(const iso in state.days){
-    for(const w of (state.days[iso].workouts||[])){
-      const ex = w.exercises.find(e=>e.id===id);
-      if(ex) return {ex, workout:w};
-    }
-  }
-  return null;
-}
 function recentExercisesCard(){
-  const entries = recentLoggedExercises(10);
-  if(!entries.length) return '';
+  const workouts = recentWorkouts(10);
+  if(!workouts.length) return '';
   return `<div class="card">
     <h3>Recent Exercises</h3>
-    ${entries.map(recentExerciseRowHtml).join('')}
-  </div>`;
-}
-function recentExerciseRowHtml({ex, iso}){
-  const template = exerciseById(ex.exerciseId);
-  const fields = liveFieldsForExercise(template);
-  const first = ex.sets[0] || {};
-  return `<div class="food-row">
-    <div style="flex:1;min-width:0;">
-      <div style="font-weight:600;font-size:13px;">${escapeHtml(ex.exerciseTitle)}</div>
-      <div class="muted" style="font-size:11px;">${iso}${ex.scoreSheet && ex.scoreSheet.length ? ' · '+escapeHtml(ex.scoreSheet.join(', ')) : ''}</div>
-    </div>
-    <div style="display:flex;align-items:center;gap:6px;flex:none;flex-wrap:wrap;">
-      ${fields.map(f=>{
-        const val = f==='sets' ? ex.sets.length : (first[f]!=null ? first[f] : '');
-        return `<input class="food-edit-input kcal-input" type="number"${f==='distanceMi'?' step="0.1"':''} style="width:44px;" data-recent-ex-field="${ex.id}:${f}" value="${val}">`;
-      }).join('')}
-      ${SCORING_ACTIVITY_TYPES.includes(ex.exerciseTitle) ? `<button class="iconbtn" data-record-score-exercise-id="${ex.id}" type="button" style="width:26px;height:26px;font-size:13px;" title="${ex.scoreSheet && ex.scoreSheet.length ? 'Edit Score' : 'Record Score?'}">🎾</button>` : ''}
-    </div>
+    ${workouts.map(workoutListRowHtml).join('')}
   </div>`;
 }
 
@@ -5386,23 +5360,6 @@ function attachHandlers(){
       saveState(); render();
     });
   });
-  document.querySelectorAll('[data-recent-ex-field]').forEach(inp=>{
-    inp.addEventListener('change', ()=>{
-      const [idStr, field] = inp.dataset.recentExField.split(':');
-      const id = Number(idStr);
-      const found = findLoggedExerciseById(id);
-      if(!found) return;
-      if(field==='sets') updateSavedExerciseSetCount(found.workout, id, inp.value);
-      else updateSavedExerciseField(found.workout, id, field, inp.value);
-      saveState(); render();
-    });
-  });
-  document.querySelectorAll('[data-record-score-exercise-id]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const found = findLoggedExerciseById(Number(btn.dataset.recordScoreExerciseId));
-      if(found) openScoreSheetModal(found.ex);
-    });
-  });
   const openSpotifyBtn = document.getElementById('btn-open-spotify');
   if(openSpotifyBtn) openSpotifyBtn.addEventListener('click', openSpotify);
   // WORKOUTS — routine picker / active session card, see screenLog's Activity section
@@ -5491,6 +5448,15 @@ function attachHandlers(){
   document.querySelectorAll('[data-edit-workout]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const w = findWorkoutById(Number(btn.dataset.editWorkout));
+      if(w) openEditWorkoutModal(w);
+    });
+  });
+  // Tapping the row itself (not the ✎/× icons) also opens the edit modal —
+  // same tap-vs-icon convention as the routine tiles.
+  document.querySelectorAll('.list-row[data-open-workout]').forEach(row=>{
+    row.addEventListener('click', e=>{
+      if(e.target.closest('[data-edit-workout], [data-del-workout]')) return;
+      const w = findWorkoutById(Number(row.dataset.openWorkout));
       if(w) openEditWorkoutModal(w);
     });
   });
