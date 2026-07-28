@@ -54,6 +54,10 @@ input,select{font-family:inherit;}
    overridden — clicking it silently does nothing with zero visual explanation why. */
 .iconbtn:disabled{opacity:.35;cursor:not-allowed;box-shadow:none;}
 .iconbtn:disabled:active{transform:none;}
+/* The mic toggle (session voice control + Timer) — bigger tap target and a
+   bigger glyph than a plain .iconbtn's inherited text size, since a tiny
+   mic emoji is easy to miss/misidentify on a small phone screen. */
+.mic-btn{width:44px;height:44px;font-size:22px;}
 
 /* ---- screens ---- */
 .screen{padding:4px 16px 12px;}
@@ -430,7 +434,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.3.2';
+const APP_VERSION = '2.4.0';
 
 function defaultState(){
   return {
@@ -442,6 +446,7 @@ function defaultState(){
     exerciseMemory: {}, // { exerciseId: {weightLb, reps, durationSec, distanceMi, ts} } — mirrors foodMemory
     routines: [],        // named templates: "Leg day", "Cardio", etc. — see EXERCISE_DB/allExercises()
     activeWorkoutSession: null, // the single in-progress/paused session, or null — see startWorkoutSession()
+    activeTimer: null, // the plain utility Timer (see openTimerModal) — deliberately separate from activeWorkoutSession: never logged, no calories, never touches getDay().workouts
     recentQuickStartTypes: [], // last 5 Quick Start activity types, most-recent-first — see recordQuickStartType()
     settings: {
       clientId:'', clientSecret:'', fdcApiKey:'', useMetric:false,
@@ -1431,6 +1436,34 @@ function playVoiceAckSound(){
   osc.connect(gain); gain.connect(ctx.destination);
   osc.start(); osc.stop(ctx.currentTime+0.12);
 }
+// Countdown tick — the Timer's last-10-seconds beep, distinct in pitch/
+// length from both the plank ping (880Hz/0.3s) and the voice ack chirp
+// (1400Hz/0.12s) above.
+function playCountdownBeep(){
+  if(!workoutAudioCtx) return;
+  const ctx = workoutAudioCtx;
+  const osc = ctx.createOscillator(), gain = ctx.createGain();
+  osc.type = 'square'; osc.frequency.value = 1000;
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime+0.005);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+0.09);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(); osc.stop(ctx.currentTime+0.09);
+}
+// Time-reached gong — low, slow-decaying, unmistakably different from the
+// short high beeps above so "target hit" reads as a distinct event, not
+// just another tick.
+function playGongSound(){
+  if(!workoutAudioCtx) return;
+  const ctx = workoutAudioCtx;
+  const osc = ctx.createOscillator(), gain = ctx.createGain();
+  osc.type = 'sine'; osc.frequency.value = 220;
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.4, ctx.currentTime+0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+1.4);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(); osc.stop(ctx.currentTime+1.4);
+}
 // Plank holds have no per-exercise timer of their own (the active session
 // table is a flat checklist, not a sequential player) — a ping off the
 // CARD's overall elapsed clock (interval user-configurable inline on any
@@ -1512,7 +1545,7 @@ function toggleVoiceControl(){ if(voiceListening){ stopVoiceControl(); render();
 function startVoiceControl(){
   const Ctor = getSpeechRecognitionCtor();
   if(!Ctor){ showToast('Voice control isn’t supported in this browser.', 'critical'); return; }
-  if(!state.activeWorkoutSession) return;
+  if(!state.activeWorkoutSession && !state.activeTimer) return;
   voiceShouldRestart = true;
   voiceRecognizer = new Ctor();
   voiceRecognizer.continuous = true;
@@ -1526,7 +1559,7 @@ function startVoiceControl(){
     }
   };
   voiceRecognizer.onend = ()=>{
-    if(voiceShouldRestart && state.activeWorkoutSession){ try{ voiceRecognizer.start(); }catch(e){} }
+    if(voiceShouldRestart && (state.activeWorkoutSession || state.activeTimer)){ try{ voiceRecognizer.start(); }catch(e){} }
     else{ voiceListening = false; render(); }
   };
   try{ voiceRecognizer.start(); voiceListening = true; }
@@ -1540,14 +1573,18 @@ function stopVoiceControl(){
   voiceRecognizer = null;
   voiceListening = false;
 }
+// Dispatches to whichever of activeTimer/activeWorkoutSession is actually
+// active — same mic, same vocabulary, different target, since in practice
+// only one of the two would ever be running at once.
 function handleVoiceCommand(e){
-  if(!state.activeWorkoutSession) return;
+  const timerActive = !!state.activeTimer;
+  if(!timerActive && !state.activeWorkoutSession) return;
   const transcript = e.results[e.results.length-1][0].transcript.trim().toLowerCase();
   let matched = true;
-  if(/\bpause\b/.test(transcript)) pauseWorkoutSession();
-  else if(/\brestart\b/.test(transcript)) restartWorkoutSessionTimer();
-  else if(/\b(resume|continue)\b/.test(transcript)) resumeWorkoutSession();
-  else if(/\b(stop|save|finish)\b/.test(transcript)) finishWorkoutSession(false);
+  if(/\bpause\b/.test(transcript)) timerActive ? pauseTimer() : pauseWorkoutSession();
+  else if(/\brestart\b/.test(transcript)) timerActive ? restartTimer() : restartWorkoutSessionTimer();
+  else if(/\b(resume|continue)\b/.test(transcript)) timerActive ? startOrResumeTimer() : resumeWorkoutSession();
+  else if(/\b(stop|save|finish)\b/.test(transcript)) timerActive ? stopTimer() : finishWorkoutSession(false);
   else matched = false;
   if(matched) playVoiceAckSound();
 }
@@ -1910,7 +1947,10 @@ function closeQuickStartModal(){
   if(quickStartWrap){ quickStartWrap.remove(); quickStartWrap=null; }
 }
 function renderQuickStartDom(){
-  const types = orderedQuickStartTypes();
+  // "Timer" is pinned first, always — deliberately NOT part of
+  // QUICK_START_TYPES/orderedQuickStartTypes' recency reordering, since a
+  // plain utility timer isn't "recent activity" in the same sense.
+  const types = ['Timer', ...orderedQuickStartTypes()];
   quickStartWrap.innerHTML = `
   <div class="modal-backdrop center">
     <div class="modal">
@@ -1932,18 +1972,179 @@ function wireQuickStartHandlers(){
   wrap.querySelector('#qs-close').addEventListener('click', closeQuickStartModal);
   wrap.querySelector('#btn-quickstart-start').addEventListener('click', ()=>{
     const type = wrap.querySelector('#qs-type-select').value;
-    recordQuickStartType(type);
     closeQuickStartModal();
+    // Timer is a standalone utility, never a logged activity — see
+    // openTimerModal's own comment — so it skips recordQuickStartType (it's
+    // not part of the recency pool anyway) and startWorkoutSession entirely.
+    if(type==='Timer'){ openTimerModal(); return; }
+    recordQuickStartType(type);
     startWorkoutSession(null, type);
   });
   wrap.querySelector('#btn-quickstart-log-manual').addEventListener('click', ()=>{
     const type = wrap.querySelector('#qs-type-select').value;
+    if(type==='Timer') return; // nothing to "log after the fact" for a plain timer
     const minutes = Number(wrap.querySelector('#qs-manual-min').value);
     if(!(minutes>0)){ alert('Enter minutes.'); return; }
     recordQuickStartType(type);
     closeQuickStartModal();
     logQuickStartManualTime(type, minutes);
   });
+}
+
+/* =========================================================
+   TIMER — a plain utility stopwatch/countdown, deliberately its own thing
+   rather than another activeWorkoutSession: never logged (no calories, never
+   pushed to getDay().workouts, never shown in Today's/History/Recent), so it
+   lives in its own state.activeTimer instead. Reuses the SAME session mic
+   toggle (voiceListening/startVoiceControl/etc.) and its Pause/Resume/
+   Restart/Stop vocabulary — handleVoiceCommand below dispatches to whichever
+   of activeTimer/activeWorkoutSession is actually active, since in practice
+   only one would ever be running at a time.
+   ========================================================= */
+function timerElapsedMs(t){
+  const end = t.status==='paused' ? t.pausedAt : Date.now();
+  return end - t.startTime - t.pausedAccumMs;
+}
+// null targetSec means a plain count-up stopwatch — no beeps/gong, since
+// there's nothing to count down to.
+function timerRemainingMs(t){
+  return t.targetSec==null ? null : t.targetSec*1000 - timerElapsedMs(t);
+}
+let timerWrap = null, timerTickInterval = null;
+function openTimerModal(){
+  if(!state.activeTimer){
+    const now = Date.now();
+    state.activeTimer = {targetSec:null, startTime:now, status:'paused', pausedAccumMs:0, pausedAt:now, lastBeepSecond:null, gonged:false};
+    saveState();
+  }
+  timerWrap = document.createElement('div');
+  document.body.appendChild(timerWrap);
+  renderTimerDom();
+  render(); // refreshes the rest of the app too, so the "Timer running" banner shows up elsewhere right away
+}
+// Just hides the popup — the timer itself (state.activeTimer) keeps running
+// in the background, same convention as activeSessionBannerHtml for a
+// workout session; reopen via the banner or Quick Start.
+function closeTimerModal(){
+  if(timerWrap){ timerWrap.remove(); timerWrap=null; }
+}
+function renderTimerDom(){
+  const t = state.activeTimer; if(!t) return;
+  const remainingMs = timerRemainingMs(t);
+  const displayMs = remainingMs!=null ? Math.max(0,remainingMs) : timerElapsedMs(t);
+  const targetMin = t.targetSec!=null ? Math.floor(t.targetSec/60) : '';
+  const targetSecPart = t.targetSec!=null ? t.targetSec%60 : '';
+  timerWrap.innerHTML = `
+  <div class="modal-backdrop center">
+    <div class="modal">
+      <div class="row" style="margin-bottom:10px;"><h2 style="margin:0;">Timer</h2><button class="iconbtn" id="timer-close">✕</button></div>
+      <div style="text-align:center;margin:6px 0 20px;">
+        <div id="timer-clock" style="font-size:56px;font-weight:800;letter-spacing:1px;color:var(--text);">${formatElapsed(displayMs)}</div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Set Timer (min)</label><input type="number" min="0" id="timer-set-min" value="${targetMin}" placeholder="0"></div>
+        <div class="field"><label>Set Timer (sec)</label><input type="number" min="0" max="59" id="timer-set-sec" value="${targetSecPart}" placeholder="0"></div>
+      </div>
+      <button class="btn-secondary" id="timer-set-btn" type="button" style="margin-bottom:16px;">Set Timer</button>
+      <div class="row" style="justify-content:center;gap:10px;">
+        <button class="iconbtn mic-btn" id="timer-voice-toggle" title="${voiceListening?'Turn off voice control':'Voice control: say Resume/Restart/Pause/Stop'}" type="button">${voiceListening?'🔴':'🎙'}</button>
+        ${t.status==='running'
+          ? `<button class="iconbtn" id="timer-pause" title="Pause" type="button">⏸</button>`
+          : `<button class="iconbtn" id="timer-resume" title="${t.pausedAccumMs>0?'Resume':'Start'}" type="button">▶</button>`}
+        <button class="iconbtn" id="timer-restart" title="Restart timer (reset to 0:00)" type="button">↺</button>
+        <button class="iconbtn" id="timer-stop" title="Stop" type="button">⏹</button>
+      </div>
+    </div>
+  </div>`;
+  wireTimerHandlers();
+}
+function wireTimerHandlers(){
+  const wrap = timerWrap;
+  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeTimerModal(); });
+  wrap.querySelector('#timer-close').addEventListener('click', closeTimerModal);
+  wrap.querySelector('#timer-set-btn').addEventListener('click', ()=>{
+    const min = Number(wrap.querySelector('#timer-set-min').value)||0;
+    const sec = Number(wrap.querySelector('#timer-set-sec').value)||0;
+    setTimerTarget(min, sec);
+  });
+  const pauseBtn = wrap.querySelector('#timer-pause');
+  if(pauseBtn) pauseBtn.addEventListener('click', pauseTimer);
+  const resumeBtn = wrap.querySelector('#timer-resume');
+  if(resumeBtn) resumeBtn.addEventListener('click', startOrResumeTimer);
+  wrap.querySelector('#timer-restart').addEventListener('click', restartTimer);
+  wrap.querySelector('#timer-stop').addEventListener('click', ()=>{
+    if(confirm('Stop the timer?')) stopTimer();
+  });
+  wrap.querySelector('#timer-voice-toggle').addEventListener('click', toggleVoiceControl);
+}
+function setTimerTarget(min, sec){
+  const t = state.activeTimer; if(!t) return;
+  const total = Math.max(0, min*60+sec);
+  t.targetSec = total>0 ? total : null;
+  t.lastBeepSecond = null; t.gonged = false;
+  saveState();
+  if(timerWrap) renderTimerDom();
+}
+function startOrResumeTimer(){
+  const t = state.activeTimer; if(!t || t.status==='running') return;
+  unlockWorkoutAudio();
+  if(t.pausedAt){ t.pausedAccumMs += Date.now()-t.pausedAt; t.pausedAt = null; }
+  t.status = 'running';
+  saveState();
+  if(timerWrap) renderTimerDom();
+  render();
+}
+function pauseTimer(){
+  const t = state.activeTimer; if(!t || t.status!=='running') return;
+  t.status = 'paused'; t.pausedAt = Date.now();
+  saveState();
+  if(timerWrap) renderTimerDom();
+  render();
+}
+// Voice-triggered "Restart" zeroes it back to 0:00 (or the target's full
+// countdown) without touching running/paused status, same as the workout
+// session's own Restart.
+function restartTimer(){
+  const t = state.activeTimer; if(!t) return;
+  t.startTime = Date.now(); t.pausedAccumMs = 0; t.lastBeepSecond = null; t.gonged = false;
+  if(t.status==='paused') t.pausedAt = Date.now();
+  saveState();
+  if(timerWrap) renderTimerDom();
+  render();
+}
+// Ends it outright — there's nothing to "finish and save" like a workout
+// session, since a Timer is never logged.
+function stopTimer(){
+  stopVoiceControl();
+  state.activeTimer = null;
+  saveState();
+  closeTimerModal();
+  render();
+}
+function wireTimerInterval(){
+  clearInterval(timerTickInterval); timerTickInterval = null;
+  const t = state.activeTimer;
+  if(!t || t.status!=='running') return;
+  timerTickInterval = setInterval(()=>{
+    const t = state.activeTimer;
+    if(!t || t.status!=='running'){ clearInterval(timerTickInterval); timerTickInterval=null; return; }
+    const remainingMs = timerRemainingMs(t);
+    if(remainingMs!=null && remainingMs<=0 && !t.gonged){
+      t.gonged = true; t.status = 'paused'; t.pausedAt = Date.now();
+      playGongSound(); saveState();
+      render(); if(timerWrap) renderTimerDom();
+      return;
+    }
+    if(remainingMs!=null && remainingMs>0){
+      const remainingSec = Math.ceil(remainingMs/1000);
+      if(remainingSec<=10 && t.lastBeepSecond!==remainingSec){ t.lastBeepSecond = remainingSec; playCountdownBeep(); saveState(); }
+    }
+    const displayMs = remainingMs!=null ? Math.max(0,remainingMs) : timerElapsedMs(t);
+    const clockEl = document.getElementById('timer-clock');
+    if(clockEl) clockEl.textContent = formatElapsed(displayMs);
+    const bannerEl = document.getElementById('timer-banner-elapsed');
+    if(bannerEl) bannerEl.textContent = formatElapsed(displayMs);
+  }, 1000);
 }
 
 /* =========================================================
@@ -2224,7 +2425,7 @@ function activeWorkoutSessionCard(){
         <span style="font-weight:700;color:var(--blue);font-size:14px;">${clockHtml}</span>
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
-        <button class="iconbtn" id="btn-voice-toggle" title="${voiceListening?'Turn off voice control':'Temporarily enable timer voice control for this session? Use Resume/Restart/Pause/Stop (Save)'}" type="button">${voiceListening?'🔴':'🎙'}</button>
+        <button class="iconbtn mic-btn" id="btn-voice-toggle" title="${voiceListening?'Turn off voice control':'Temporarily enable timer voice control for this session? Use Resume/Restart/Pause/Stop (Save)'}" type="button">${voiceListening?'🔴':'🎙'}</button>
         ${s.status==='running'
           ? `<button class="iconbtn" id="btn-pause-workout" title="Pause" type="button">⏸</button>`
           : `<button class="iconbtn" id="btn-resume-workout" title="Resume" type="button">▶</button>`}
@@ -2311,10 +2512,24 @@ function todaysWorkoutsCard(){
 // #workout-elapsed gets updated live without a full render() every second.
 function activeSessionBannerHtml(){
   const s = state.activeWorkoutSession;
-  if(!s) return '';
-  if(activeTab==='log' && logFocus==='activity') return '';
-  const label = s.status==='paused' ? 'Paused' : `<span id="workout-elapsed">${formatElapsed(workoutDurationMs(s))}</span>`;
-  return `<button class="workout-banner-btn" data-quick-nav="log" data-log-focus="activity" type="button">⏱ ${label}</button>`;
+  let workoutBanner = '';
+  if(s && !(activeTab==='log' && logFocus==='activity')){
+    const label = s.status==='paused' ? 'Paused' : `<span id="workout-elapsed">${formatElapsed(workoutDurationMs(s))}</span>`;
+    workoutBanner = `<button class="workout-banner-btn" data-quick-nav="log" data-log-focus="activity" type="button">⏱ ${label}</button>`;
+  }
+  return workoutBanner + activeTimerBannerHtml();
+}
+// Unlike the workout session banner above, this has no "full card already
+// shows there instead" exception for the Activity log screen — the Timer
+// is ALWAYS a popup, on every screen — so it only hides while its own
+// popup (timerWrap) is the thing actually open.
+function activeTimerBannerHtml(){
+  const t = state.activeTimer;
+  if(!t || timerWrap) return '';
+  const remainingMs = timerRemainingMs(t);
+  const displayMs = remainingMs!=null ? Math.max(0,remainingMs) : timerElapsedMs(t);
+  const label = t.status==='paused' ? 'Timer paused' : `<span id="timer-banner-elapsed">${formatElapsed(displayMs)}</span>`;
+  return `<button class="workout-banner-btn" id="btn-open-timer-banner" type="button">⏱ ${label}</button>`;
 }
 
 /* =========================================================
@@ -4012,6 +4227,7 @@ function render(){
   attachHandlers();
   mountCharts();
   wireWorkoutTimer();
+  wireTimerInterval();
 
   if(shouldPromptWeighIn() && !document.querySelector('.modal-backdrop')) renderWeighInModal();
   else if(shouldPromptCalorieGap() && !document.querySelector('.modal-backdrop')) renderCalorieGapModal(pendingCalorieGapDates());
@@ -5230,6 +5446,8 @@ function attachHandlers(){
   document.querySelectorAll('[data-quick-nav]').forEach(b=>b.addEventListener('click', e=>{
     e.stopPropagation(); goToTab(b.dataset.quickNav, b.dataset.logFocus||null);
   }));
+  const openTimerBannerBtn = document.getElementById('btn-open-timer-banner');
+  if(openTimerBannerBtn) openTimerBannerBtn.addEventListener('click', openTimerModal);
   document.querySelectorAll('[data-open-modal]').forEach(el=>el.addEventListener('click', ()=>{
     const which = el.dataset.openModal;
     if(which==='totals') openTotalsModal();
