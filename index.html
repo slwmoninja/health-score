@@ -179,14 +179,12 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .routine-tile .sub{font-size:11px;color:var(--muted);display:-webkit-box;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
-.routine-go-btn{flex:0 0 auto;border:none;border-radius:9px;min-width:30px;height:30px;padding:0 6px;
-  background:linear-gradient(180deg, color-mix(in srgb, var(--deepred) 100%, white 15%), var(--deepred));
-  color:#fff;font-weight:800;font-size:10.5px;box-shadow:0 2px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.4);
-  transition:transform .08s, box-shadow .08s;}
-.routine-go-btn:active{transform:translateY(1px);box-shadow:0 1px 0 var(--btn-lo);}
 .routine-delete-btn{position:absolute;top:4px;right:6px;border:none;background:none;color:var(--muted);
   font-size:17px;line-height:1;padding:4px 6px;border-radius:6px;}
 .routine-delete-btn:active{color:var(--critical);}
+.routine-edit-btn{position:absolute;bottom:4px;right:6px;border:none;background:none;color:var(--muted);
+  font-size:15px;line-height:1;padding:5px 7px;border-radius:6px;}
+.routine-edit-btn:active{color:var(--text);}
 /* Reactive "picked up" feedback the instant a press starts anywhere on the
    card, and a "landing here" highlight on whichever tile is currently under
    the finger during a drag — applied as direct style/class changes during
@@ -431,7 +429,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.1.2';
+const APP_VERSION = '2.1.3';
 
 function defaultState(){
   return {
@@ -1222,7 +1220,6 @@ function startWorkoutSession(routine, freeformTitle){
     routineId: routine ? routine.id : null,
     startTime: Date.now(), endTime: null, description:'',
     status:'running', pausedAccumMs:0, pausedAt:null,
-    caloriesBurnedOverride: null, // null = show the live auto-estimate; a number once the user edits it — see estimateWorkoutCalories
     exercises
   };
   saveState(); render();
@@ -1245,11 +1242,9 @@ function finishWorkoutSession(discard){
   if(discard){ state.activeWorkoutSession=null; saveState(); render(); return; }
   if(s.status==='paused'){ s.pausedAccumMs += Date.now()-s.pausedAt; s.pausedAt=null; }
   s.endTime = Date.now(); s.status = 'completed';
-  // Finalize whichever the user was actually looking at — their own typed
-  // override if they edited it, otherwise the live auto-estimate — into the
-  // permanent caloriesBurned field, then drop the live-only override field.
-  s.caloriesBurned = s.caloriesBurnedOverride!=null ? s.caloriesBurnedOverride : estimateWorkoutCalories(s);
-  delete s.caloriesBurnedOverride;
+  // No editable calorie field in the active-session UI — always the
+  // automatic estimate, finalized into the permanent caloriesBurned field.
+  s.caloriesBurned = estimateWorkoutCalories(s);
   // Drop any set rows never actually checked off — pre-populated planned rows
   // (see plannedSetRows) or an extra "+ Add Set" row left blank — so an
   // unfinished plan doesn't get recorded as if it happened; same for an
@@ -1279,13 +1274,6 @@ function logQuickStartManualTime(type, minutes){
   getDay(iso).workouts.push(s);
   saveState(); render();
   checkGoalsAndCelebrate(iso);
-}
-function addExerciseToActiveSession(exerciseId){
-  const s = state.activeWorkoutSession; if(!s) return;
-  const ex = exerciseById(exerciseId); if(!ex) return;
-  s.exercises.push({id:Date.now()+Math.random(), exerciseId, exerciseTitle:ex.name, supersetId:null, notes:'', order:s.exercises.length,
-    sets:plannedSetRows({exerciseId, targetSets:1, targetReps:null, targetWeightLb:null, targetDurationSec:null, targetDistanceMi:null})});
-  saveState(); render();
 }
 // Grows/shrinks an exercise's set count in place — plannedSetRows seeds every
 // set with identical values, so growing just clones the last row's values
@@ -1340,16 +1328,6 @@ function removeExerciseFromActiveSession(idx){
   s.exercises.splice(idx,1);
   s.exercises.forEach((ex,i)=>ex.order=i);
   saveState(); render();
-}
-function volumeLbForSession(s){
-  let total = 0;
-  s.exercises.forEach(ex=>ex.sets.forEach(set=>{
-    if(set.completed && set.weightLb!=null && set.reps!=null) total += set.weightLb*set.reps;
-  }));
-  return Math.round(total);
-}
-function completedSetCountForSession(s){
-  return s.exercises.reduce((sum,ex)=>sum+ex.sets.filter(set=>set.completed).length, 0);
 }
 // Codebase's first setInterval — deliberately scoped to a single textContent
 // write, never triggering its own render(), since render() is a full innerHTML
@@ -1623,10 +1601,10 @@ function reorderRoutines(draggedId, targetId){
 // full-width Start button, and a clamped exercise-list subtitle.
 // data-routine-tile is the reorder script's lookup key (see the
 // ROUTINE TILE REORDER script) — the ENTIRE tile is the drag surface (press
-// and drag to reorder) and also the tap target to open the editor, with the
-// "Go!" button and the small "x" delete button as the two explicit
-// exceptions (a plain confirm()-gated delete was simpler and more reliable
-// than a long-press gesture).
+// and drag to reorder) and also the tap target to START the routine, with
+// the small pencil edit button and the "x" delete button as the two
+// explicit exceptions (a plain confirm()-gated delete was simpler and more
+// reliable than a long-press gesture).
 function routineTileHtml(r){
   const exerciseNames = r.exercises.map(re=>{
     const ex = exerciseById(re.exerciseId);
@@ -1635,10 +1613,10 @@ function routineTileHtml(r){
   return `<div class="routine-tile" data-routine-tile="${r.id}">
     <button class="routine-delete-btn" data-delete-routine="${r.id}" type="button" title="Delete routine" aria-label="Delete routine">&times;</button>
     <div class="routine-tile-head">
-      <button class="routine-go-btn" data-start-routine="${r.id}" type="button" title="Start routine">Go!</button>
       <h4>${escapeHtml(r.name)}</h4>
     </div>
     <div class="sub">${exerciseNames ? escapeHtml(exerciseNames) : 'No exercises yet'}</div>
+    <button class="routine-edit-btn" data-edit-routine="${r.id}" type="button" title="Edit routine" aria-label="Edit routine">✎</button>
   </div>`;
 }
 // Routine tiles only — the merged Quick Start popup (timed general activity
@@ -1757,15 +1735,15 @@ function liveTargetColumns(s){
 // still fits on one screen. Sets/Reps/Weight/etc. are editable and apply to
 // every set in the exercise uniformly (see updateExerciseField/
 // updateExerciseSetCount) — a deliberate trade of per-set precision for
-// speed, since checking off a whole exercise at a glance was the ask. Time
-// goal is separate Min/Sec fields (e.g. "1 min 30 sec"), stored internally
-// as one durationSec (min*60+sec) like every other duration field.
+// speed, since checking off a whole exercise at a glance was the ask.
+// Elapsed time is tracked once for the whole session (the card's own
+// clock/workoutDurationMs), not per exercise — estimateWorkoutCalories
+// already keys off that single session duration, never a per-exercise value.
 function activeSessionExerciseHtml(ex, idx, columns){
   const template = exerciseById(ex.exerciseId);
   const fields = liveFieldsForExercise(template);
   const allCompleted = ex.sets.length>0 && ex.sets.every(set=>set.completed);
   const first = ex.sets[0] || {};
-  const totalSec = first.durationSec || 0;
   return `<div class="set-table-row">
     <button class="set-check${allCompleted?' checked':''}" data-toggle-exercise="${idx}" type="button" style="flex:0 0 28px;" title="Mark all sets complete">✓</button>
     <span class="name" data-exercise-history="${ex.exerciseId}" style="flex:1;min-width:0;text-align:left;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;">${escapeHtml(ex.exerciseTitle)}</span>
@@ -1774,31 +1752,16 @@ function activeSessionExerciseHtml(ex, idx, columns){
       const val = f==='sets' ? ex.sets.length : (first[f]!=null ? first[f] : '');
       return `<input type="number"${f==='distanceMi'?' step="0.1"':''} style="flex:0 0 44px;" data-exercise-field="${idx}:${f}" value="${val}">`;
     }).join('')}
-    <input type="number" style="flex:0 0 32px;" data-exercise-time="${idx}:min" value="${totalSec?Math.floor(totalSec/60):''}" placeholder="0">
-    <input type="number" style="flex:0 0 32px;" data-exercise-time="${idx}:sec" value="${totalSec?totalSec%60:''}" placeholder="0">
     <button class="del" data-rm-exercise-session="${idx}" type="button" style="flex:0 0 16px;font-size:14px;padding:0;" title="Remove exercise">×</button>
   </div>`;
 }
-let workoutSessionSearchQuery = ''; // exercise search box inside an active session card
 function activeWorkoutSessionCard(){
   const s = state.activeWorkoutSession;
   // Quick Start sessions (routineId null — see startWorkoutSession) are a
   // freeform timer for a named activity type, not an exercise log — no
-  // Volume/Sets stats or Add exercise search, just Duration + Calories.
+  // exercise table at all, just the clock.
   const isQuickStart = s.routineId===null;
-  const wsResults = isQuickStart ? [] : getExerciseResults(workoutSessionSearchQuery);
   const liveColumns = isQuickStart ? [] : liveTargetColumns(s);
-  // Volume/Sets are only meaningful once at least one exercise in the
-  // session is actually a weights/reps/sets activity — a routine made
-  // entirely of pure-time exercises (e.g. an "Indoor Bike"/Spinning
-  // session) would otherwise always show a meaningless "Volume 0 lbs /
-  // Sets 0", same reasoning as liveFieldsForExercise's opt-in gating.
-  const hasWeightTracking = !isQuickStart && s.exercises.some(ex=>usesSetsCount((exerciseById(ex.exerciseId)||{}).metricType));
-  const volume = volumeLbForSession(s), setCount = completedSetCountForSession(s);
-  // Live auto-estimate (recomputed every render, so it tracks a growing
-  // duration) unless the user's typed their own override — see
-  // estimateWorkoutCalories's own comment for the formula and its limits.
-  const displayCal = s.caloriesBurnedOverride!=null ? s.caloriesBurnedOverride : estimateWorkoutCalories(s);
   const clockHtml = s.status==='paused' ? 'Paused' : `<span id="workout-elapsed">${formatElapsed(workoutDurationMs(s))}</span>`;
   return `<div class="card">
     <div class="card-head">
@@ -1810,33 +1773,18 @@ function activeWorkoutSessionCard(){
         ${s.status==='running'
           ? `<button class="iconbtn" id="btn-pause-workout" title="Pause" type="button">⏸</button>`
           : `<button class="iconbtn" id="btn-resume-workout" title="Resume" type="button">▶</button>`}
-        <button class="iconbtn" id="btn-finish-workout" title="Finish & save" type="button">⏹</button>
+        <button class="iconbtn" id="btn-finish-workout" title="Finish & save" type="button">💾</button>
         <button class="iconbtn" id="btn-discard-workout" title="Discard workout (exit)" type="button">✕</button>
       </div>
-    </div>
-    <div class="row" style="margin-bottom:14px;align-items:flex-start;flex-wrap:wrap;gap:10px;">
-      ${hasWeightTracking ? `
-      <div><div class="muted" style="font-size:11px;">Volume</div><div style="font-weight:700;">${volume.toLocaleString()} lbs</div></div>
-      <div><div class="muted" style="font-size:11px;">Sets</div><div style="font-weight:700;">${setCount}</div></div>` : ''}
-      <div><div class="muted" style="font-size:11px;">Calories (est.)</div><input type="number" id="workout-calories-input" value="${displayCal}" style="width:56px;padding:4px 2px;text-align:center;border-radius:6px;border:1px solid var(--border);background:var(--page);color:var(--text);font-size:14px;font-weight:700;"></div>
     </div>
     ${isQuickStart ? '' : `
     ${s.exercises.length ? `<div class="set-table-head">
       <span style="flex:0 0 28px;"></span>
       <span style="flex:1;text-align:left;">Exercise</span>
       ${liveColumns.map(f=>`<span style="flex:0 0 44px;">${LIVE_FIELD_LABELS[f]}</span>`).join('')}
-      <span style="flex:0 0 32px;">MIN</span><span style="flex:0 0 32px;">SEC</span>
       <span style="flex:0 0 16px;"></span>
     </div>` : ''}
-    ${s.exercises.map((ex,i)=>activeSessionExerciseHtml(ex,i,liveColumns)).join('')}
-    <div class="field" style="margin-top:10px;">
-      <label>Add exercise</label>
-      <input type="text" id="ws-search" placeholder="Search exercises…" value="${escapeHtml(workoutSessionSearchQuery)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-    </div>
-    ${!workoutSessionSearchQuery && wsResults.length ? `<div class="muted" style="margin:6px 0 -2px;">Recent Exercises</div>` : ''}
-    <div class="search-list ${wsResults.length?'':'hidden'}" id="ws-results">
-      ${wsResults.map((e,i)=>`<div class="search-item" data-idx="${i}" style="display:flex;align-items:center;gap:10px;">${exerciseThumbHtml(e.category)}<div><div class="n">${escapeHtml(e.name)}</div><div class="m">${escapeHtml(e.category)}</div></div></div>`).join('')}
-    </div>`}
+    ${s.exercises.map((ex,i)=>activeSessionExerciseHtml(ex,i,liveColumns)).join('')}`}
   </div>`;
 }
 // Today's already-finished sessions — same "shown alongside the log form, delete
@@ -2299,10 +2247,9 @@ function metForSession(s){
   const cardioCount = types.filter(mt=>mt==='distance_duration'||mt==='duration').length;
   return types.length && cardioCount > types.length/2 ? 6 : 5;
 }
-// Standard MET formula: kcal = MET x bodyweight(kg) x duration(hours). This
-// is the AUTOMATIC estimate — the user can override it (session.caloriesBurnedOverride
-// while live, finalized into session.caloriesBurned at finish; see
-// finishWorkoutSession/activeWorkoutSessionCard).
+// Standard MET formula: kcal = MET x bodyweight(kg) x duration(hours). Not
+// shown live during the session — computed once, into session.caloriesBurned,
+// when the session is finished; see finishWorkoutSession.
 function estimateWorkoutCalories(s){
   const p = state.profile; if(!p) return 0;
   return Math.round(metForSession(s) * lbToKg(p.weightLb) * (workoutDurationMs(s)/3600000));
@@ -4904,24 +4851,24 @@ function attachHandlers(){
   if(newRoutineBtn) newRoutineBtn.addEventListener('click', ()=>renderRoutineBuilderModal(null));
   const quickStartTopbarBtn = document.getElementById('btn-quickstart-topbar');
   if(quickStartTopbarBtn) quickStartTopbarBtn.addEventListener('click', renderQuickStartModal);
-  document.querySelectorAll('[data-start-routine]').forEach(btn=>{
+  document.querySelectorAll('[data-edit-routine]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      const routine = state.routines.find(r=>r.id===Number(btn.dataset.startRoutine));
-      if(routine) startWorkoutSession(routine);
+      const routine = state.routines.find(r=>r.id===Number(btn.dataset.editRoutine));
+      if(routine) renderRoutineBuilderModal(routine);
     });
   });
   document.querySelectorAll('[data-delete-routine]').forEach(btn=>{
     btn.addEventListener('click', ()=>deleteRoutine(Number(btn.dataset.deleteRoutine)));
   });
-  // Tapping the tile body (not Go!/delete) opens the editor — the browser only
-  // fires this synthetic click for a genuine tap, since the drag script above
-  // only calls preventDefault() once a real drag is confirmed past the
-  // movement threshold, so it never fires mid-reorder.
+  // Tapping the tile body (not the pencil/delete icons) starts the routine —
+  // the browser only fires this synthetic click for a genuine tap, since the
+  // drag script above only calls preventDefault() once a real drag is
+  // confirmed past the movement threshold, so it never fires mid-reorder.
   document.querySelectorAll('.routine-tile').forEach(tile=>{
     tile.addEventListener('click', e=>{
-      if(e.target.closest('[data-start-routine], [data-delete-routine]')) return;
+      if(e.target.closest('[data-edit-routine], [data-delete-routine]')) return;
       const routine = state.routines.find(r=>r.id===Number(tile.dataset.routineTile));
-      if(routine) renderRoutineBuilderModal(routine);
+      if(routine) startWorkoutSession(routine);
     });
   });
 
@@ -4937,12 +4884,6 @@ function attachHandlers(){
   if(discardWorkoutBtn) discardWorkoutBtn.addEventListener('click', ()=>{
     if(confirm('Discard this workout? This cannot be undone.')) finishWorkoutSession(true);
   });
-  const calInput = document.getElementById('workout-calories-input');
-  if(calInput) calInput.addEventListener('input', ()=>{
-    state.activeWorkoutSession.caloriesBurnedOverride = calInput.value===''? null : Number(calInput.value);
-    saveState(); // no render() — avoid disrupting typing, same reasoning as updateExerciseField
-  });
-
   document.querySelectorAll('[data-toggle-exercise]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const sessionEx = state.activeWorkoutSession.exercises[Number(btn.dataset.toggleExercise)];
@@ -4957,42 +4898,11 @@ function attachHandlers(){
       else updateExerciseField(sessionEx.id, field, inp.value);
     });
   });
-  document.querySelectorAll('[data-exercise-time]').forEach(inp=>{
-    inp.addEventListener('input', ()=>{
-      const [exIdxStr] = inp.dataset.exerciseTime.split(':');
-      const exIdx = Number(exIdxStr);
-      const row = inp.closest('.set-table-row');
-      const min = Number(row.querySelector(`[data-exercise-time="${exIdx}:min"]`).value)||0;
-      const sec = Number(row.querySelector(`[data-exercise-time="${exIdx}:sec"]`).value)||0;
-      const sessionEx = state.activeWorkoutSession.exercises[exIdx];
-      updateExerciseField(sessionEx.id, 'durationSec', min*60+sec>0 ? min*60+sec : null);
-    });
-  });
   document.querySelectorAll('[data-rm-exercise-session]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       if(confirm('Remove this exercise from the workout?')) removeExerciseFromActiveSession(Number(btn.dataset.rmExerciseSession));
     });
   });
-  const wsSearch = document.getElementById('ws-search');
-  if(wsSearch){
-    wsSearch.addEventListener('input', ()=>{
-      workoutSessionSearchQuery = wsSearch.value;
-      render();
-      const el = document.getElementById('ws-search');
-      if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
-    });
-  }
-  const wsResultsEl = document.getElementById('ws-results');
-  if(wsResultsEl){
-    const wsResults = getExerciseResults(workoutSessionSearchQuery);
-    wsResultsEl.querySelectorAll('.search-item').forEach(el=>{
-      el.addEventListener('click', ()=>{
-        addExerciseToActiveSession(wsResults[Number(el.dataset.idx)].id);
-        workoutSessionSearchQuery = '';
-        render();
-      });
-    });
-  }
   document.querySelectorAll('[data-del-workout]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const id = Number(btn.dataset.delWorkout);
@@ -5406,7 +5316,7 @@ window.addEventListener('appinstalled', ()=>{
 
 /* =========================================================
    ROUTINE TILE REORDER — the whole tile is the drag surface (except the
-   "Go!" and "x" delete buttons, excluded by touchstart's closest() check).
+   pencil edit and "x" delete buttons, excluded by touchstart's closest() check).
    Mirrors the pull-to-refresh gesture above: direct style/class changes
    during the drag itself (no render(), so it stays smooth and doesn't
    fight the gesture mid-motion), one committed reorderRoutines() + render()
@@ -5421,7 +5331,7 @@ window.addEventListener('appinstalled', ()=>{
   let candidateId = null, candidateEl = null, startX = 0, startY = 0;
   let draggingId = null, draggingEl = null, dropTargetEl = null, isDragging = false;
   document.addEventListener('touchstart', e=>{
-    if(e.target.closest('[data-start-routine], [data-delete-routine]')) return;
+    if(e.target.closest('[data-edit-routine], [data-delete-routine]')) return;
     const tile = e.target.closest('.routine-tile');
     if(!tile) return;
     candidateId = Number(tile.dataset.routineTile);
