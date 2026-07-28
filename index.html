@@ -174,16 +174,17 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .routine-tile-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
 .routine-tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
   padding:12px;box-shadow:var(--shadow);position:relative;transition:box-shadow .15s, opacity .15s;}
-.routine-tile-head{display:flex;align-items:center;gap:6px;margin-bottom:6px;}
+.routine-tile-head{display:flex;align-items:center;gap:6px;margin-bottom:6px;padding-right:52px;}
 .routine-tile-head h4{margin:0;font-size:14px;font-weight:700;color:var(--text);flex:1;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .routine-tile .sub{font-size:11px;color:var(--muted);display:-webkit-box;
   -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
-.routine-delete-btn{position:absolute;top:4px;right:6px;border:none;background:none;color:var(--muted);
+.routine-tile-actions{position:absolute;top:4px;right:4px;display:flex;align-items:center;gap:0;}
+.routine-delete-btn{border:none;background:none;color:var(--muted);
   font-size:17px;line-height:1;padding:4px 6px;border-radius:6px;}
 .routine-delete-btn:active{color:var(--critical);}
-.routine-edit-btn{position:absolute;bottom:4px;right:6px;border:none;background:none;color:var(--muted);
-  font-size:15px;line-height:1;padding:5px 7px;border-radius:6px;}
+.routine-edit-btn{border:none;background:none;color:var(--muted);
+  font-size:14px;line-height:1;padding:4px 6px;border-radius:6px;}
 .routine-edit-btn:active{color:var(--text);}
 /* Reactive "picked up" feedback the instant a press starts anywhere on the
    card, and a "landing here" highlight on whichever tile is currently under
@@ -429,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.1.3';
+const APP_VERSION = '2.1.4';
 
 function defaultState(){
   return {
@@ -1125,7 +1126,7 @@ const EXERCISE_DB_RAW = [
 ['Glute Bridge (Barbell)','Legs','weight_reps'],['Glute Kickback (Cable)','Legs','weight_reps'],
 ['Adductor (Machine)','Legs','weight_reps'],['Abductor (Machine)','Legs','weight_reps'],
 ['Calf Raise (Machine)','Legs','weight_reps'],['Standing Calf Raise (Machine)','Legs','weight_reps'],
-['Seated Calf Raise (Machine)','Legs','weight_reps'],
+['Seated Calf Raise (Machine)','Legs','weight_reps'],['Wall Sit','Legs','reps_only'],
 // Core
 ['Plank','Core','duration'],['Side Plank','Core','duration'],
 ['Crunch','Core','reps_only'],['Sit Up','Core','reps_only'],
@@ -1209,6 +1210,7 @@ function plannedSetRows(re){
 // freeformTitle names a Quick Start session (e.g. "Walking") when there's no
 // routine — ignored if routine is set, since the routine's own name wins.
 function startWorkoutSession(routine, freeformTitle){
+  unlockWorkoutAudio();
   const exercises = routine ? routine.exercises.map((re,i)=>{
     const ex = exerciseById(re.exerciseId);
     return {id:Date.now()+Math.random()+i, exerciseId:re.exerciseId, exerciseTitle:ex?ex.name:'',
@@ -1231,6 +1233,7 @@ function pauseWorkoutSession(){
 }
 function resumeWorkoutSession(){
   const s = state.activeWorkoutSession; if(!s || s.status!=='paused') return;
+  unlockWorkoutAudio();
   s.pausedAccumMs += Date.now()-s.pausedAt; s.pausedAt=null; s.status='running';
   saveState(); render();
 }
@@ -1334,14 +1337,46 @@ function removeExerciseFromActiveSession(idx){
 // rebuild (see its own comment) and would be wasteful/input-focus-hostile at a
 // 1Hz cadence. Armed/cleared once per render() call (see its own body) so it's
 // always in sync with whichever screen is currently mounted.
-let workoutTimerInterval = null;
+// Lazily created on a real user gesture (start/resume button) rather than
+// inside the timer tick itself, since Safari/iOS only allows AudioContext
+// creation/unlock from a direct user-initiated event.
+let workoutAudioCtx = null;
+function unlockWorkoutAudio(){
+  if(!workoutAudioCtx) workoutAudioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  if(workoutAudioCtx.state==='suspended') workoutAudioCtx.resume();
+}
+function playPingSound(){
+  if(!workoutAudioCtx) return;
+  const ctx = workoutAudioCtx;
+  const osc = ctx.createOscillator(), gain = ctx.createGain();
+  osc.type = 'sine'; osc.frequency.value = 880;
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime+0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+0.3);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(); osc.stop(ctx.currentTime+0.3);
+}
+// Plank holds have no per-exercise timer of their own (the active session
+// table is a flat checklist, not a sequential player) — a 30s ping off the
+// CARD's overall elapsed clock is a pacing cue while holding one, not tied
+// to which exercise is "current" since there is no such concept here.
+function sessionHasPlankExercise(s){
+  return s.exercises.some(ex=>ex.exerciseTitle==='Plank'||ex.exerciseTitle==='Side Plank');
+}
+let workoutTimerInterval = null, lastPingBucket = null;
 function wireWorkoutTimer(){
   clearInterval(workoutTimerInterval); workoutTimerInterval = null;
-  if(!state.activeWorkoutSession || state.activeWorkoutSession.status!=='running') return;
+  const s = state.activeWorkoutSession;
+  if(!s || s.status!=='running') return;
+  lastPingBucket = Math.floor(workoutDurationMs(s)/30000);
   workoutTimerInterval = setInterval(()=>{
     const el = document.getElementById('workout-elapsed');
     if(!el){ clearInterval(workoutTimerInterval); return; } // defensive: DOM was replaced without going through render()
-    el.textContent = formatElapsed(workoutDurationMs(state.activeWorkoutSession));
+    const ms = workoutDurationMs(state.activeWorkoutSession);
+    el.textContent = formatElapsed(ms);
+    const bucket = Math.floor(ms/30000);
+    if(bucket>lastPingBucket && sessionHasPlankExercise(state.activeWorkoutSession)) playPingSound();
+    lastPingBucket = bucket;
   }, 1000);
 }
 
@@ -1611,12 +1646,14 @@ function routineTileHtml(r){
     return ex ? ex.name : re.exerciseId;
   }).join(', ');
   return `<div class="routine-tile" data-routine-tile="${r.id}">
-    <button class="routine-delete-btn" data-delete-routine="${r.id}" type="button" title="Delete routine" aria-label="Delete routine">&times;</button>
+    <div class="routine-tile-actions">
+      <button class="routine-edit-btn" data-edit-routine="${r.id}" type="button" title="Edit routine" aria-label="Edit routine">✎</button>
+      <button class="routine-delete-btn" data-delete-routine="${r.id}" type="button" title="Delete routine" aria-label="Delete routine">&times;</button>
+    </div>
     <div class="routine-tile-head">
       <h4>${escapeHtml(r.name)}</h4>
     </div>
     <div class="sub">${exerciseNames ? escapeHtml(exerciseNames) : 'No exercises yet'}</div>
-    <button class="routine-edit-btn" data-edit-routine="${r.id}" type="button" title="Edit routine" aria-label="Edit routine">✎</button>
   </div>`;
 }
 // Routine tiles only — the merged Quick Start popup (timed general activity
