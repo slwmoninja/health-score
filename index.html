@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.1.9';
+const APP_VERSION = '2.2.0';
 
 function defaultState(){
   return {
@@ -465,7 +465,8 @@ function defaultState(){
     pendingReinstallToast: false, // set by reinstallApp() right before its reload, shown on the next fresh page load
     weightGoalCelebrated: false, // stops the weight-goal modal re-firing every subsequent weigh-in once already prompted for the current target — see checkWeightGoalReached
     pendingWeightGoalPrompt: false, // target crossed but the modal hasn't shown yet — shown on the next fresh page load, same convention as pendingCelebration
-    weighInRemindAt: null // iso date "Later" on the Sunday weigh-in should re-prompt on, even though that day isn't a Sunday — see shouldPromptWeighIn
+    weighInRemindAt: null, // iso date "Later" on the Sunday weigh-in should re-prompt on, even though that day isn't a Sunday — see shouldPromptWeighIn
+    plankRecords: {} // { 'Plank': [{ms, iso}, ...top 5 longest], 'Side Plank': [...] } — see recordPlankTimes
   };
 }
 
@@ -695,6 +696,22 @@ function logError(message){
   state.errorLog = state.errorLog.slice(0, 3);
   saveState();
 }
+// No web API can ask "is Spotify installed?" (browsers deliberately don't
+// expose that), so this is the standard app-link-with-web-fallback trick:
+// navigate to the spotify: URI immediately, but also arm a timer that falls
+// back to the web player. If the app WAS installed, the OS switches away
+// from this tab to open it, firing 'visibilitychange' (document.hidden),
+// which cancels the fallback before it ever fires; if it wasn't installed,
+// nothing intercepts the navigation, the tab stays visible/foregrounded,
+// and the fallback fires on schedule.
+function openSpotify(){
+  const fallback = setTimeout(()=>{ window.location.href = 'https://open.spotify.com'; }, 1500);
+  const onVisChange = ()=>{
+    if(document.hidden){ clearTimeout(fallback); document.removeEventListener('visibilitychange', onVisChange); }
+  };
+  document.addEventListener('visibilitychange', onVisChange);
+  window.location.href = 'spotify://';
+}
 // Backing logic for the onboarding "Restore latest backup" flow — see
 // openBackupRestorePicker for how the file(s) get here.
 async function importDataFromFile(file){
@@ -882,6 +899,16 @@ function getDay(iso){
   if(!state.days[iso].celebrated) state.days[iso].celebrated = {};
   if(!state.days[iso].workouts) state.days[iso].workouts = []; // upgrade older saved days
   return state.days[iso];
+}
+// Edit/delete on a saved workout (Today's card or History) look it up by id
+// across every day rather than assuming "today", since the same row markup
+// and handlers are shared between both places — see workoutListRowHtml.
+function findWorkoutById(id){
+  for(const iso in state.days){
+    const w = (state.days[iso].workouts||[]).find(w=>w.id===id);
+    if(w) return w;
+  }
+  return null;
 }
 // Marks the first time (per day) steps, active minutes, or a perfect Total Score
 // cross their goal — checked after every activity/food update. Deliberately does
@@ -1253,6 +1280,7 @@ function restartWorkoutSessionTimer(){
 function finishWorkoutSession(discard){
   const s = state.activeWorkoutSession; if(!s) return;
   stopVoiceControl();
+  if(scoreSheetWrap) closeScoreSheetModal(); // e.g. a voice "stop" while the score modal is open on top
   if(discard){ state.activeWorkoutSession=null; saveState(); render(); return; }
   if(s.status==='paused'){ s.pausedAccumMs += Date.now()-s.pausedAt; s.pausedAt=null; }
   s.endTime = Date.now(); s.status = 'completed';
@@ -1266,6 +1294,7 @@ function finishWorkoutSession(discard){
   s.exercises.forEach(ex=>{ ex.sets = ex.sets.filter(set=>set.completed); ex.sets.forEach((set,i)=>set.index=i); });
   s.exercises = s.exercises.filter(ex=>ex.sets.length>0);
   const iso = isoDate(new Date(s.startTime));
+  recordPlankTimes(s, iso);
   getDay(iso).workouts.push(s);
   state.activeWorkoutSession = null;
   saveState(); render();
@@ -1367,14 +1396,45 @@ function playPingSound(){
   osc.connect(gain); gain.connect(ctx.destination);
   osc.start(); osc.stop(ctx.currentTime+0.3);
 }
+// Short, higher-pitched chirp distinct from the plank ping — confirms a
+// voice command (Pause/Resume/Restart/Stop) was actually heard and acted on,
+// since there's no visual feedback to glance at mid-exercise/hold.
+function playVoiceAckSound(){
+  if(!workoutAudioCtx) return;
+  const ctx = workoutAudioCtx;
+  const osc = ctx.createOscillator(), gain = ctx.createGain();
+  osc.type = 'sine'; osc.frequency.value = 1400;
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime+0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+0.12);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(); osc.stop(ctx.currentTime+0.12);
+}
 // Plank holds have no per-exercise timer of their own (the active session
 // table is a flat checklist, not a sequential player) — a ping off the
 // CARD's overall elapsed clock (interval user-configurable, Settings >
 // Profile Preferences > Plank Ping Interval, default 30s) is a pacing cue
 // while holding one, not tied to which exercise is "current" since there
 // is no such concept here.
+const PLANK_EXERCISE_NAMES = ['Plank','Side Plank'];
 function sessionHasPlankExercise(s){
-  return s.exercises.some(ex=>ex.exerciseTitle==='Plank'||ex.exerciseTitle==='Side Plank');
+  return s.exercises.some(ex=>PLANK_EXERCISE_NAMES.includes(ex.exerciseTitle));
+}
+// Whichever of Plank/Side Plank actually survived finishWorkoutSession's
+// never-checked-off filter gets the session's overall duration recorded as
+// its "time length" — same stand-in-for-a-per-exercise-timer convention as
+// the ping (see sessionHasPlankExercise's own comment): there's no separate
+// per-exercise clock to read, only the card's one shared clock. Keeps the 5
+// longest per exercise name, newest-date-wins on an exact tie via stable sort.
+function recordPlankTimes(s, iso){
+  const ms = workoutDurationMs(s); // called after s.status='completed'/s.endTime is set
+  PLANK_EXERCISE_NAMES.forEach(name=>{
+    if(!s.exercises.some(ex=>ex.exerciseTitle===name)) return;
+    const list = state.plankRecords[name] || (state.plankRecords[name] = []);
+    list.push({ms, iso});
+    list.sort((a,b)=>b.ms-a.ms);
+    state.plankRecords[name] = list.slice(0,5);
+  });
 }
 let workoutTimerInterval = null, lastPingBucket = null;
 function wireWorkoutTimer(){
@@ -1441,10 +1501,13 @@ function stopVoiceControl(){
 function handleVoiceCommand(e){
   if(!state.activeWorkoutSession) return;
   const transcript = e.results[e.results.length-1][0].transcript.trim().toLowerCase();
+  let matched = true;
   if(/\bpause\b/.test(transcript)) pauseWorkoutSession();
   else if(/\brestart\b/.test(transcript)) restartWorkoutSessionTimer();
   else if(/\b(resume|continue)\b/.test(transcript)) resumeWorkoutSession();
   else if(/\b(stop|save|finish)\b/.test(transcript)) finishWorkoutSession(false);
+  else matched = false;
+  if(matched) playVoiceAckSound();
 }
 
 /* =========================================================
@@ -1738,6 +1801,11 @@ function workoutsQuickCard(){
 // recentQuickStartTypes, at which point orderedQuickStartTypes floats those
 // above it same as anything else in this base order.
 const QUICK_START_TYPES = ['Tennis','Walking','Indoor Bike','Outdoor Bike','Running','Weight Routine','Pilates/Yoga','Hiking','Swimming','Elliptical','Rowing','Stairmaster','Other'];
+// Quick Start types that track a game score (sets/games), not just duration —
+// gates the "Record Score?" button on the active session card and the score
+// section of the workout edit modal. Extend this list, not the score-sheet
+// code itself, if another scoring sport gets added later.
+const SCORING_ACTIVITY_TYPES = ['Tennis'];
 // Last 5 picks float to the top of the dropdown, most-recent-first, followed
 // by the rest of the fixed list in its normal order — so a repeat choice is
 // one tap away without hiding the full list.
@@ -1803,6 +1871,249 @@ function wireQuickStartHandlers(){
     recordQuickStartType(type);
     closeQuickStartModal();
     logQuickStartManualTime(type, minutes);
+  });
+}
+
+/* =========================================================
+   SCORE SHEET — "Record Score?" for scoring activities (Tennis today, see
+   SCORING_ACTIVITY_TYPES). One reusable modal for both a LIVE session
+   (state.activeWorkoutSession) and a SAVED record being edited later — the
+   caller just passes whichever workout object it has a reference to;
+   scoreSheetTarget IS that object (not a copy), so editing it in place and
+   calling saveState() is all persistence needs, same convention as
+   routineTileHtml/exercise editing elsewhere in this file. Stored as
+   workout.scoreSheet: a plain array of score strings, one per set/game
+   ("6-4"), index+1 == the set number — deliberately not {set,score} objects
+   since the set number is never edited independently of its position.
+   ========================================================= */
+let scoreSheetWrap = null, scoreSheetTarget = null;
+function openScoreSheetModal(workout){
+  if(!workout.scoreSheet) workout.scoreSheet = [];
+  scoreSheetTarget = workout;
+  scoreSheetWrap = document.createElement('div');
+  document.body.appendChild(scoreSheetWrap);
+  renderScoreSheetDom();
+}
+function closeScoreSheetModal(){
+  stopScoreVoiceControl();
+  if(scoreSheetWrap){ scoreSheetWrap.remove(); scoreSheetWrap=null; }
+  scoreSheetTarget = null;
+  // The Edit Workout modal lives outside #app (see its own comment), so the
+  // global render() a score save triggers doesn't touch its stale "Record
+  // Score?" button label when the score sheet was opened from inside it —
+  // refresh it explicitly instead of waiting for a close/reopen.
+  if(editWorkoutWrap) renderEditWorkoutDom();
+}
+function renderScoreSheetDom(){
+  const sets = scoreSheetTarget.scoreSheet;
+  scoreSheetWrap.innerHTML = `
+  <div class="modal-backdrop center">
+    <div class="modal">
+      <div class="row" style="margin-bottom:10px;"><h2 style="margin:0;">Record Score</h2><button class="iconbtn" id="score-close">✕</button></div>
+      <div id="score-set-rows">
+        ${sets.map((sc,i)=>`<div class="row" style="gap:8px;margin-bottom:6px;align-items:center;">
+          <span class="muted" style="flex:0 0 46px;">Set ${i+1}</span>
+          <input type="text" data-score-idx="${i}" value="${escapeHtml(sc)}" placeholder="e.g. 6-4" style="flex:1;">
+          <button class="iconbtn" data-rm-score-set="${i}" type="button" title="Remove set">×</button>
+        </div>`).join('')}
+      </div>
+      <button class="btn-secondary" id="score-add-set" type="button">+ Add Set</button>
+      <div class="row" style="margin:14px 0 4px;align-items:center;gap:8px;">
+        <button class="iconbtn" id="score-voice-toggle" type="button" title="${scoreVoiceListening?'Turn off voice transcription':'Dictate scores — say e.g. “Set 1 score 6 4, Set 2 score 3 6”'}">${scoreVoiceListening?'🔴':'🎙'}</button>
+        <span class="muted" style="font-size:12px;">Tap mic and say "Set 1 score 6 4, Set 2 score 3 6"</span>
+      </div>
+      <button class="btn-primary" id="score-save" type="button">Save</button>
+    </div>
+  </div>`;
+  wireScoreSheetHandlers();
+}
+function wireScoreSheetHandlers(){
+  const wrap = scoreSheetWrap;
+  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeScoreSheetModal(); });
+  wrap.querySelector('#score-close').addEventListener('click', closeScoreSheetModal);
+  wrap.querySelectorAll('[data-score-idx]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{ scoreSheetTarget.scoreSheet[Number(inp.dataset.scoreIdx)] = inp.value; });
+  });
+  wrap.querySelectorAll('[data-rm-score-set]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      scoreSheetTarget.scoreSheet.splice(Number(btn.dataset.rmScoreSet), 1);
+      renderScoreSheetDom();
+    });
+  });
+  wrap.querySelector('#score-add-set').addEventListener('click', ()=>{
+    scoreSheetTarget.scoreSheet.push('');
+    renderScoreSheetDom();
+  });
+  wrap.querySelector('#score-voice-toggle').addEventListener('click', toggleScoreVoiceControl);
+  wrap.querySelector('#score-save').addEventListener('click', ()=>{
+    // Drop blank rows left over from "+ Add Set" or a removed dictated set
+    // that was never filled in, same reasoning as finishWorkoutSession's
+    // never-checked-set cleanup.
+    scoreSheetTarget.scoreSheet = scoreSheetTarget.scoreSheet.filter(sc=>sc && sc.trim());
+    saveState(); render();
+    closeScoreSheetModal();
+  });
+}
+// Separate recognizer/state from the session Pause/Resume/Stop voice control
+// (voiceListening et al) — a different mic button, a different purpose
+// (dictating text into fields vs issuing session commands), and the two can
+// legitimately be open/listening at the same time (session voice control on
+// the card underneath, score dictation in the modal on top).
+let scoreVoiceListening = false, scoreVoiceRecognizer = null, scoreVoiceShouldRestart = false;
+function toggleScoreVoiceControl(){ if(scoreVoiceListening){ stopScoreVoiceControl(); renderScoreSheetDom(); } else startScoreVoiceControl(); }
+function startScoreVoiceControl(){
+  const Ctor = getSpeechRecognitionCtor();
+  if(!Ctor){ showToast('Voice dictation isn’t supported in this browser.', 'critical'); return; }
+  scoreVoiceShouldRestart = true;
+  scoreVoiceRecognizer = new Ctor();
+  scoreVoiceRecognizer.continuous = true;
+  scoreVoiceRecognizer.interimResults = false;
+  scoreVoiceRecognizer.lang = 'en-US';
+  scoreVoiceRecognizer.onresult = handleScoreVoiceResult;
+  scoreVoiceRecognizer.onerror = e=>{
+    if(e.error==='not-allowed' || e.error==='service-not-allowed'){
+      scoreVoiceShouldRestart = false;
+      showToast('Microphone permission denied.', 'critical');
+    }
+  };
+  scoreVoiceRecognizer.onend = ()=>{
+    if(scoreVoiceShouldRestart){ try{ scoreVoiceRecognizer.start(); }catch(e){} }
+    else{ scoreVoiceListening = false; if(scoreSheetWrap) renderScoreSheetDom(); }
+  };
+  try{ scoreVoiceRecognizer.start(); scoreVoiceListening = true; }
+  catch(e){ scoreVoiceListening = false; }
+  renderScoreSheetDom();
+}
+function stopScoreVoiceControl(){
+  scoreVoiceShouldRestart = false;
+  if(scoreVoiceRecognizer){ try{ scoreVoiceRecognizer.stop(); }catch(e){} }
+  scoreVoiceRecognizer = null;
+  scoreVoiceListening = false;
+}
+// Continuous recognition's results list only grows (each finished phrase
+// appends, interimResults is off) so re-parsing the WHOLE transcript every
+// time is simplest and self-correcting rather than trying to diff/append.
+// Recognizes digits only ("Set 1 score 6 4"), not spelled-out numbers
+// ("six four") — Chrome's recognizer typically renders short numbers as
+// digits already, and handling every spelled-out form is out of scope here.
+function parseScoreTranscript(transcript){
+  const chunks = transcript.toLowerCase().split(/\bset\b/).slice(1);
+  const sets = [];
+  chunks.forEach(chunk=>{
+    const nums = chunk.match(/\d+/g);
+    if(!nums || nums.length<2) return;
+    sets.push(nums.length>=3 ? nums[1]+'-'+nums[2] : nums[0]+'-'+nums[1]);
+  });
+  return sets;
+}
+function handleScoreVoiceResult(e){
+  let fullText = '';
+  for(let i=0;i<e.results.length;i++) fullText += ' ' + e.results[i][0].transcript;
+  const sets = parseScoreTranscript(fullText);
+  if(sets.length){ scoreSheetTarget.scoreSheet = sets; renderScoreSheetDom(); }
+}
+
+/* =========================================================
+   EDIT SAVED WORKOUT — every workout record (today's card or a past day's,
+   via History) is editable after the fact, not just deletable: duration
+   (recalculating calories, since they're derived from it — see
+   estimateWorkoutCalories), each exercise's sets/reps/weight/distance (a
+   routine-based record only — Quick Start records have no exercises array
+   to speak of), and the score sheet for scoring activities. workout is the
+   ACTUAL object living in state.days[iso].workouts, not a copy — field
+   edits apply immediately (same no-cancel convention as the live session's
+   own field editing), Save just finalizes duration/calories and persists.
+   ========================================================= */
+let editWorkoutWrap = null, editWorkoutTarget = null;
+function openEditWorkoutModal(workout){
+  editWorkoutTarget = workout;
+  editWorkoutWrap = document.createElement('div');
+  document.body.appendChild(editWorkoutWrap);
+  renderEditWorkoutDom();
+}
+function closeEditWorkoutModal(){
+  if(editWorkoutWrap){ editWorkoutWrap.remove(); editWorkoutWrap=null; }
+  editWorkoutTarget = null;
+}
+function renderEditWorkoutDom(){
+  const w = editWorkoutTarget;
+  const totalSec = Math.round(workoutDurationMs(w)/1000);
+  const min = Math.floor(totalSec/60), sec = totalSec%60;
+  const columns = w.exercises.length ? liveTargetColumns(w) : [];
+  editWorkoutWrap.innerHTML = `
+  <div class="modal-backdrop center">
+    <div class="modal">
+      <div class="row" style="margin-bottom:10px;"><h2 style="margin:0;">${escapeHtml(w.title)}</h2><button class="iconbtn" id="ew-close">✕</button></div>
+      <div class="field-row">
+        <div class="field"><label>Duration (min)</label><input type="number" id="ew-min" value="${min}"></div>
+        <div class="field"><label>Duration (sec)</label><input type="number" id="ew-sec" value="${sec}" max="59"></div>
+      </div>
+      ${SCORING_ACTIVITY_TYPES.includes(w.title) ? `<button class="btn-secondary" id="ew-record-score" type="button" style="margin:2px 0 12px;">${w.scoreSheet && w.scoreSheet.length ? 'Edit Score — '+escapeHtml(w.scoreSheet.join(', ')) : 'Record Score?'}</button>` : ''}
+      ${w.exercises.length ? `
+      <div class="set-table-head">
+        <span style="flex:1;text-align:left;">Exercise</span>
+        ${columns.map(f=>`<span style="flex:0 0 44px;">${LIVE_FIELD_LABELS[f]}</span>`).join('')}
+      </div>
+      ${w.exercises.map((ex,i)=>editWorkoutExerciseRowHtml(ex,i,columns)).join('')}` : ''}
+      <div style="height:10px"></div>
+      <button class="btn-primary" id="ew-save" type="button">Save</button>
+    </div>
+  </div>`;
+  wireEditWorkoutHandlers();
+}
+function editWorkoutExerciseRowHtml(ex, idx, columns){
+  const first = ex.sets[0] || {};
+  return `<div class="set-table-row">
+    <span style="flex:1;min-width:0;text-align:left;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(ex.exerciseTitle)}</span>
+    ${columns.map(f=>{
+      const val = f==='sets' ? ex.sets.length : (first[f]!=null ? first[f] : '');
+      return `<input type="number"${f==='distanceMi'?' step="0.1"':''} style="flex:0 0 44px;" data-ew-field="${idx}:${f}" value="${val}">`;
+    }).join('')}
+  </div>`;
+}
+// Same "one row edits the whole exercise uniformly" convention as
+// updateExerciseField/updateExerciseSetCount, just targeting an arbitrary
+// saved workout instead of always state.activeWorkoutSession — a saved
+// exercise's sets are already uniform (that's how they were recorded), and
+// there's no completed/uncompleted distinction to preserve here since every
+// remaining set in a saved record already happened.
+function updateSavedExerciseField(workout, sessionExerciseId, field, value){
+  const ex = workout.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
+  const v = (value===''||value==null) ? null : Number(value);
+  ex.sets.forEach(set=>{ set[field] = v; });
+}
+function updateSavedExerciseSetCount(workout, sessionExerciseId, count){
+  const ex = workout.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
+  count = Math.max(1, Math.min(20, Math.round(Number(count))||1));
+  const template = ex.sets[ex.sets.length-1] || {weightLb:null, reps:null, distanceMi:null, durationSec:null};
+  while(ex.sets.length < count){
+    ex.sets.push({index:ex.sets.length, setType:'normal', weightLb:template.weightLb, reps:template.reps,
+      distanceMi:template.distanceMi, durationSec:template.durationSec, rpe:null, completed:true});
+  }
+  if(ex.sets.length > count) ex.sets.length = count;
+  ex.sets.forEach((st,i)=>st.index=i);
+}
+function wireEditWorkoutHandlers(){
+  const wrap = editWorkoutWrap, w = editWorkoutTarget;
+  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeEditWorkoutModal(); });
+  wrap.querySelector('#ew-close').addEventListener('click', closeEditWorkoutModal);
+  const scoreBtn = wrap.querySelector('#ew-record-score');
+  if(scoreBtn) scoreBtn.addEventListener('click', ()=>openScoreSheetModal(w));
+  wrap.querySelectorAll('[data-ew-field]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const [idxStr, field] = inp.dataset.ewField.split(':');
+      const ex = w.exercises[Number(idxStr)];
+      if(field==='sets') updateSavedExerciseSetCount(w, ex.id, inp.value);
+      else updateSavedExerciseField(w, ex.id, field, inp.value);
+    });
+  });
+  wrap.querySelector('#ew-save').addEventListener('click', ()=>{
+    const min = Number(wrap.querySelector('#ew-min').value)||0;
+    const sec = Number(wrap.querySelector('#ew-sec').value)||0;
+    w.endTime = w.startTime + (min*60+sec)*1000 + (w.pausedAccumMs||0);
+    w.caloriesBurned = estimateWorkoutCalories(w); // duration changed — recalc the estimate it's derived from
+    saveState(); render();
+    closeEditWorkoutModal();
   });
 }
 // Which value fields a set row shows, per exercise metricType — shared by the
@@ -1883,6 +2194,8 @@ function activeWorkoutSessionCard(){
         <button class="iconbtn" id="btn-discard-workout" title="Discard workout (exit)" type="button">✕</button>
       </div>
     </div>
+    ${isQuickStart && SCORING_ACTIVITY_TYPES.includes(s.title) ? `
+    <button class="btn-secondary" id="btn-record-score" type="button" style="margin-bottom:12px;">${s.scoreSheet && s.scoreSheet.length ? 'Edit Score — '+escapeHtml(s.scoreSheet.join(', ')) : 'Record Score?'}</button>` : ''}
     ${isQuickStart ? '' : `
     ${s.exercises.length ? `<div class="set-table-head">
       <span style="flex:0 0 28px;"></span>
@@ -1891,16 +2204,35 @@ function activeWorkoutSessionCard(){
       <span style="flex:0 0 16px;"></span>
     </div>` : ''}
     ${s.exercises.map((ex,i)=>activeSessionExerciseHtml(ex,i,liveColumns)).join('')}`}
+    ${plankRecordsHtml(s)}
   </div>`;
 }
-// Today's already-finished sessions — same "shown alongside the log form, delete
-// only, no inline edit" convention as todaysFoodsCard().
+// Top 5 longest holds per Plank/Side Plank present in this session, newest
+// finished ones surfacing here too once recorded — see recordPlankTimes.
+function plankRecordsHtml(s){
+  const names = PLANK_EXERCISE_NAMES.filter(name=>s.exercises.some(ex=>ex.exerciseTitle===name) && state.plankRecords[name] && state.plankRecords[name].length);
+  if(!names.length) return '';
+  return `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
+    ${names.map(name=>`
+      <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:4px;">${escapeHtml(name)} — Top 5</div>
+      <div style="margin-bottom:8px;">
+        ${state.plankRecords[name].map((r,i)=>`<div class="row" style="font-size:12px;justify-content:space-between;padding:2px 0;"><span>${i+1}. ${formatElapsed(r.ms)}</span><span class="muted">${r.iso}</span></div>`).join('')}
+      </div>`).join('')}
+  </div>`;
+}
+// Shared between Today's card and the History workouts list — an edit (✎)
+// button opens openEditWorkoutModal (duration/exercises/score, all
+// editable after the fact) alongside the existing delete (×).
+function workoutListRowHtml(w){
+  const scoreSummary = w.scoreSheet && w.scoreSheet.length ? ` · ${escapeHtml(w.scoreSheet.join(', '))}` : '';
+  return `<div class="list-row"><div><div class="name">${escapeHtml(w.title)}</div><div class="sub">${w.exercises.length} exercise${w.exercises.length===1?'':'s'} · ${formatElapsed(workoutDurationMs(w))} · ${(w.caloriesBurned||0).toLocaleString()} kcal${scoreSummary}</div></div><button class="iconbtn" data-edit-workout="${w.id}" type="button" title="Edit" style="width:30px;height:30px;">✎</button><button class="del" data-del-workout="${w.id}" type="button">×</button></div>`;
+}
 function todaysWorkoutsCard(){
   const workouts = getDay(today()).workouts;
   if(workouts.length===0) return '';
   return `<div class="card">
     <h3>Today's workouts</h3>
-    ${workouts.map(w=>`<div class="list-row"><div><div class="name">${escapeHtml(w.title)}</div><div class="sub">${w.exercises.length} exercise${w.exercises.length===1?'':'s'} · ${formatElapsed(workoutDurationMs(w))} · ${(w.caloriesBurned||0).toLocaleString()} kcal</div></div><button class="del" data-del-workout="${w.id}" type="button">×</button></div>`).join('')}
+    ${workouts.map(workoutListRowHtml).join('')}
   </div>`;
 }
 // Shown top-right on every OTHER screen (not the Activity log itself, where
@@ -3765,7 +4097,7 @@ function screenLog(){
   const showNutrition = logFocus!=='activity';
   const showActivity = logFocus!=='nutrition';
   return `
-  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1>${activeSessionBannerHtml()}${showActivity && !state.activeWorkoutSession ? `<button class="workout-banner-btn deepred" id="btn-new-routine-topbar" type="button">New Routine</button><button class="workout-banner-btn" id="btn-quickstart-topbar" type="button" title="Quick Start" style="padding:7px 10px;display:flex;align-items:center;"><svg viewBox="0 0 24 24" width="15" height="15" fill="#fff"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-8z"/></svg></button>` : ''}${installTopbarBtnHtml()}</div>
+  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1>${activeSessionBannerHtml()}${showActivity ? `<button class="iconbtn" id="btn-open-spotify" type="button" title="Open Spotify">🎵</button>` : ''}${showActivity && !state.activeWorkoutSession ? `<button class="workout-banner-btn deepred" id="btn-new-routine-topbar" type="button">New Routine</button><button class="workout-banner-btn" id="btn-quickstart-topbar" type="button" title="Quick Start" style="padding:7px 10px;display:flex;align-items:center;"><svg viewBox="0 0 24 24" width="15" height="15" fill="#fff"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-8z"/></svg></button>` : ''}${installTopbarBtnHtml()}</div>
   <div class="screen">
     ${showNutrition ? `<div class="card">
       <h3>Add food</h3>
@@ -3838,6 +4170,14 @@ function screenHistory(){
   const dates = trackedDatesBetween(range.start, rangeEnd);
   const nutrientTotals = periodNutrientTotals(dates);
   const nutrientTips = nutrientShortfallTips(nutrientTotals);
+  // Untracked days can still have real workouts, so this scans every date in
+  // range (not trackedDatesBetween) — but only ones getDay() already created,
+  // never calling getDay() itself here, since that lazily creates an empty
+  // day record on read and this is just a display scan across a whole
+  // week/month, not a single day being opened.
+  const historyWorkoutDates = datesBetween(range.start, rangeEnd)
+    .filter(iso=>state.days[iso] && state.days[iso].workouts && state.days[iso].workouts.length)
+    .reverse();
 
   return `
   <div class="topbar"><h1>Trends</h1>${activeSessionBannerHtml()}${installTopbarBtnHtml()}</div>
@@ -3870,6 +4210,14 @@ function screenHistory(){
       }).join('')}
       ${nutrientTips.length ? nutrientTips.map(tip=>`<div class="feedback-item" style="margin-top:8px;"><div class="dot" style="background:var(--warning)"></div><div>${tip}</div></div>`).join('') : `<div class="muted" style="margin-top:8px;">You're on pace with everything you're tracking this ${historyMode==='week'?'week':'month'} — nice work.</div>`}
     </div>
+
+    ${historyWorkoutDates.length ? `<div class="card">
+      <h3>Workouts</h3>
+      ${historyWorkoutDates.map(iso=>`
+        <div class="muted" style="font-size:11px;font-weight:700;margin:10px 0 2px;">${iso===t?'Today':iso}</div>
+        ${getDay(iso).workouts.map(workoutListRowHtml).join('')}
+      `).join('')}
+    </div>` : ''}
   </div>`;
 }
 
@@ -4963,6 +5311,8 @@ function attachHandlers(){
       saveState(); render();
     });
   });
+  const openSpotifyBtn = document.getElementById('btn-open-spotify');
+  if(openSpotifyBtn) openSpotifyBtn.addEventListener('click', openSpotify);
   // WORKOUTS — routine picker / active session card, see screenLog's Activity section
   const newRoutineBtn = document.getElementById('btn-new-routine-topbar');
   if(newRoutineBtn) newRoutineBtn.addEventListener('click', ()=>renderRoutineBuilderModal(null));
@@ -4999,6 +5349,8 @@ function attachHandlers(){
   if(restartBtn) restartBtn.addEventListener('click', ()=>{
     if(confirm('Restart the timer back to 0:00?')) restartWorkoutSessionTimer();
   });
+  const recordScoreBtn = document.getElementById('btn-record-score');
+  if(recordScoreBtn) recordScoreBtn.addEventListener('click', ()=>openScoreSheetModal(state.activeWorkoutSession));
   const finishBtn = document.getElementById('btn-finish-workout');
   if(finishBtn) finishBtn.addEventListener('click', ()=>{
     if(confirm('Finish and save this workout?')) finishWorkoutSession(false);
@@ -5029,9 +5381,19 @@ function attachHandlers(){
   document.querySelectorAll('[data-del-workout]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const id = Number(btn.dataset.delWorkout);
-      const d = getDay(today());
-      d.workouts = d.workouts.filter(w=>w.id!==id);
+      // Searches every day, not just today — this row/handler is shared with
+      // the History workouts list (see workoutListRowHtml).
+      for(const iso in state.days){
+        const d = state.days[iso];
+        if(d.workouts && d.workouts.some(w=>w.id===id)){ d.workouts = d.workouts.filter(w=>w.id!==id); break; }
+      }
       saveState(); render();
+    });
+  });
+  document.querySelectorAll('[data-edit-workout]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const w = findWorkoutById(Number(btn.dataset.editWorkout));
+      if(w) openEditWorkoutModal(w);
     });
   });
 
