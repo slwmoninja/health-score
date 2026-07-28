@@ -434,7 +434,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.4.1';
+const APP_VERSION = '2.4.2';
 
 function defaultState(){
   return {
@@ -1450,19 +1450,22 @@ function playCountdownBeep(){
   osc.connect(gain); gain.connect(ctx.destination);
   osc.start(); osc.stop(ctx.currentTime+0.09);
 }
-// Time-reached gong — low, slow-decaying, unmistakably different from the
-// short high beeps above so "target hit" reads as a distinct event, not
-// just another tick.
-function playGongSound(){
+// Time-reached buzzer — three harsh sawtooth blasts, unmistakably more
+// ear-catching than a single soft tone so "target hit" actually grabs
+// attention instead of blending in with the countdown beeps above.
+function playBuzzerSound(){
   if(!workoutAudioCtx) return;
   const ctx = workoutAudioCtx;
-  const osc = ctx.createOscillator(), gain = ctx.createGain();
-  osc.type = 'sine'; osc.frequency.value = 220;
-  gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.4, ctx.currentTime+0.02);
-  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+1.4);
-  osc.connect(gain); gain.connect(ctx.destination);
-  osc.start(); osc.stop(ctx.currentTime+1.4);
+  for(let i=0;i<3;i++){
+    const start = ctx.currentTime + i*0.22;
+    const osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.type = 'sawtooth'; osc.frequency.value = 400;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.35, start+0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start+0.16);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(start); osc.stop(start+0.16);
+  }
 }
 // Plank holds have no per-exercise timer of their own (the active session
 // table is a flat checklist, not a sequential player) — a ping off the
@@ -2131,7 +2134,7 @@ function wireTimerInterval(){
     const remainingMs = timerRemainingMs(t);
     if(remainingMs!=null && remainingMs<=0 && !t.gonged){
       t.gonged = true; t.status = 'paused'; t.pausedAt = Date.now();
-      playGongSound(); saveState();
+      playBuzzerSound(); saveState();
       render(); if(timerWrap) renderTimerDom();
       return;
     }
