@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.2.4';
+const APP_VERSION = '2.2.5';
 
 function defaultState(){
   return {
@@ -1784,6 +1784,28 @@ function routineTileHtml(r){
       <h4>${escapeHtml(r.name)}</h4>
     </div>
     <div class="sub">${exerciseNames ? escapeHtml(exerciseNames) : 'No exercises yet'}</div>
+    ${plankTopFiveHtml(r)}
+  </div>`;
+}
+// Gated by exercise CONTENTS, same as everywhere else this feature checks
+// (sessionHasPlankExercise/recordPlankTimes) — never by the routine's own
+// name — so it's whichever routine actually contains Plank/Side Plank, not
+// specifically one named "Plank". Shows on the saved routine tile itself
+// (browsable without starting the routine), not the active session card —
+// moved there per explicit request; see plankRecordsHtml for what's left
+// on the active card (just the ping interval).
+function routineHasPlankExercise(r){
+  return r.exercises.some(re=>{ const ex = exerciseById(re.exerciseId); return ex && PLANK_EXERCISE_NAMES.includes(ex.name); });
+}
+function plankTopFiveHtml(r){
+  if(!routineHasPlankExercise(r)) return '';
+  const names = PLANK_EXERCISE_NAMES.filter(name=>state.plankRecords[name] && state.plankRecords[name].length);
+  if(!names.length) return '';
+  return `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">
+    ${names.map(name=>`
+      <div class="muted" style="font-size:10.5px;font-weight:700;margin-bottom:2px;">${escapeHtml(name)} — Top 5</div>
+      ${state.plankRecords[name].map((rec,i)=>`<div class="row" style="font-size:11px;justify-content:space-between;padding:1px 0;"><span>${i+1}. ${formatElapsed(rec.ms)}</span><span class="muted">${rec.iso}</span></div>`).join('')}
+    `).join('')}
   </div>`;
 }
 // Routine tiles only — the merged Quick Start popup (timed general activity
@@ -2217,22 +2239,16 @@ function activeWorkoutSessionCard(){
 }
 // Top 5 longest holds per Plank/Side Plank present in this session, newest
 // finished ones surfacing here too once recorded — see recordPlankTimes.
+// Ping interval control only — the Top 5 leaderboard itself now lives on
+// the saved routine's own tile (see routineTileHtml/plankTopFiveHtml), not
+// here, so it's visible while just browsing routines, not only mid-session.
 function plankRecordsHtml(s){
   if(!sessionHasPlankExercise(s)) return '';
-  // Interval control now lives here (any card that actually has a
-  // Plank/Side Plank), not buried in Settings — moved per explicit request,
-  // shown regardless of whether there's leaderboard history yet.
-  const names = PLANK_EXERCISE_NAMES.filter(name=>s.exercises.some(ex=>ex.exerciseTitle===name) && state.plankRecords[name] && state.plankRecords[name].length);
   return `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
-    <div class="field" style="max-width:180px;margin-bottom:${names.length?'10':'0'}px;">
+    <div class="field" style="max-width:180px;">
       <label>Plank Ping Interval (sec)</label>
       <input type="number" min="5" step="5" value="${state.settings.plankPingIntervalSec}" data-setting-number="plankPingIntervalSec">
     </div>
-    ${names.map(name=>`
-      <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:4px;">${escapeHtml(name)} — Top 5</div>
-      <div style="margin-bottom:8px;">
-        ${state.plankRecords[name].map((r,i)=>`<div class="row" style="font-size:12px;justify-content:space-between;padding:2px 0;"><span>${i+1}. ${formatElapsed(r.ms)}</span><span class="muted">${r.iso}</span></div>`).join('')}
-      </div>`).join('')}
   </div>`;
 }
 // Shared between Today's card and the History workouts list — an edit (✎)
