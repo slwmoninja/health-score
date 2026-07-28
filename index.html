@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.1.7';
+const APP_VERSION = '2.1.8';
 
 function defaultState(){
   return {
@@ -1389,9 +1389,9 @@ function wireWorkoutTimer(){
   }, 1000);
 }
 
-// Hands-free Pause/Resume/Stop for a routine card once it's been started —
-// toggled by the mic button in activeWorkoutSessionCard (routine sessions
-// only, not Quick Start). voiceListening is render-visible state (drives the
+// Hands-free Pause/Resume/Restart/Stop for any active session (routine or
+// Quick Start) once it's been started — toggled by the mic button in
+// activeWorkoutSessionCard. voiceListening is render-visible state (drives the
 // button's icon); voiceRecognizer/voiceShouldRestart are pure runtime state,
 // deliberately outside `state`/saveState() since a live recognition session
 // can't survive a reload anyway. shouldRestart exists because mobile Chrome
@@ -1869,10 +1869,11 @@ function activeWorkoutSessionCard(){
         <span style="font-weight:700;color:var(--blue);font-size:14px;">${clockHtml}</span>
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
-        ${isQuickStart ? '' : `<button class="iconbtn" id="btn-voice-toggle" title="${voiceListening?'Turn off voice control':'Temporarily enable timer voice control for this session? Use Resume/Restart/Pause/Stop (Save)'}" type="button">${voiceListening?'🔴':'🎙'}</button>`}
+        <button class="iconbtn" id="btn-voice-toggle" title="${voiceListening?'Turn off voice control':'Temporarily enable timer voice control for this session? Use Resume/Restart/Pause/Stop (Save)'}" type="button">${voiceListening?'🔴':'🎙'}</button>
         ${s.status==='running'
           ? `<button class="iconbtn" id="btn-pause-workout" title="Pause" type="button">⏸</button>`
           : `<button class="iconbtn" id="btn-resume-workout" title="Resume" type="button">▶</button>`}
+        <button class="iconbtn" id="btn-restart-workout" title="Restart timer (reset to 0:00)" type="button">↺</button>
         <button class="iconbtn" id="btn-finish-workout" title="Finish & save" type="button">💾</button>
         <button class="iconbtn" id="btn-discard-workout" title="Discard workout (exit)" type="button">✕</button>
       </div>
@@ -4978,6 +4979,10 @@ function attachHandlers(){
   if(pauseBtn) pauseBtn.addEventListener('click', pauseWorkoutSession);
   const resumeBtn = document.getElementById('btn-resume-workout');
   if(resumeBtn) resumeBtn.addEventListener('click', resumeWorkoutSession);
+  const restartBtn = document.getElementById('btn-restart-workout');
+  if(restartBtn) restartBtn.addEventListener('click', ()=>{
+    if(confirm('Restart the timer back to 0:00?')) restartWorkoutSessionTimer();
+  });
   const finishBtn = document.getElementById('btn-finish-workout');
   if(finishBtn) finishBtn.addEventListener('click', ()=>{
     if(confirm('Finish and save this workout?')) finishWorkoutSession(false);
