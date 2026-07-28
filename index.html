@@ -434,7 +434,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.4.0';
+const APP_VERSION = '2.4.1';
 
 function defaultState(){
   return {
@@ -2495,7 +2495,7 @@ function workoutScoreSummaries(w){
 function workoutListRowHtml(w){
   const scoreParts = workoutScoreSummaries(w);
   const scoreSummary = scoreParts.length ? ` · ${escapeHtml(scoreParts.join(' | '))}` : '';
-  return `<div class="list-row" data-open-workout="${w.id}"><div><div class="name">${escapeHtml(w.title)}</div><div class="sub">${w.exercises.length} exercise${w.exercises.length===1?'':'s'} · ${formatElapsed(workoutDurationMs(w))} · ${(w.caloriesBurned||0).toLocaleString()} kcal${scoreSummary}</div></div><button class="iconbtn" data-edit-workout="${w.id}" type="button" title="Edit" style="width:30px;height:30px;">✎</button><button class="del" data-del-workout="${w.id}" type="button">×</button></div>`;
+  return `<div class="list-row" data-open-workout="${w.id}"><div><div class="name">${escapeHtml(w.title)}</div><div class="sub">${formatElapsed(workoutDurationMs(w))} · ${(w.caloriesBurned||0).toLocaleString()} kcal${scoreSummary}</div></div><button class="iconbtn" data-edit-workout="${w.id}" type="button" title="Edit" style="width:30px;height:30px;">✎</button><button class="del" data-del-workout="${w.id}" type="button">×</button></div>`;
 }
 function todaysWorkoutsCard(){
   const workouts = getDay(today()).workouts;
