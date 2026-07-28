@@ -434,7 +434,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.4.4';
+const APP_VERSION = '2.4.5';
 
 function defaultState(){
   return {
@@ -5540,8 +5540,14 @@ function attachHandlers(){
       const secInp = document.querySelector(`[data-plank-timer-sec="${name}"]`);
       const total = (Number(minInp.value)||0)*60 + (Number(secInp.value)||0);
       if(!s.plankTimers) s.plankTimers = {};
-      if(total>0) s.plankTimers[name] = {targetSec: total, setAtMs: workoutDurationMs(s), lastBeepSecond: null, gonged: false};
-      else delete s.plankTimers[name];
+      if(total>0){
+        // Setting a target resets the card's own elapsed clock to 0:00 and
+        // pauses it — ready for a deliberate Start/Resume tap rather than
+        // counting down from however much unrelated time had already
+        // elapsed when the button was tapped.
+        s.startTime = Date.now(); s.pausedAccumMs = 0; s.status = 'paused'; s.pausedAt = Date.now();
+        s.plankTimers[name] = {targetSec: total, setAtMs: 0, lastBeepSecond: null, gonged: false};
+      } else delete s.plankTimers[name];
       saveState(); render();
     });
   });
