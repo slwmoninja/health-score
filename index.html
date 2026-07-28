@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.2.8';
+const APP_VERSION = '2.2.9';
 
 function defaultState(){
   return {
@@ -1799,13 +1799,17 @@ function routineHasPlankExercise(r){
 }
 function plankTopFiveHtml(r){
   if(!routineHasPlankExercise(r)) return '';
-  const names = PLANK_EXERCISE_NAMES.filter(name=>state.plankRecords[name] && state.plankRecords[name].length);
-  if(!names.length) return '';
+  // Always shown for every Plank/Side Plank actually in this routine — even
+  // with zero history yet (a placeholder line rather than hiding the whole
+  // section) — per explicit request; state.plankRecords is already stored
+  // longest-first (see recordPlankTimes' sort), so no re-sorting needed here.
+  const names = PLANK_EXERCISE_NAMES.filter(name=>r.exercises.some(re=>{ const ex = exerciseById(re.exerciseId); return ex && ex.name===name; }));
   return `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">
-    ${names.map(name=>`
-      <div class="muted" style="font-size:10.5px;font-weight:700;margin-bottom:2px;">${escapeHtml(name)} — Top 5</div>
-      ${state.plankRecords[name].map((rec,i)=>`<div class="row" style="font-size:11px;justify-content:space-between;padding:1px 0;"><span>${i+1}. ${formatElapsed(rec.ms)}</span><span class="muted">${rec.iso}</span></div>`).join('')}
-    `).join('')}
+    ${names.map(name=>{
+      const records = state.plankRecords[name] || [];
+      return `<div class="muted" style="font-size:10.5px;font-weight:700;margin-bottom:2px;">${escapeHtml(name)} — Top 5</div>
+      ${records.length ? records.map((rec,i)=>`<div class="row" style="font-size:11px;justify-content:space-between;padding:1px 0;"><span>${i+1}. ${formatElapsed(rec.ms)}</span><span class="muted">${rec.iso}</span></div>`).join('') : `<div class="muted" style="font-size:11px;padding:1px 0;">No times recorded yet</div>`}`;
+    }).join('')}
   </div>`;
 }
 // Routine tiles only — the merged Quick Start popup (timed general activity
