@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.1.4';
+const APP_VERSION = '2.1.5';
 
 function defaultState(){
   return {
@@ -1242,6 +1242,7 @@ function resumeWorkoutSession(){
 // the Activity goal (see effectiveActiveMin) and show up in history.
 function finishWorkoutSession(discard){
   const s = state.activeWorkoutSession; if(!s) return;
+  stopVoiceControl();
   if(discard){ state.activeWorkoutSession=null; saveState(); render(); return; }
   if(s.status==='paused'){ s.pausedAccumMs += Date.now()-s.pausedAt; s.pausedAt=null; }
   s.endTime = Date.now(); s.status = 'completed';
@@ -1378,6 +1379,57 @@ function wireWorkoutTimer(){
     if(bucket>lastPingBucket && sessionHasPlankExercise(state.activeWorkoutSession)) playPingSound();
     lastPingBucket = bucket;
   }, 1000);
+}
+
+// Hands-free Pause/Resume/Stop for a routine card once it's been started —
+// toggled by the mic button in activeWorkoutSessionCard (routine sessions
+// only, not Quick Start). voiceListening is render-visible state (drives the
+// button's icon); voiceRecognizer/voiceShouldRestart are pure runtime state,
+// deliberately outside `state`/saveState() since a live recognition session
+// can't survive a reload anyway. shouldRestart exists because mobile Chrome
+// auto-stops recognition after a few seconds of silence even with
+// continuous:true — restarting on its 'end' event, unless the user or
+// finishWorkoutSession turned it off on purpose, keeps it listening for the
+// whole hold/session instead of quietly going deaf after the first command.
+let voiceListening = false, voiceRecognizer = null, voiceShouldRestart = false;
+function getSpeechRecognitionCtor(){ return window.SpeechRecognition || window.webkitSpeechRecognition || null; }
+function toggleVoiceControl(){ voiceListening ? stopVoiceControl() : startVoiceControl(); }
+function startVoiceControl(){
+  const Ctor = getSpeechRecognitionCtor();
+  if(!Ctor){ showToast('Voice control isn’t supported in this browser.', 'critical'); return; }
+  if(!state.activeWorkoutSession) return;
+  voiceShouldRestart = true;
+  voiceRecognizer = new Ctor();
+  voiceRecognizer.continuous = true;
+  voiceRecognizer.interimResults = false;
+  voiceRecognizer.lang = 'en-US';
+  voiceRecognizer.onresult = handleVoiceCommand;
+  voiceRecognizer.onerror = e=>{
+    if(e.error==='not-allowed' || e.error==='service-not-allowed'){
+      voiceShouldRestart = false;
+      showToast('Microphone permission denied — voice control turned off.', 'critical');
+    }
+  };
+  voiceRecognizer.onend = ()=>{
+    if(voiceShouldRestart && state.activeWorkoutSession){ try{ voiceRecognizer.start(); }catch(e){} }
+    else{ voiceListening = false; render(); }
+  };
+  try{ voiceRecognizer.start(); voiceListening = true; }
+  catch(e){ voiceListening = false; }
+  render();
+}
+function stopVoiceControl(){
+  voiceShouldRestart = false;
+  if(voiceRecognizer){ try{ voiceRecognizer.stop(); }catch(e){} }
+  voiceRecognizer = null;
+  voiceListening = false;
+}
+function handleVoiceCommand(e){
+  if(!state.activeWorkoutSession) return;
+  const transcript = e.results[e.results.length-1][0].transcript.trim().toLowerCase();
+  if(/\bpause\b/.test(transcript)) pauseWorkoutSession();
+  else if(/\b(resume|continue)\b/.test(transcript)) resumeWorkoutSession();
+  else if(/\b(stop|save|finish)\b/.test(transcript)) finishWorkoutSession(false);
 }
 
 /* =========================================================
@@ -1807,6 +1859,7 @@ function activeWorkoutSessionCard(){
         <span style="font-weight:700;color:var(--blue);font-size:14px;">${clockHtml}</span>
       </div>
       <div style="display:flex;gap:6px;align-items:center;">
+        ${isQuickStart ? '' : `<button class="iconbtn" id="btn-voice-toggle" title="${voiceListening?'Turn off voice control':'Turn on voice control (say Pause / Resume / Stop)'}" type="button">${voiceListening?'🔴':'🎙'}</button>`}
         ${s.status==='running'
           ? `<button class="iconbtn" id="btn-pause-workout" title="Pause" type="button">⏸</button>`
           : `<button class="iconbtn" id="btn-resume-workout" title="Resume" type="button">▶</button>`}
@@ -4909,6 +4962,8 @@ function attachHandlers(){
     });
   });
 
+  const voiceBtn = document.getElementById('btn-voice-toggle');
+  if(voiceBtn) voiceBtn.addEventListener('click', toggleVoiceControl);
   const pauseBtn = document.getElementById('btn-pause-workout');
   if(pauseBtn) pauseBtn.addEventListener('click', pauseWorkoutSession);
   const resumeBtn = document.getElementById('btn-resume-workout');
