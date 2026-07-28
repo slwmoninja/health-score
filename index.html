@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.2.7';
+const APP_VERSION = '2.2.8';
 
 function defaultState(){
   return {
@@ -1919,6 +1919,7 @@ function openScoreSheetModal(workout){
     workout.scoreSheet = new Array(defaultSets).fill('');
   }
   scoreSheetTarget = workout;
+  scoreVoiceLastHeard = '';
   scoreSheetWrap = document.createElement('div');
   document.body.appendChild(scoreSheetWrap);
   renderScoreSheetDom();
@@ -1951,6 +1952,7 @@ function renderScoreSheetDom(){
         <button class="iconbtn" id="score-voice-toggle" type="button" title="${scoreVoiceListening?'Turn off voice transcription':'Dictate scores — say e.g. “Set 1 score 6 4, Set 2 score 3 6”'}">${scoreVoiceListening?'🔴':'🎙'}</button>
         <span class="muted" style="font-size:12px;">Tap mic and say "Set 1 score 6 4, Set 2 score 3 6"</span>
       </div>
+      ${scoreVoiceLastHeard ? `<div class="muted" style="font-size:11px;margin-bottom:10px;">Heard: “${escapeHtml(scoreVoiceLastHeard)}”</div>` : ''}
       <button class="btn-primary" id="score-save" type="button">Save</button>
     </div>
   </div>`;
@@ -1988,7 +1990,7 @@ function wireScoreSheetHandlers(){
 // (dictating text into fields vs issuing session commands), and the two can
 // legitimately be open/listening at the same time (session voice control on
 // the card underneath, score dictation in the modal on top).
-let scoreVoiceListening = false, scoreVoiceRecognizer = null, scoreVoiceShouldRestart = false;
+let scoreVoiceListening = false, scoreVoiceRecognizer = null, scoreVoiceShouldRestart = false, scoreVoiceLastHeard = '';
 function toggleScoreVoiceControl(){ if(scoreVoiceListening){ stopScoreVoiceControl(); renderScoreSheetDom(); } else startScoreVoiceControl(); }
 function startScoreVoiceControl(){
   const Ctor = getSpeechRecognitionCtor();
@@ -2030,14 +2032,29 @@ function stopScoreVoiceControl(){
 // order, since results now fill INTO whichever row that set number already
 // is (see handleScoreVoiceResult) instead of replacing the whole sheet —
 // there's no other way to know which blank row a 2-number chunk belongs to.
+// Chrome's recognizer is inconsistent about small numbers: "six", "four"
+// sometimes comes through as the words themselves, and two digits spoken
+// close together ("six... four") can get heard as ONE number ("64", i.e.
+// sixty-four) instead of two separate digits. Both are handled below rather
+// than assuming a clean "1 6 4" digit sequence every time.
+const NUMBER_WORDS = {zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,
+  eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20};
+function wordsToDigits(text){
+  return text.replace(/[a-z]+/g, w=> (w in NUMBER_WORDS) ? String(NUMBER_WORDS[w]) : w);
+}
 function parseScoreTranscript(transcript){
-  const chunks = transcript.toLowerCase().split(/\bset\b/).slice(1);
+  const chunks = wordsToDigits(transcript.toLowerCase()).split(/\bset\b/).slice(1);
   const results = [];
   chunks.forEach(chunk=>{
     const nums = chunk.match(/\d+/g);
-    if(!nums || nums.length<3) return;
+    if(!nums || nums.length<2) return;
     const setNum = Number(nums[0]);
-    if(setNum>=1) results.push({setNum, score: nums[1]+'-'+nums[2]});
+    if(!(setNum>=1)) return;
+    let score;
+    if(nums.length>=3) score = nums[1]+'-'+nums[2];
+    else if(nums[1].length===2) score = nums[1][0]+'-'+nums[1][1]; // "64" heard as one number, meaning 6-4
+    else return; // only one score digit heard — can't tell the two games apart
+    results.push({setNum, score});
   });
   return results;
 }
@@ -2049,8 +2066,8 @@ function parseScoreTranscript(transcript){
 function handleScoreVoiceResult(e){
   let fullText = '';
   for(let i=0;i<e.results.length;i++) fullText += ' ' + e.results[i][0].transcript;
+  scoreVoiceLastHeard = fullText.trim(); // shown in the modal even on a parse miss, so a failure is visible, not silent
   const parsed = parseScoreTranscript(fullText);
-  if(!parsed.length) return;
   const sheet = scoreSheetTarget.scoreSheet;
   parsed.forEach(({setNum, score})=>{
     const idx = setNum-1;
