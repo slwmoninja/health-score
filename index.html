@@ -434,7 +434,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.4.2';
+const APP_VERSION = '2.4.3';
 
 function defaultState(){
   return {
@@ -2052,10 +2052,10 @@ function renderTimerDom(){
       <div class="row" style="justify-content:center;gap:10px;">
         <button class="iconbtn mic-btn" id="timer-voice-toggle" title="${voiceListening?'Turn off voice control':'Voice control: say Resume/Restart/Pause/Stop'}" type="button">${voiceListening?'🔴':'🎙'}</button>
         ${t.status==='running'
-          ? `<button class="iconbtn" id="timer-pause" title="Pause" type="button">⏸</button>`
-          : `<button class="iconbtn" id="timer-resume" title="${t.pausedAccumMs>0?'Resume':'Start'}" type="button">▶</button>`}
-        <button class="iconbtn" id="timer-restart" title="Restart timer (reset to 0:00)" type="button">↺</button>
-        <button class="iconbtn" id="timer-stop" title="Stop" type="button">⏹</button>
+          ? `<button class="iconbtn" id="timer-pause" title="Pause" type="button" style="background:var(--orange);color:#fff;">⏸</button>`
+          : `<button class="iconbtn" id="timer-resume" title="${t.pausedAccumMs>0?'Resume':'Start'}" type="button" style="background:#32cd32;color:#fff;">▶</button>`}
+        <button class="iconbtn" id="timer-restart" title="Restart timer (reset to 0:00)" type="button" style="background:var(--blue);color:#fff;">↺</button>
+        <button class="iconbtn" id="timer-stop" title="Stop / Save" type="button" style="background:var(--critical);color:#fff;">⏹</button>
       </div>
     </div>
   </div>`;
