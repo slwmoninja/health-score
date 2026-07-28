@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.2.5';
+const APP_VERSION = '2.2.6';
 
 function defaultState(){
   return {
@@ -4195,11 +4195,22 @@ function recentWorkouts(limit){
   entries.sort((a,b)=>b.startTime-a.startTime);
   return entries.slice(0, limit);
 }
+// "Clear all" on the Recent Exercises card — deletes exactly the workouts
+// currently shown there (whichever ones recentWorkouts(10) returned), not
+// the user's entire history, wherever each one's day record actually is.
+function clearRecentWorkouts(){
+  const ids = new Set(recentWorkouts(10).map(w=>w.id));
+  for(const iso in state.days){
+    const d = state.days[iso];
+    if(d.workouts && d.workouts.some(w=>ids.has(w.id))) d.workouts = d.workouts.filter(w=>!ids.has(w.id));
+  }
+  saveState(); render();
+}
 function recentExercisesCard(){
   const workouts = recentWorkouts(10);
   if(!workouts.length) return '';
   return `<div class="card">
-    <h3>Recent Exercises</h3>
+    <div class="card-head"><h3>Recent Exercises</h3><button class="btn-secondary" id="btn-clear-recent" type="button" style="padding:6px 10px;font-size:12px;">Clear all</button></div>
     ${workouts.map(workoutListRowHtml).join('')}
   </div>`;
 }
@@ -5375,6 +5386,10 @@ function attachHandlers(){
       }
       saveState(); render();
     });
+  });
+  const clearRecentBtn = document.getElementById('btn-clear-recent');
+  if(clearRecentBtn) clearRecentBtn.addEventListener('click', ()=>{
+    if(confirm('Delete all workouts shown in Recent Exercises? This cannot be undone.')) clearRecentWorkouts();
   });
   const openSpotifyBtn = document.getElementById('btn-open-spotify');
   if(openSpotifyBtn) openSpotifyBtn.addEventListener('click', openSpotify);
