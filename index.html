@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.2.6';
+const APP_VERSION = '2.2.7';
 
 function defaultState(){
   return {
@@ -1828,6 +1828,10 @@ const QUICK_START_TYPES = ['Tennis','Walking','Indoor Bike','Outdoor Bike','Runn
 // section of the workout edit modal. Extend this list, not the score-sheet
 // code itself, if another scoring sport gets added later.
 const SCORING_ACTIVITY_TYPES = ['Tennis'];
+// How many blank set rows a fresh scorecard opens with — "in appropriate
+// format for the sport" per the original ask, e.g. a tennis match is
+// normally best-of-3. Falls back to 1 for any scoring type not listed here.
+const SCORE_SHEET_DEFAULT_SETS = {Tennis: 3};
 // Last 5 picks float to the top of the dropdown, most-recent-first, followed
 // by the rest of the fixed list in its normal order — so a repeat choice is
 // one tap away without hiding the full list.
@@ -1910,7 +1914,10 @@ function wireQuickStartHandlers(){
    ========================================================= */
 let scoreSheetWrap = null, scoreSheetTarget = null;
 function openScoreSheetModal(workout){
-  if(!workout.scoreSheet) workout.scoreSheet = [];
+  if(!workout.scoreSheet || !workout.scoreSheet.length){
+    const defaultSets = SCORE_SHEET_DEFAULT_SETS[workout.exerciseTitle || workout.title] || 1;
+    workout.scoreSheet = new Array(defaultSets).fill('');
+  }
   scoreSheetTarget = workout;
   scoreSheetWrap = document.createElement('div');
   document.body.appendChild(scoreSheetWrap);
@@ -2018,21 +2025,39 @@ function stopScoreVoiceControl(){
 // Recognizes digits only ("Set 1 score 6 4"), not spelled-out numbers
 // ("six four") — Chrome's recognizer typically renders short numbers as
 // digits already, and handling every spelled-out form is out of scope here.
+// Requires an explicit spoken set number ("Set 1 score 6 4" — 3 digits: set
+// number, then the two-number score) rather than inferring position from
+// order, since results now fill INTO whichever row that set number already
+// is (see handleScoreVoiceResult) instead of replacing the whole sheet —
+// there's no other way to know which blank row a 2-number chunk belongs to.
 function parseScoreTranscript(transcript){
   const chunks = transcript.toLowerCase().split(/\bset\b/).slice(1);
-  const sets = [];
+  const results = [];
   chunks.forEach(chunk=>{
     const nums = chunk.match(/\d+/g);
-    if(!nums || nums.length<2) return;
-    sets.push(nums.length>=3 ? nums[1]+'-'+nums[2] : nums[0]+'-'+nums[1]);
+    if(!nums || nums.length<3) return;
+    const setNum = Number(nums[0]);
+    if(setNum>=1) results.push({setNum, score: nums[1]+'-'+nums[2]});
   });
-  return sets;
+  return results;
 }
+// Fills recognized scores into their spoken set's row in place — so the
+// still-unspoken blank rows from the scorecard's default template (see
+// SCORE_SHEET_DEFAULT_SETS) stay visible/blank as a visual "still waiting
+// on this one" cue, rather than the whole sheet being replaced/shortened
+// every time a new phrase comes in.
 function handleScoreVoiceResult(e){
   let fullText = '';
   for(let i=0;i<e.results.length;i++) fullText += ' ' + e.results[i][0].transcript;
-  const sets = parseScoreTranscript(fullText);
-  if(sets.length){ scoreSheetTarget.scoreSheet = sets; renderScoreSheetDom(); }
+  const parsed = parseScoreTranscript(fullText);
+  if(!parsed.length) return;
+  const sheet = scoreSheetTarget.scoreSheet;
+  parsed.forEach(({setNum, score})=>{
+    const idx = setNum-1;
+    while(sheet.length<=idx) sheet.push('');
+    sheet[idx] = score;
+  });
+  renderScoreSheetDom();
 }
 
 /* =========================================================
@@ -2062,6 +2087,11 @@ function renderEditWorkoutDom(){
   const totalSec = Math.round(workoutDurationMs(w)/1000);
   const min = Math.floor(totalSec/60), sec = totalSec%60;
   const columns = w.exercises.length ? liveTargetColumns(w) : [];
+  const isScored = SCORING_ACTIVITY_TYPES.includes(w.title);
+  // Blank scorecard on first open, same as openScoreSheetModal — shows the
+  // sport-appropriate empty rows immediately, editable, no extra tap needed
+  // to reveal them (this modal has no mic, just direct text edits).
+  if(isScored && (!w.scoreSheet || !w.scoreSheet.length)) w.scoreSheet = new Array(SCORE_SHEET_DEFAULT_SETS[w.title]||1).fill('');
   editWorkoutWrap.innerHTML = `
   <div class="modal-backdrop center">
     <div class="modal">
@@ -2070,7 +2100,16 @@ function renderEditWorkoutDom(){
         <div class="field"><label>Duration (min)</label><input type="number" id="ew-min" value="${min}"></div>
         <div class="field"><label>Duration (sec)</label><input type="number" id="ew-sec" value="${sec}" max="59"></div>
       </div>
-      ${SCORING_ACTIVITY_TYPES.includes(w.title) ? `<button class="btn-secondary" id="ew-record-score" type="button" style="margin:2px 0 12px;">${w.scoreSheet && w.scoreSheet.length ? 'Edit Score — '+escapeHtml(w.scoreSheet.join(', ')) : 'Record Score?'}</button>` : ''}
+      ${isScored ? `
+      <div class="muted" style="font-size:11px;font-weight:700;margin:2px 0 4px;">Score</div>
+      <div id="ew-score-rows">
+        ${w.scoreSheet.map((sc,i)=>`<div class="row" style="gap:8px;margin-bottom:6px;align-items:center;">
+          <span class="muted" style="flex:0 0 46px;">Set ${i+1}</span>
+          <input type="text" data-ew-score-idx="${i}" value="${escapeHtml(sc)}" placeholder="e.g. 6-4" style="flex:1;">
+          <button class="iconbtn" data-ew-rm-score="${i}" type="button" title="Remove set">×</button>
+        </div>`).join('')}
+      </div>
+      <button class="btn-secondary" id="ew-add-score-set" type="button" style="margin-bottom:12px;">+ Add Set</button>` : ''}
       ${w.exercises.length ? `
       <div class="set-table-head">
         <span style="flex:1;text-align:left;">Exercise</span>
@@ -2120,8 +2159,14 @@ function wireEditWorkoutHandlers(){
   const wrap = editWorkoutWrap, w = editWorkoutTarget;
   wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeEditWorkoutModal(); });
   wrap.querySelector('#ew-close').addEventListener('click', closeEditWorkoutModal);
-  const scoreBtn = wrap.querySelector('#ew-record-score');
-  if(scoreBtn) scoreBtn.addEventListener('click', ()=>openScoreSheetModal(w));
+  wrap.querySelectorAll('[data-ew-score-idx]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{ w.scoreSheet[Number(inp.dataset.ewScoreIdx)] = inp.value; });
+  });
+  wrap.querySelectorAll('[data-ew-rm-score]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ w.scoreSheet.splice(Number(btn.dataset.ewRmScore), 1); renderEditWorkoutDom(); });
+  });
+  const addScoreBtn = wrap.querySelector('#ew-add-score-set');
+  if(addScoreBtn) addScoreBtn.addEventListener('click', ()=>{ w.scoreSheet.push(''); renderEditWorkoutDom(); });
   wrap.querySelectorAll('[data-ew-field]').forEach(inp=>{
     inp.addEventListener('input', ()=>{
       const [idxStr, field] = inp.dataset.ewField.split(':');
@@ -2141,6 +2186,7 @@ function wireEditWorkoutHandlers(){
     const sec = Number(wrap.querySelector('#ew-sec').value)||0;
     w.endTime = w.startTime + (min*60+sec)*1000 + (w.pausedAccumMs||0);
     w.caloriesBurned = estimateWorkoutCalories(w); // duration changed — recalc the estimate it's derived from
+    if(w.scoreSheet) w.scoreSheet = w.scoreSheet.filter(sc=>sc && sc.trim()); // same never-blank-in-the-saved-record rule as the live modal
     saveState(); render();
     closeEditWorkoutModal();
   });
@@ -2235,6 +2281,19 @@ function activeWorkoutSessionCard(){
     </div>` : ''}
     ${s.exercises.map((ex,i)=>activeSessionExerciseHtml(ex,i,liveColumns)).join('')}`}
     ${plankRecordsHtml(s)}
+    ${sessionScoreSummaryHtml(s)}
+  </div>`;
+}
+// Read-only summary at the bottom of the card — the "Record Score?"/"Edit
+// Score" button above stays the way IN to the mic/dictation modal, this is
+// just visual confirmation that a save actually landed, without opening
+// anything.
+function sessionScoreSummaryHtml(s){
+  if(!(s.routineId===null && SCORING_ACTIVITY_TYPES.includes(s.title))) return '';
+  if(!s.scoreSheet || !s.scoreSheet.filter(sc=>sc && sc.trim()).length) return '';
+  return `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
+    <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:4px;">Score</div>
+    ${s.scoreSheet.map((sc,i)=>sc && sc.trim() ? `<div class="row" style="font-size:13px;justify-content:space-between;padding:2px 0;"><span>Set ${i+1}</span><span>${escapeHtml(sc)}</span></div>` : '').join('')}
   </div>`;
 }
 // Top 5 longest holds per Plank/Side Plank present in this session, newest
@@ -4198,12 +4257,11 @@ function recentWorkouts(limit){
 // "Clear all" on the Recent Exercises card — deletes exactly the workouts
 // currently shown there (whichever ones recentWorkouts(10) returned), not
 // the user's entire history, wherever each one's day record actually is.
+// Wipes every saved workout, every day — not just the up-to-10 the Recent
+// Exercises card happens to be showing right now — per explicit correction;
+// its confirm() prompt spells this scope out for the same reason.
 function clearRecentWorkouts(){
-  const ids = new Set(recentWorkouts(10).map(w=>w.id));
-  for(const iso in state.days){
-    const d = state.days[iso];
-    if(d.workouts && d.workouts.some(w=>ids.has(w.id))) d.workouts = d.workouts.filter(w=>!ids.has(w.id));
-  }
+  for(const iso in state.days) if(state.days[iso].workouts) state.days[iso].workouts = [];
   saveState(); render();
 }
 function recentExercisesCard(){
@@ -5389,7 +5447,7 @@ function attachHandlers(){
   });
   const clearRecentBtn = document.getElementById('btn-clear-recent');
   if(clearRecentBtn) clearRecentBtn.addEventListener('click', ()=>{
-    if(confirm('Delete all workouts shown in Recent Exercises? This cannot be undone.')) clearRecentWorkouts();
+    if(confirm('Delete your ENTIRE workout history — every saved workout on every day, not just what\'s shown here? This cannot be undone.')) clearRecentWorkouts();
   });
   const openSpotifyBtn = document.getElementById('btn-open-spotify');
   if(openSpotifyBtn) openSpotifyBtn.addEventListener('click', openSpotify);
