@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.2.1';
 
 function defaultState(){
   return {
@@ -1412,10 +1412,10 @@ function playVoiceAckSound(){
 }
 // Plank holds have no per-exercise timer of their own (the active session
 // table is a flat checklist, not a sequential player) — a ping off the
-// CARD's overall elapsed clock (interval user-configurable, Settings >
-// Profile Preferences > Plank Ping Interval, default 30s) is a pacing cue
-// while holding one, not tied to which exercise is "current" since there
-// is no such concept here.
+// CARD's overall elapsed clock (interval user-configurable inline on any
+// card with a Plank/Side Plank, see plankRecordsHtml; default 30s) is a
+// pacing cue while holding one, not tied to which exercise is "current"
+// since there is no such concept here.
 const PLANK_EXERCISE_NAMES = ['Plank','Side Plank'];
 function sessionHasPlankExercise(s){
   return s.exercises.some(ex=>PLANK_EXERCISE_NAMES.includes(ex.exerciseTitle));
@@ -2210,9 +2210,16 @@ function activeWorkoutSessionCard(){
 // Top 5 longest holds per Plank/Side Plank present in this session, newest
 // finished ones surfacing here too once recorded — see recordPlankTimes.
 function plankRecordsHtml(s){
+  if(!sessionHasPlankExercise(s)) return '';
+  // Interval control now lives here (any card that actually has a
+  // Plank/Side Plank), not buried in Settings — moved per explicit request,
+  // shown regardless of whether there's leaderboard history yet.
   const names = PLANK_EXERCISE_NAMES.filter(name=>s.exercises.some(ex=>ex.exerciseTitle===name) && state.plankRecords[name] && state.plankRecords[name].length);
-  if(!names.length) return '';
   return `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
+    <div class="field" style="max-width:180px;margin-bottom:${names.length?'10':'0'}px;">
+      <label>Plank Ping Interval (sec)</label>
+      <input type="number" min="5" step="5" value="${state.settings.plankPingIntervalSec}" data-setting-number="plankPingIntervalSec">
+    </div>
     ${names.map(name=>`
       <div class="muted" style="font-size:11px;font-weight:700;margin-bottom:4px;">${escapeHtml(name)} — Top 5</div>
       <div style="margin-bottom:8px;">
@@ -4544,11 +4551,6 @@ function screenSettings(){
         <div class="toggle-item"><span>Trend Charts</span><button class="switch ${state.settings.charts.projection?'on':''}" data-chart-toggle="projection"></button></div>
       </div>
       <div style="height:10px"></div>
-      <div class="field" style="max-width:180px;">
-        <label>Plank Ping Interval (sec)</label>
-        <input type="number" min="5" step="5" id="s-plank-ping" value="${state.settings.plankPingIntervalSec}" data-setting-number="plankPingIntervalSec">
-      </div>
-      <div style="height:10px"></div>
       ${dayCheckboxesHtml('s', p.trackedDays, {inline:true})}
       <div style="height:10px"></div>
       <div class="field-row">
@@ -5153,7 +5155,7 @@ function attachHandlers(){
     const key = inp.dataset.settingNumber;
     const val = Number(inp.value);
     if(val>=5) state.settings[key] = val; else inp.value = state.settings[key]; // reject invalid, snap back
-    saveState();
+    saveState(); render(); // re-render so e.g. wireWorkoutTimer re-arms the plank ping with the new interval right away
   }));
 
   const dateEl = document.getElementById('today-date');
