@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.2.1';
+const APP_VERSION = '2.2.3';
 
 function defaultState(){
   return {
@@ -1172,7 +1172,7 @@ const EXERCISE_DB_RAW = [
 ['Elliptical','Cardio','distance_duration'],['Stairmaster','Cardio','distance_duration'],
 ['Jump Rope','Cardio','duration'],['Swimming','Cardio','distance_duration'],
 ['Assault Bike','Cardio','distance_duration'],['Ski Erg','Cardio','distance_duration'],
-['Sprint','Cardio','distance_duration'],
+['Sprint','Cardio','distance_duration'],['Tennis','Cardio','duration'],
 // Full Body / Olympic
 ['Clean and Jerk (Barbell)','Full Body','weight_reps'],['Power Clean (Barbell)','Full Body','weight_reps'],
 ['Snatch (Barbell)','Full Body','weight_reps'],['Clean (Barbell)','Full Body','weight_reps'],
@@ -2069,6 +2069,7 @@ function editWorkoutExerciseRowHtml(ex, idx, columns){
       const val = f==='sets' ? ex.sets.length : (first[f]!=null ? first[f] : '');
       return `<input type="number"${f==='distanceMi'?' step="0.1"':''} style="flex:0 0 44px;" data-ew-field="${idx}:${f}" value="${val}">`;
     }).join('')}
+    ${SCORING_ACTIVITY_TYPES.includes(ex.exerciseTitle) ? `<button class="iconbtn" data-ew-record-score="${idx}" type="button" style="width:26px;height:26px;flex:0 0 26px;font-size:13px;" title="${ex.scoreSheet && ex.scoreSheet.length ? 'Edit Score' : 'Record Score?'}">🎾</button>` : ''}
   </div>`;
 }
 // Same "one row edits the whole exercise uniformly" convention as
@@ -2105,6 +2106,12 @@ function wireEditWorkoutHandlers(){
       const ex = w.exercises[Number(idxStr)];
       if(field==='sets') updateSavedExerciseSetCount(w, ex.id, inp.value);
       else updateSavedExerciseField(w, ex.id, field, inp.value);
+    });
+  });
+  wrap.querySelectorAll('[data-ew-record-score]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const ex = w.exercises[Number(btn.dataset.ewRecordScore)];
+      if(ex) openScoreSheetModal(ex);
     });
   });
   wrap.querySelector('#ew-save').addEventListener('click', ()=>{
@@ -2167,6 +2174,7 @@ function activeSessionExerciseHtml(ex, idx, columns){
       const val = f==='sets' ? ex.sets.length : (first[f]!=null ? first[f] : '');
       return `<input type="number"${f==='distanceMi'?' step="0.1"':''} style="flex:0 0 44px;" data-exercise-field="${idx}:${f}" value="${val}">`;
     }).join('')}
+    ${SCORING_ACTIVITY_TYPES.includes(ex.exerciseTitle) ? `<button class="iconbtn" data-record-score-exercise="${idx}" type="button" title="${ex.scoreSheet && ex.scoreSheet.length ? 'Edit Score' : 'Record Score?'}" style="width:26px;height:26px;flex:0 0 26px;font-size:13px;">🎾</button>` : ''}
     <button class="del" data-rm-exercise-session="${idx}" type="button" style="flex:0 0 16px;font-size:14px;padding:0;" title="Remove exercise">×</button>
   </div>`;
 }
@@ -2230,8 +2238,20 @@ function plankRecordsHtml(s){
 // Shared between Today's card and the History workouts list — an edit (✎)
 // button opens openEditWorkoutModal (duration/exercises/score, all
 // editable after the fact) alongside the existing delete (×).
+// Score can live on the session itself (Quick Start Tennis) or on an
+// individual exercise (Tennis used as a routine exercise) — see the
+// "Record Score?" buttons in activeWorkoutSessionCard/activeSessionExerciseHtml.
+function workoutScoreSummaries(w){
+  const parts = [];
+  if(SCORING_ACTIVITY_TYPES.includes(w.title) && w.scoreSheet && w.scoreSheet.length) parts.push(w.scoreSheet.join(', '));
+  w.exercises.forEach(ex=>{
+    if(SCORING_ACTIVITY_TYPES.includes(ex.exerciseTitle) && ex.scoreSheet && ex.scoreSheet.length) parts.push(`${ex.exerciseTitle}: ${ex.scoreSheet.join(', ')}`);
+  });
+  return parts;
+}
 function workoutListRowHtml(w){
-  const scoreSummary = w.scoreSheet && w.scoreSheet.length ? ` · ${escapeHtml(w.scoreSheet.join(', '))}` : '';
+  const scoreParts = workoutScoreSummaries(w);
+  const scoreSummary = scoreParts.length ? ` · ${escapeHtml(scoreParts.join(' | '))}` : '';
   return `<div class="list-row"><div><div class="name">${escapeHtml(w.title)}</div><div class="sub">${w.exercises.length} exercise${w.exercises.length===1?'':'s'} · ${formatElapsed(workoutDurationMs(w))} · ${(w.caloriesBurned||0).toLocaleString()} kcal${scoreSummary}</div></div><button class="iconbtn" data-edit-workout="${w.id}" type="button" title="Edit" style="width:30px;height:30px;">✎</button><button class="del" data-del-workout="${w.id}" type="button">×</button></div>`;
 }
 function todaysWorkoutsCard(){
@@ -4137,7 +4157,60 @@ function screenLog(){
     ${showActivity ? `
     ${state.activeWorkoutSession ? activeWorkoutSessionCard() : workoutsQuickCard()}
     ${todaysWorkoutsCard()}
+    ${recentExercisesCard()}
     ` : ''}
+  </div>`;
+}
+// Flat, cross-workout, most-recent-first — unlike Today's/History cards
+// (grouped by whole session), this is per EXERCISE, capped at 10, and
+// directly editable in the row itself (same convention as Today's Foods —
+// see todaysFoodsCard — no separate edit icon/modal, the inputs ARE the
+// display). id alone is enough to find an entry's parent workout again
+// (findLoggedExerciseById scans every day) since exercise ids are already
+// unique across the whole app (Date.now()+Math.random()+i at creation).
+function recentLoggedExercises(limit){
+  const entries = [];
+  for(const iso in state.days){
+    (state.days[iso].workouts||[]).forEach(w=>{
+      w.exercises.forEach(ex=>entries.push({ex, iso, startTime:w.startTime, workout:w}));
+    });
+  }
+  entries.sort((a,b)=>b.startTime-a.startTime);
+  return entries.slice(0, limit);
+}
+function findLoggedExerciseById(id){
+  for(const iso in state.days){
+    for(const w of (state.days[iso].workouts||[])){
+      const ex = w.exercises.find(e=>e.id===id);
+      if(ex) return {ex, workout:w};
+    }
+  }
+  return null;
+}
+function recentExercisesCard(){
+  const entries = recentLoggedExercises(10);
+  if(!entries.length) return '';
+  return `<div class="card">
+    <h3>Recent Exercises</h3>
+    ${entries.map(recentExerciseRowHtml).join('')}
+  </div>`;
+}
+function recentExerciseRowHtml({ex, iso}){
+  const template = exerciseById(ex.exerciseId);
+  const fields = liveFieldsForExercise(template);
+  const first = ex.sets[0] || {};
+  return `<div class="food-row">
+    <div style="flex:1;min-width:0;">
+      <div style="font-weight:600;font-size:13px;">${escapeHtml(ex.exerciseTitle)}</div>
+      <div class="muted" style="font-size:11px;">${iso}${ex.scoreSheet && ex.scoreSheet.length ? ' · '+escapeHtml(ex.scoreSheet.join(', ')) : ''}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex:none;flex-wrap:wrap;">
+      ${fields.map(f=>{
+        const val = f==='sets' ? ex.sets.length : (first[f]!=null ? first[f] : '');
+        return `<input class="food-edit-input kcal-input" type="number"${f==='distanceMi'?' step="0.1"':''} style="width:44px;" data-recent-ex-field="${ex.id}:${f}" value="${val}">`;
+      }).join('')}
+      ${SCORING_ACTIVITY_TYPES.includes(ex.exerciseTitle) ? `<button class="iconbtn" data-record-score-exercise-id="${ex.id}" type="button" style="width:26px;height:26px;font-size:13px;" title="${ex.scoreSheet && ex.scoreSheet.length ? 'Edit Score' : 'Record Score?'}">🎾</button>` : ''}
+    </div>
   </div>`;
 }
 
@@ -5313,6 +5386,23 @@ function attachHandlers(){
       saveState(); render();
     });
   });
+  document.querySelectorAll('[data-recent-ex-field]').forEach(inp=>{
+    inp.addEventListener('change', ()=>{
+      const [idStr, field] = inp.dataset.recentExField.split(':');
+      const id = Number(idStr);
+      const found = findLoggedExerciseById(id);
+      if(!found) return;
+      if(field==='sets') updateSavedExerciseSetCount(found.workout, id, inp.value);
+      else updateSavedExerciseField(found.workout, id, field, inp.value);
+      saveState(); render();
+    });
+  });
+  document.querySelectorAll('[data-record-score-exercise-id]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const found = findLoggedExerciseById(Number(btn.dataset.recordScoreExerciseId));
+      if(found) openScoreSheetModal(found.ex);
+    });
+  });
   const openSpotifyBtn = document.getElementById('btn-open-spotify');
   if(openSpotifyBtn) openSpotifyBtn.addEventListener('click', openSpotify);
   // WORKOUTS — routine picker / active session card, see screenLog's Activity section
@@ -5373,6 +5463,12 @@ function attachHandlers(){
       const sessionEx = state.activeWorkoutSession.exercises[Number(exIdx)];
       if(field==='sets') updateExerciseSetCount(sessionEx.id, inp.value);
       else updateExerciseField(sessionEx.id, field, inp.value);
+    });
+  });
+  document.querySelectorAll('[data-record-score-exercise]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const ex = state.activeWorkoutSession.exercises[Number(btn.dataset.recordScoreExercise)];
+      if(ex) openScoreSheetModal(ex);
     });
   });
   document.querySelectorAll('[data-rm-exercise-session]').forEach(btn=>{
