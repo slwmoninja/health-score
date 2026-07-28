@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.1.8';
+const APP_VERSION = '2.1.9';
 
 function defaultState(){
   return {
@@ -447,6 +447,8 @@ function defaultState(){
       clientId:'', clientSecret:'', fdcApiKey:'', useMetric:false,
       charts: { projection:true },
       weightTrackingEnabled: true,
+      plankPingIntervalSec: 30, // pacing ping while a Plank/Side Plank is in an active session — see wireWorkoutTimer
+
       // Set once the native install prompt resolves "accepted" (see
       // isInstalled()) — a regular browser tab that just walked through
       // installing doesn't itself switch to display-mode:standalone, so
@@ -1366,9 +1368,11 @@ function playPingSound(){
   osc.start(); osc.stop(ctx.currentTime+0.3);
 }
 // Plank holds have no per-exercise timer of their own (the active session
-// table is a flat checklist, not a sequential player) — a 30s ping off the
-// CARD's overall elapsed clock is a pacing cue while holding one, not tied
-// to which exercise is "current" since there is no such concept here.
+// table is a flat checklist, not a sequential player) — a ping off the
+// CARD's overall elapsed clock (interval user-configurable, Settings >
+// Profile Preferences > Plank Ping Interval, default 30s) is a pacing cue
+// while holding one, not tied to which exercise is "current" since there
+// is no such concept here.
 function sessionHasPlankExercise(s){
   return s.exercises.some(ex=>ex.exerciseTitle==='Plank'||ex.exerciseTitle==='Side Plank');
 }
@@ -1377,13 +1381,14 @@ function wireWorkoutTimer(){
   clearInterval(workoutTimerInterval); workoutTimerInterval = null;
   const s = state.activeWorkoutSession;
   if(!s || s.status!=='running') return;
-  lastPingBucket = Math.floor(workoutDurationMs(s)/30000);
+  const pingMs = (state.settings.plankPingIntervalSec||30)*1000;
+  lastPingBucket = Math.floor(workoutDurationMs(s)/pingMs);
   workoutTimerInterval = setInterval(()=>{
     const el = document.getElementById('workout-elapsed');
     if(!el){ clearInterval(workoutTimerInterval); return; } // defensive: DOM was replaced without going through render()
     const ms = workoutDurationMs(state.activeWorkoutSession);
     el.textContent = formatElapsed(ms);
-    const bucket = Math.floor(ms/30000);
+    const bucket = Math.floor(ms/pingMs);
     if(bucket>lastPingBucket && sessionHasPlankExercise(state.activeWorkoutSession)) playPingSound();
     lastPingBucket = bucket;
   }, 1000);
@@ -4191,6 +4196,11 @@ function screenSettings(){
         <div class="toggle-item"><span>Trend Charts</span><button class="switch ${state.settings.charts.projection?'on':''}" data-chart-toggle="projection"></button></div>
       </div>
       <div style="height:10px"></div>
+      <div class="field" style="max-width:180px;">
+        <label>Plank Ping Interval (sec)</label>
+        <input type="number" min="5" step="5" id="s-plank-ping" value="${state.settings.plankPingIntervalSec}" data-setting-number="plankPingIntervalSec">
+      </div>
+      <div style="height:10px"></div>
       ${dayCheckboxesHtml('s', p.trackedDays, {inline:true})}
       <div style="height:10px"></div>
       <div class="field-row">
@@ -4790,6 +4800,12 @@ function attachHandlers(){
     const key = b.dataset.settingToggle;
     state.settings[key] = !state.settings[key];
     saveState(); render();
+  }));
+  document.querySelectorAll('[data-setting-number]').forEach(inp=>inp.addEventListener('change', ()=>{
+    const key = inp.dataset.settingNumber;
+    const val = Number(inp.value);
+    if(val>=5) state.settings[key] = val; else inp.value = state.settings[key]; // reject invalid, snap back
+    saveState();
   }));
 
   const dateEl = document.getElementById('today-date');
