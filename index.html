@@ -434,7 +434,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.5.0';
+const APP_VERSION = '2.5.1';
 
 function defaultState(){
   return {
@@ -2468,10 +2468,10 @@ function activeWorkoutSessionCard(){
       <div style="display:flex;gap:6px;align-items:center;">
         <button class="iconbtn mic-btn" id="btn-voice-toggle" title="${voiceListening?'Turn off voice control':'Temporarily enable timer voice control for this session? Use Resume/Restart/Pause/Stop (Save)'}" type="button">${voiceListening?'🔴':'🎙'}</button>
         ${s.status==='running'
-          ? `<button class="iconbtn" id="btn-pause-workout" title="Pause" type="button">⏸</button>`
-          : `<button class="iconbtn" id="btn-resume-workout" title="Resume" type="button">▶</button>`}
-        <button class="iconbtn" id="btn-restart-workout" title="Restart timer (reset to 0:00)" type="button">↺</button>
-        <button class="iconbtn" id="btn-finish-workout" title="Finish & save" type="button">💾</button>
+          ? `<button class="iconbtn" id="btn-pause-workout" title="Pause" type="button" style="background:var(--orange);color:#fff;">⏸</button>`
+          : `<button class="iconbtn" id="btn-resume-workout" title="Resume" type="button" style="background:#32cd32;color:#fff;">▶</button>`}
+        <button class="iconbtn" id="btn-restart-workout" title="Restart timer (reset to 0:00)" type="button" style="background:var(--blue);color:#fff;">↺</button>
+        <button class="iconbtn" id="btn-finish-workout" title="Finish & save" type="button" style="background:var(--critical);color:#fff;">💾</button>
         <button class="iconbtn" id="btn-discard-workout" title="Discard workout (exit)" type="button">✕</button>
       </div>
     </div>
