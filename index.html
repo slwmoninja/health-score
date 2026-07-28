@@ -434,7 +434,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.4.3';
+const APP_VERSION = '2.4.4';
 
 function defaultState(){
   return {
@@ -1287,6 +1287,10 @@ function restartWorkoutSessionTimer(){
   const s = state.activeWorkoutSession; if(!s) return;
   s.startTime = Date.now(); s.pausedAccumMs = 0;
   if(s.status==='paused') s.pausedAt = Date.now();
+  // Any plank timers' setAtMs is a snapshot of the OLD elapsed clock, now
+  // stale/meaningless against the just-zeroed one — clear them rather than
+  // leaving a countdown pointed at a snapshot that no longer makes sense.
+  if(s.plankTimers) s.plankTimers = {};
   saveState(); render();
 }
 // discard=true drops the session entirely (e.g. started by mistake); otherwise
@@ -1488,9 +1492,15 @@ function sessionHasPlankExercise(s){
 // per-exercise clock to read, only the card's one shared clock. Keeps the 5
 // longest per exercise name, newest-date-wins on an exact tie via stable sort.
 function recordPlankTimes(s, iso){
-  const ms = workoutDurationMs(s); // called after s.status='completed'/s.endTime is set
+  const sessionMs = workoutDurationMs(s); // called after s.status='completed'/s.endTime is set
   PLANK_EXERCISE_NAMES.forEach(name=>{
     if(!(s.title===name || s.exercises.some(ex=>ex.exerciseTitle===name))) return;
+    // A Set Timer, if one was used, records its OWN elapsed-since-set as the
+    // exercise length instead of the whole session's duration — the session
+    // may include other exercises before/after, so its total isn't how long
+    // THIS hold actually was.
+    const pt = s.plankTimers && s.plankTimers[name];
+    const ms = pt ? sessionMs - pt.setAtMs : sessionMs;
     const list = state.plankRecords[name] || (state.plankRecords[name] = []);
     list.push({ms, iso});
     list.sort((a,b)=>b.ms-a.ms);
@@ -1522,13 +1532,34 @@ function wireWorkoutTimer(){
   const pingMs = (state.settings.plankPingIntervalSec||30)*1000;
   lastPingBucket = Math.floor(workoutDurationMs(s)/pingMs);
   workoutTimerInterval = setInterval(()=>{
+    const s = state.activeWorkoutSession;
     const el = document.getElementById('workout-elapsed');
     if(!el){ clearInterval(workoutTimerInterval); return; } // defensive: DOM was replaced without going through render()
-    const ms = workoutDurationMs(state.activeWorkoutSession);
+    const ms = workoutDurationMs(s);
     el.textContent = formatElapsed(ms);
-    const bucket = Math.floor(ms/pingMs);
-    if(bucket>lastPingBucket && sessionHasPlankExercise(state.activeWorkoutSession)) playPingSound();
-    lastPingBucket = bucket;
+    // A per-exercise Set Timer, if any, supersedes the plain ping entirely
+    // for this tick — someone who set a target wants countdown feedback,
+    // not also an unrelated generic pacing ping.
+    const timerNames = s.plankTimers ? Object.keys(s.plankTimers) : [];
+    if(!timerNames.length){
+      const bucket = Math.floor(ms/pingMs);
+      if(bucket>lastPingBucket && sessionHasPlankExercise(s)) playPingSound();
+      lastPingBucket = bucket;
+      return;
+    }
+    timerNames.forEach(name=>{
+      const pt = s.plankTimers[name];
+      const remainingMs = plankTimerRemainingMs(s, name);
+      const idSafe = name.replace(/\s+/g,'-');
+      const remEl = document.getElementById('plank-timer-remaining-'+idSafe);
+      if(remEl) remEl.textContent = `${name} Timer: ${formatElapsed(Math.max(0,remainingMs))} remaining`;
+      if(remainingMs<=0){
+        if(!pt.gonged){ pt.gonged = true; playBuzzerSound(); saveState(); }
+      } else {
+        const remainingSec = Math.ceil(remainingMs/1000);
+        if(remainingSec<=10 && pt.lastBeepSecond!==remainingSec){ pt.lastBeepSecond = remainingSec; playCountdownBeep(); saveState(); }
+      }
+    });
   }, 1000);
 }
 
@@ -2470,12 +2501,39 @@ function sessionScoreSummaryHtml(s){
 // here, so it's visible while just browsing routines, not only mid-session.
 function plankRecordsHtml(s){
   if(!sessionHasPlankExercise(s)) return '';
+  const names = PLANK_EXERCISE_NAMES.filter(name=>s.title===name || s.exercises.some(ex=>ex.exerciseTitle===name));
   return `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
     <div class="field" style="max-width:180px;">
       <label>Plank Ping Interval (sec)</label>
       <input type="number" min="5" step="5" value="${state.settings.plankPingIntervalSec}" data-setting-number="plankPingIntervalSec">
     </div>
+    ${names.map(name=>plankTimerControlHtml(s, name)).join('')}
   </div>`;
+}
+// Secondary to the plain ping above — an optional per-exercise countdown
+// target (min/sec), reusing the standalone Timer's countdown-beep/buzzer
+// sound effects and this session's own existing voice control (no separate
+// mic/recognizer). Once set, it SUPERSEDES the plain ping for this session
+// (see wireWorkoutTimer) — a user who bothered to set a target wants the
+// countdown feedback, not also a generic unrelated pacing ping. Derived
+// entirely from the session's own already-pause-aware elapsed clock (see
+// plankTimerRemainingMs) rather than tracking separate start/pause state,
+// so pausing the session correctly pauses the countdown for free.
+function plankTimerControlHtml(s, name){
+  const idSafe = name.replace(/\s+/g,'-');
+  const pt = s.plankTimers && s.plankTimers[name];
+  const curMin = pt ? Math.floor(pt.targetSec/60) : '', curSec = pt ? pt.targetSec%60 : '';
+  return `
+    <div class="field-row" style="margin-top:10px;">
+      <div class="field"><label>${escapeHtml(name)} Timer (min)</label><input type="number" min="0" data-plank-timer-min="${escapeHtml(name)}" value="${curMin}" placeholder="0"></div>
+      <div class="field"><label>${escapeHtml(name)} Timer (sec)</label><input type="number" min="0" max="59" data-plank-timer-sec="${escapeHtml(name)}" value="${curSec}" placeholder="0"></div>
+    </div>
+    <button class="btn-secondary" data-plank-timer-set="${escapeHtml(name)}" type="button" style="margin-bottom:8px;">${pt?'Update':'Set'} ${escapeHtml(name)} Timer</button>
+    ${pt ? `<div class="muted" id="plank-timer-remaining-${idSafe}" style="font-size:12px;margin-bottom:8px;">${escapeHtml(name)} Timer: ${formatElapsed(Math.max(0,plankTimerRemainingMs(s,name)))} remaining</div>` : ''}`;
+}
+function plankTimerRemainingMs(s, name){
+  const pt = s.plankTimers && s.plankTimers[name]; if(!pt) return null;
+  return pt.targetSec*1000 - (workoutDurationMs(s) - pt.setAtMs);
 }
 // Shared between Today's card and the History workouts list — an edit (✎)
 // button opens openEditWorkoutModal (duration/exercises/score, all
@@ -5474,6 +5532,19 @@ function attachHandlers(){
     if(val>=5) state.settings[key] = val; else inp.value = state.settings[key]; // reject invalid, snap back
     saveState(); render(); // re-render so e.g. wireWorkoutTimer re-arms the plank ping with the new interval right away
   }));
+  document.querySelectorAll('[data-plank-timer-set]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const name = btn.dataset.plankTimerSet;
+      const s = state.activeWorkoutSession; if(!s) return;
+      const minInp = document.querySelector(`[data-plank-timer-min="${name}"]`);
+      const secInp = document.querySelector(`[data-plank-timer-sec="${name}"]`);
+      const total = (Number(minInp.value)||0)*60 + (Number(secInp.value)||0);
+      if(!s.plankTimers) s.plankTimers = {};
+      if(total>0) s.plankTimers[name] = {targetSec: total, setAtMs: workoutDurationMs(s), lastBeepSecond: null, gonged: false};
+      else delete s.plankTimers[name];
+      saveState(); render();
+    });
+  });
 
   const dateEl = document.getElementById('today-date');
   if(dateEl) dateEl.textContent = new Date().toLocaleDateString(undefined,{weekday:'long', month:'short', day:'numeric'});
