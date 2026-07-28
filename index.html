@@ -430,7 +430,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.3.1';
+const APP_VERSION = '2.3.2';
 
 function defaultState(){
   return {
@@ -461,7 +461,7 @@ function defaultState(){
     lastAzmBackfillWeekKey: null, // Sunday iso of the last week fully checked by backfillMissedActiveMinutesIfDue — see that function
     lastAzmBackfillAttemptAt: null, // ms timestamp of the last attempt (successful or not) — throttles retries after a rate-limited run
     errorLog: [], // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
-    pendingCelebration: false, // a goal was hit but confetti hasn't played yet — shown on the next fresh page load
+    pendingCelebrationFor: null, // iso date a goal was hit for, confetti not played yet — shown on the next fresh page load, but only if that date is still today() (see the consumption check)
     pendingReinstallToast: false, // set by reinstallApp() right before its reload, shown on the next fresh page load
     weightGoalCelebrated: false, // stops the weight-goal modal re-firing every subsequent weigh-in once already prompted for the current target — see checkWeightGoalReached
     pendingWeightGoalPrompt: false, // target crossed but the modal hasn't shown yet — shown on the next fresh page load, same convention as pendingCelebration
@@ -930,7 +930,11 @@ function checkGoalsAndCelebrate(iso){
   if(overall!==null && overall>=100 && !d.celebrated.totalScore){
     d.celebrated.totalScore = true; fired = true;
   }
-  if(fired){ state.pendingCelebration = true; saveState(); }
+  // Records WHICH day earned this, not just a bare yes/no — a goal crossed
+  // late on iso (a same-day achievement, or a backfilled/late sync for a
+  // past day) shouldn't pop confetti on some LATER morning once today() has
+  // moved past iso; see the consumption check next to fireConfetti().
+  if(fired){ state.pendingCelebrationFor = iso; saveState(); }
 }
 // Returns true once when a newly-logged weight crosses targetWeightLb in the
 // direction goalType implies (lose: at/below target; gain: at/above target).
@@ -1232,7 +1236,12 @@ function plannedSetRows(re){
       reps: re.targetReps!=null ? re.targetReps : (remembered ? remembered.reps : null),
       distanceMi: re.targetDistanceMi!=null ? re.targetDistanceMi : (remembered ? remembered.distanceMi : null),
       durationSec: re.targetDurationSec!=null ? re.targetDurationSec : (remembered ? remembered.durationSec : null),
-      rpe:null, completed:false
+      rpe:null,
+      // Starts checked, not unchecked — the main measure here is time
+      // spent, not meticulously ticking off every exercise, so a routine
+      // opens as "all done" and the user unchecks whichever ones they
+      // actually skipped, rather than checking off everything they did do.
+      completed:true
     });
   }
   return rows;
@@ -1335,10 +1344,15 @@ function updateExerciseSetCount(sessionExerciseId, count){
   const s = state.activeWorkoutSession; if(!s) return;
   const ex = s.exercises.find(e=>e.id===sessionExerciseId); if(!ex) return;
   count = Math.max(0, Math.min(20, Math.round(Number(count))||0));
-  const template = ex.sets[ex.sets.length-1] || {weightLb:null, reps:null, distanceMi:null, durationSec:null};
+  const template = ex.sets[ex.sets.length-1] || {weightLb:null, reps:null, distanceMi:null, durationSec:null, completed:true};
   while(ex.sets.length < count){
+    // Inherits the last row's completed state (defaults true, matching
+    // plannedSetRows) rather than hardcoding false — otherwise growing an
+    // already-fully-checked exercise's set count would silently flip its
+    // checkbox to unchecked (every(set=>set.completed) turns false) with no
+    // corresponding tap from the user.
     ex.sets.push({index:ex.sets.length, setType:'normal', weightLb:template.weightLb, reps:template.reps,
-      distanceMi:template.distanceMi, durationSec:template.durationSec, rpe:null, completed:false});
+      distanceMi:template.distanceMi, durationSec:template.durationSec, rpe:null, completed:template.completed});
   }
   if(ex.sets.length > count) ex.sets.length = count;
   ex.sets.forEach((st,i)=>st.index=i);
@@ -1424,8 +1438,12 @@ function playVoiceAckSound(){
 // pacing cue while holding one, not tied to which exercise is "current"
 // since there is no such concept here.
 const PLANK_EXERCISE_NAMES = ['Plank','Side Plank'];
+// Matches either a routine exercise named Plank/Side Plank, OR a Quick
+// Start session whose own title IS one of those (now that Plank is a
+// Quick Start type too) — same session-title-or-exercise-title convention
+// SCORING_ACTIVITY_TYPES already uses for Tennis.
 function sessionHasPlankExercise(s){
-  return s.exercises.some(ex=>PLANK_EXERCISE_NAMES.includes(ex.exerciseTitle));
+  return PLANK_EXERCISE_NAMES.includes(s.title) || s.exercises.some(ex=>PLANK_EXERCISE_NAMES.includes(ex.exerciseTitle));
 }
 // Whichever of Plank/Side Plank actually survived finishWorkoutSession's
 // never-checked-off filter gets the session's overall duration recorded as
@@ -1436,7 +1454,7 @@ function sessionHasPlankExercise(s){
 function recordPlankTimes(s, iso){
   const ms = workoutDurationMs(s); // called after s.status='completed'/s.endTime is set
   PLANK_EXERCISE_NAMES.forEach(name=>{
-    if(!s.exercises.some(ex=>ex.exerciseTitle===name)) return;
+    if(!(s.title===name || s.exercises.some(ex=>ex.exerciseTitle===name))) return;
     const list = state.plankRecords[name] || (state.plankRecords[name] = []);
     list.push({ms, iso});
     list.sort((a,b)=>b.ms-a.ms);
@@ -1850,7 +1868,7 @@ function workoutsQuickCard(){
 // the default top suggestion until real picks start accumulating in
 // recentQuickStartTypes, at which point orderedQuickStartTypes floats those
 // above it same as anything else in this base order.
-const QUICK_START_TYPES = ['Tennis','Walking','Indoor Bike','Outdoor Bike','Running','Weight Routine','Pilates/Yoga','Hiking','Swimming','Elliptical','Rowing','Stairmaster','Other'];
+const QUICK_START_TYPES = ['Tennis','Plank','Walking','Indoor Bike','Outdoor Bike','Running','Weight Routine','Pilates/Yoga','Hiking','Swimming','Elliptical','Rowing','Stairmaster','Other'];
 // Quick Start types that track a game score (sets/games), not just duration —
 // gates the "Record Score?" button on the active session card and the score
 // section of the workout edit modal. Extend this list, not the score-sheet
@@ -5699,10 +5717,16 @@ handleGoogleHealthRedirect();
 // the moment it's crossed mid-interaction (see checkGoalsAndCelebrate) — so it
 // reads as a "welcome back, you did it" moment rather than popping up over
 // whatever else was on screen right as the last food/activity got logged.
-if(state.pendingCelebration){
-  state.pendingCelebration = false;
+// Only actually fires if that goal was for TODAY — a stale one left over
+// from yesterday (e.g. a late/backfilled sync crossing a goal after the app
+// was already closed for the night) gets silently cleared instead, so it
+// doesn't pop confetti "out of nowhere" the next morning before anything
+// today has even been logged.
+if(state.pendingCelebrationFor){
+  const wasFor = state.pendingCelebrationFor;
+  state.pendingCelebrationFor = null;
   saveState();
-  fireConfetti();
+  if(wasFor===today()) fireConfetti();
 }
 // Same deferred-to-next-load convention, for a weight-goal crossing that came
 // from the silent Google Health background sync rather than a direct weigh-in
