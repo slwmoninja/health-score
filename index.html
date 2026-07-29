@@ -421,6 +421,7 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
   <button class="navbtn" data-tab="today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9M5 10v10h14V10"/></svg>Today</button>
   <button class="navbtn" data-tab="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5M12 7v5l4 2"/></svg>Trends</button>
   <button class="navbtn" data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1z"/></svg>Settings</button>
+  <button class="navbtn" id="nav-backup" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>Backup</button>
 </div>
 
 <script>
@@ -5551,7 +5552,15 @@ function attachHandlers(){
   // duplicated in the live DOM.
   const profileIconChip = document.getElementById('profile-icon-chip');
   if(profileIconChip) profileIconChip.addEventListener('click', renderProfileIconPickerModal);
-  document.querySelectorAll('.navbtn').forEach(b=>b.addEventListener('click', ()=>goToTab(b.dataset.tab)));
+  document.querySelectorAll('.navbtn[data-tab]').forEach(b=>b.addEventListener('click', ()=>goToTab(b.dataset.tab)));
+  const navBackupBtn = document.getElementById('nav-backup');
+  // Quick, no-confirmation backup straight from the bottom nav — same
+  // fire-and-forget download as Settings > Backup & Reset > "Back up now",
+  // just reachable without a trip into Settings.
+  if(navBackupBtn) navBackupBtn.addEventListener('click', async ()=>{
+    await runAutoBackupDownload();
+    showToast('Backup saved.', 'good');
+  });
   document.querySelectorAll('[data-quick-nav]').forEach(b=>b.addEventListener('click', e=>{
     e.stopPropagation(); goToTab(b.dataset.quickNav, b.dataset.logFocus||null);
   }));
