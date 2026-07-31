@@ -4004,18 +4004,55 @@ function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</
 // status line instead, since that's the one place people go looking to
 // confirm state. Label always mirrors isInstalled() directly — no separate
 // app-level "uninstalled" state, since a page can't actually uninstall
-// itself (see INSTALL_TIP_TEXT/wireInstallBtn below).
+// itself (see INSTALL_STEPS_HTML/UNINSTALL_STEPS_HTML below).
 function installTopbarBtnHtml(keepAfterInstall){
   const installed = isInstalled();
   if(installed && !keepAfterInstall) return '';
   return `<button class="topbar-install-btn${installed?' installed':''}" id="s-install">${installed?'Installed':'Install'}</button>`;
 }
-// Brief, platform-agnostic (device can't be detected reliably) tap tooltip —
-// the real action always has to happen at the OS level, so this just points
-// at it instead of pretending the button can do it. Reuses the chart's own
-// #chart-tooltip bubble; see showTooltip/hideTooltip.
-const INSTALL_TIP_TEXT = 'Android: ⋮ menu → Install app. iPhone: Share icon → Add to Home Screen. Desktop: install icon in address bar.';
-const UNINSTALL_TIP_TEXT = 'Android/iPhone: hold the icon → Uninstall / Remove App. Desktop: right-click the icon → Uninstall.';
+// Platform-agnostic (device can't be detected reliably) instructions — the
+// real action always has to happen at the OS level, so this just points at
+// it instead of pretending the button can do it. Shown via openInfoModal
+// (centered popup) rather than a position-anchored tooltip, since a tooltip
+// pinned to this top-right pill's tap point runs off the edge of the screen.
+const STEPS_LIST_STYLE = 'margin:4px 0 0;padding-left:18px;';
+const INSTALL_STEPS_HTML = `
+  <strong>iPhone/iPad (Safari):</strong>
+  <ol style="${STEPS_LIST_STYLE}">
+    <li>Tap the Share icon (square with an arrow) in the toolbar.</li>
+    <li>Scroll down and tap "Add to Home Screen".</li>
+    <li>Tap "Add" in the top right.</li>
+  </ol><br>
+  <strong>Android (Chrome):</strong>
+  <ol style="${STEPS_LIST_STYLE}">
+    <li>Tap the ⋮ menu in the top right.</li>
+    <li>Tap "Add to Home screen" or "Install app".</li>
+    <li>Tap "Install" (or "Add") to confirm.</li>
+  </ol><br>
+  <strong>Desktop Chrome/Edge:</strong>
+  <ol style="${STEPS_LIST_STYLE}">
+    <li>Click the install icon at the right edge of the address bar (or the ⋮ menu → "Install Health Score...").</li>
+    <li>Click "Install" to confirm.</li>
+  </ol>`;
+const UNINSTALL_STEPS_HTML = `
+  <strong>iPhone/iPad:</strong>
+  <ol style="${STEPS_LIST_STYLE}">
+    <li>Touch and hold the Health Score icon on the Home Screen.</li>
+    <li>Tap "Remove App".</li>
+    <li>Tap "Delete App" to confirm.</li>
+  </ol><br>
+  <strong>Android:</strong>
+  <ol style="${STEPS_LIST_STYLE}">
+    <li>Touch and hold the Health Score icon on the Home screen.</li>
+    <li>Tap "Uninstall" (or drag it to "Uninstall" at the top of the screen).</li>
+    <li>Confirm when prompted.</li>
+  </ol><br>
+  <strong>Desktop Chrome/Edge:</strong>
+  <ol style="${STEPS_LIST_STYLE}">
+    <li>Right-click the Health Score icon (Start Menu/Taskbar/Dock).</li>
+    <li>Click "Uninstall".</li>
+    <li>Confirm when prompted.</li>
+  </ol>`;
 // Day-of-week checkboxes shared by onboarding and Settings > Profile — index
 // matches JS Date.getDay() (0=Sun..6=Sat) so it lines up directly with isTrackedDay().
 const DAY_LABELS = ['S','M','T','W','T','F','S'];
@@ -4133,7 +4170,7 @@ function showTooltip(x, y, text){
 }
 function hideTooltip(){ document.getElementById('chart-tooltip').classList.add('hidden'); }
 document.addEventListener('click', e=>{
-  if(!e.target.closest('.chart-mark, .topbar-install-btn')) hideTooltip();
+  if(!e.target.closest('.chart-mark')) hideTooltip();
 });
 
 /* =========================================================
@@ -6286,12 +6323,12 @@ function attachHandlers(){
     state.errorLog = []; saveState(); render();
   });
   const installBtn = document.getElementById('s-install');
-  // Already installed: tap just shows the brief uninstall tooltip, since the
+  // Already installed: tap just shows the uninstall steps popup, since the
   // real step is OS-level and this button can't do it. Not installed: try
   // the native prompt first (fastest path, Chrome/Edge/Android only); if
-  // there isn't one captured, show the brief install tooltip instead.
+  // there isn't one captured, show the install steps popup instead.
   if(installBtn) installBtn.addEventListener('click', async (e)=>{
-    if(isInstalled()){ showTooltip(e.clientX, e.clientY, UNINSTALL_TIP_TEXT); return; }
+    if(isInstalled()){ openInfoModal('Uninstall Health Score', UNINSTALL_STEPS_HTML); return; }
     if(deferredInstallPrompt){
       const promptEvent = deferredInstallPrompt;
       deferredInstallPrompt = null; // one-shot — the browser invalidates it after a single use either way
@@ -6311,7 +6348,7 @@ function attachHandlers(){
       // There's no signal a page can detect for "user actually finished the
       // manual steps", so this can't flip the button to Installed on its own
       // — only relaunching from the real Home Screen icon can do that.
-      showTooltip(e.clientX, e.clientY, INSTALL_TIP_TEXT);
+      openInfoModal('Install on Home Screen', INSTALL_STEPS_HTML);
     }
   });
   const backupNowBtn = document.getElementById('s-backup-now');
