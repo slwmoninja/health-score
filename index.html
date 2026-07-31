@@ -471,7 +471,6 @@ function defaultState(){
     lastAzmBackfillAttemptAt: null, // ms timestamp of the last attempt (successful or not) — throttles retries after a rate-limited run
     errorLog: [], // [{ts, message}] — last few sync errors, newest first, so silent auto-sync failures are still visible
     pendingCelebrationFor: null, // iso date a goal was hit for, confetti not played yet — shown on the next fresh page load, but only if that date is still today() (see the consumption check)
-    pendingReinstallToast: false, // set by reinstallApp() right before its reload, shown on the next fresh page load
     weightGoalCelebrated: false, // stops the weight-goal modal re-firing every subsequent weigh-in once already prompted for the current target — see checkWeightGoalReached
     pendingWeightGoalPrompt: false, // target crossed but the modal hasn't shown yet — shown on the next fresh page load, same convention as pendingCelebration
     weighInRemindAt: null, // iso date "Later" on the Sunday weigh-in should re-prompt on, even though that day isn't a Sunday — see shouldPromptWeighIn
@@ -4003,97 +4002,20 @@ function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</
 // left to act on there, so it disappears from Today/Log/Trends; Settings
 // passes keepAfterInstall=true to keep showing it as an inert "Installed"
 // status line instead, since that's the one place people go looking to
-// confirm state. Not a real <button disabled> once installed — it stays
-// enabled (just no-ops on a plain tap, see the click handler) so it can
-// still receive the long-press that opens Re-Install/Uninstall below.
+// confirm state. Label always mirrors isInstalled() directly — no separate
+// app-level "uninstalled" state, since a page can't actually uninstall
+// itself (see INSTALL_TIP_TEXT/wireInstallBtn below).
 function installTopbarBtnHtml(keepAfterInstall){
   const installed = isInstalled();
   if(installed && !keepAfterInstall) return '';
   return `<button class="topbar-install-btn${installed?' installed':''}" id="s-install">${installed?'Installed':'Install'}</button>`;
 }
-// Action sheet opened by holding the Settings "Installed" pill — the one
-// place to reach Re-Install/Uninstall once there's nothing left for a plain
-// tap to do.
-function openInstallActionsModal(){
-  const wrap = document.createElement('div');
-  wrap.innerHTML = `
-  <div class="modal-backdrop center">
-    <div class="modal">
-      <div class="row" style="margin-bottom:10px;"><h2 style="margin:0;">Installed</h2>
-        <button class="iconbtn" id="ia-close">✕</button></div>
-      <button class="btn-primary" id="ia-reinstall">Re-Install</button>
-      <div class="muted" style="font-size:12px;margin:8px 0 14px;">Keeps your data — refreshes the app's code immediately, no confirmation needed.</div>
-      <button class="btn-secondary" id="ia-uninstall" style="color:var(--critical)">Uninstall</button>
-      <div class="muted" style="font-size:12px;margin-top:8px;">Keeps your data too, by default — you'll be asked separately if you also want it deleted.</div>
-    </div>
-  </div>`;
-  document.body.appendChild(wrap);
-  // The finger/mouse release that ends the long-press which opened this
-  // modal still has its own trailing "click" event to fire — and by the
-  // time it does, this backdrop is already sitting under that same point,
-  // so it would otherwise land right on the "click outside to close"
-  // handler below and close the sheet the instant it appears. Ignoring
-  // backdrop clicks in the first moment after opening (well under human
-  // reaction time, so a genuine second tap-outside is unaffected) is what
-  // keeps it open until an intentional dismiss.
-  const openedAt = Date.now();
-  const close = ()=>wrap.remove();
-  wrap.querySelector('#ia-close').addEventListener('click', close);
-  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{
-    if(e.target===e.currentTarget && Date.now()-openedAt>350) close();
-  });
-  wrap.querySelector('#ia-reinstall').addEventListener('click', ()=>{ close(); reinstallApp(); });
-  wrap.querySelector('#ia-uninstall').addEventListener('click', ()=>{ close(); uninstallApp(); });
-}
-// Fires immediately on click, no confirmation/instructions text — clears
-// every cache layer this page can reach (the no-op service worker's own
-// registration plus the Cache Storage entries it's allowed to make, see
-// sw.js) then forces a cache-busted reload right now, same intent as
-// checkForUpdate()'s no-store check just forced instead of waiting for the
-// next visibilitychange. Data is untouched (nothing here ever touches
-// localStorage). This can't make the OS re-fetch the *icon* for an
-// already-placed Home Screen/taskbar shortcut — that image is only ever
-// captured once, at install time — but the code it launches next time is
-// guaranteed fresh either way.
-function reinstallApp(){
-  if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
-    navigator.serviceWorker.getRegistrations().then(regs=>regs.forEach(r=>r.unregister()));
-  }
-  if(window.caches && caches.keys){
-    caches.keys().then(keys=>keys.forEach(k=>caches.delete(k)));
-  }
-  state.pendingReinstallToast = true;
-  saveState();
-  location.href = location.pathname + '?_reinstall=' + Date.now();
-}
-// No web API lets a page force-remove its own Home Screen/taskbar shortcut —
-// that's an OS-level action only the user can take (steps below) — so this
-// only clears Health Score's own belief that it's installed here, which
-// flips the topbar pill back to "Install". If this is running *as* the
-// installed app right now, isInstalled() still reports true afterward
-// (isStandaloneApp() alone already covers that) until the shortcut is
-// actually removed and the site is reopened in a normal tab — which is
-// correct, not a bug: it genuinely is still installed until then.
-function uninstallApp(){
-  if(!confirm('Uninstall Health Score on this device? The Home Screen/taskbar icon itself has to be removed separately (steps follow) — this just clears the "Installed" status here. Continue?')) return;
-  state.settings.installPromptAccepted = false;
-  let dataDeleted = false;
-  if(confirm('Also delete all Health Score data on this device? This cannot be undone.')){
-    localStorage.removeItem(STORE_KEY);
-    state = defaultState();
-    dataDeleted = true;
-  } else {
-    saveState();
-  }
-  render();
-  openInfoModal('Remove the Home Screen Icon', `
-    <strong>iPhone/iPad:</strong> touch and hold the Health Score icon, then tap "Remove App".<br><br>
-    <strong>Android:</strong> touch and hold the Health Score icon, then tap "Uninstall".<br><br>
-    <strong>Desktop Chrome/Edge:</strong> right-click the Health Score icon (Start Menu/Dock/taskbar), then choose "Uninstall".<br><br>
-    ${dataDeleted ? 'Your data on this device has been deleted.' : 'Your data on this device has been kept — reinstalling will pick up right where you left off.'}
-  `);
-  showToast(dataDeleted ? 'Uninstalled and data deleted.' : 'Uninstalled — data kept.', 'good');
-}
+// Brief, platform-agnostic (device can't be detected reliably) tap tooltip —
+// the real action always has to happen at the OS level, so this just points
+// at it instead of pretending the button can do it. Reuses the chart's own
+// #chart-tooltip bubble; see showTooltip/hideTooltip.
+const INSTALL_TIP_TEXT = 'Android: ⋮ menu → Install app. iPhone: Share icon → Add to Home Screen. Desktop: install icon in address bar.';
+const UNINSTALL_TIP_TEXT = 'Android/iPhone: hold the icon → Uninstall / Remove App. Desktop: right-click the icon → Uninstall.';
 // Day-of-week checkboxes shared by onboarding and Settings > Profile — index
 // matches JS Date.getDay() (0=Sun..6=Sat) so it lines up directly with isTrackedDay().
 const DAY_LABELS = ['S','M','T','W','T','F','S'];
@@ -4211,7 +4133,7 @@ function showTooltip(x, y, text){
 }
 function hideTooltip(){ document.getElementById('chart-tooltip').classList.add('hidden'); }
 document.addEventListener('click', e=>{
-  if(!e.target.closest('.chart-mark')) hideTooltip();
+  if(!e.target.closest('.chart-mark, .topbar-install-btn')) hideTooltip();
 });
 
 /* =========================================================
@@ -6364,11 +6286,12 @@ function attachHandlers(){
     state.errorLog = []; saveState(); render();
   });
   const installBtn = document.getElementById('s-install');
-  // Guarded by isInstalled() in the click handler below too (a leftover
-  // click from just before installing can't slip through into a second
-  // prompt), but re-checking here on every render keeps the intent obvious.
-  if(installBtn) installBtn.addEventListener('click', async ()=>{
-    if(isInstalled()) return;
+  // Already installed: tap just shows the brief uninstall tooltip, since the
+  // real step is OS-level and this button can't do it. Not installed: try
+  // the native prompt first (fastest path, Chrome/Edge/Android only); if
+  // there isn't one captured, show the brief install tooltip instead.
+  if(installBtn) installBtn.addEventListener('click', async (e)=>{
+    if(isInstalled()){ showTooltip(e.clientX, e.clientY, UNINSTALL_TIP_TEXT); return; }
     if(deferredInstallPrompt){
       const promptEvent = deferredInstallPrompt;
       deferredInstallPrompt = null; // one-shot — the browser invalidates it after a single use either way
@@ -6388,34 +6311,9 @@ function attachHandlers(){
       // There's no signal a page can detect for "user actually finished the
       // manual steps", so this can't flip the button to Installed on its own
       // — only relaunching from the real Home Screen icon can do that.
-      openInfoModal('Install on Home Screen', `
-        A bookmarked tab sits below the bar browsers use to decide a site's data is worth protecting from cleanup — installing is the single biggest thing that reduces the odds of your data disappearing on its own between opens. (Separate from "Back up now" below, which only covers you deliberately clearing your browser's history — nothing can protect against that one.)<br><br>
-        <strong>iPhone/iPad (Safari):</strong> tap the Share icon (square with an arrow), then "Add to Home Screen".<br><br>
-        <strong>Android (Chrome), if this button didn't just install it directly:</strong> tap the ⋮ menu in the top right, then "Add to Home Screen" or "Install app".<br><br>
-        <strong>Desktop Chrome/Edge:</strong> look for an install icon at the right edge of the address bar, or use the ⋮ menu → "Install Health Score".
-      `);
+      showTooltip(e.clientX, e.clientY, INSTALL_TIP_TEXT);
     }
   });
-  // Holding the "Installed" pill opens Re-Install/Uninstall — pointerdown/up
-  // timing (not the "contextmenu" event) so it behaves the same on a mouse
-  // and on touch, and so a normal tap that starts turning into a scroll
-  // (pointermove past MOVE_TOLERANCE) cancels cleanly instead of firing.
-  if(installBtn){
-    let holdTimer = null, holdStart = null;
-    const HOLD_MS = 550, MOVE_TOLERANCE = 10;
-    const cancelHold = ()=>{ if(holdTimer){ clearTimeout(holdTimer); holdTimer = null; } holdStart = null; };
-    installBtn.addEventListener('pointerdown', e=>{
-      if(!isInstalled()) return;
-      holdStart = [e.clientX, e.clientY];
-      holdTimer = setTimeout(()=>{ holdTimer = null; openInstallActionsModal(); }, HOLD_MS);
-    });
-    installBtn.addEventListener('pointermove', e=>{
-      if(!holdTimer || !holdStart) return;
-      if(Math.hypot(e.clientX-holdStart[0], e.clientY-holdStart[1]) > MOVE_TOLERANCE) cancelHold();
-    });
-    ['pointerup','pointercancel','pointerleave'].forEach(evt=>installBtn.addEventListener(evt, cancelHold));
-    installBtn.addEventListener('contextmenu', e=>{ if(isInstalled()) e.preventDefault(); }); // swallow the native long-press menu
-  }
   const backupNowBtn = document.getElementById('s-backup-now');
   // Awaited so the toast can't claim "saved" before a first-time
   // save-location picker (on browsers that support it) has actually been
@@ -6468,17 +6366,6 @@ if(state.pendingWeightGoalPrompt){
   state.pendingWeightGoalPrompt = false;
   saveState();
   renderWeightGoalModal();
-}
-// Re-Install's own reload lands here — see reinstallApp(). Surfaced as a
-// toast (not a blocking modal, since the whole point of Re-Install is not
-// stopping to explain itself) reminding that the Home Screen/taskbar icon
-// image is only ever captured once, at the OS level, when the shortcut is
-// first added — a reload alone, however "fresh," cannot make Android/Chrome
-// re-fetch it, so the old icon sticking around after this isn't a bug.
-if(state.pendingReinstallToast){
-  state.pendingReinstallToast = false;
-  saveState();
-  showToast('Code refreshed. To see a new icon, remove the Health Score shortcut and add it again.', 'good');
 }
 // sw.js is registered further down purely to make the site properly
 // installable (for storage-durability purposes, see the persist() block
