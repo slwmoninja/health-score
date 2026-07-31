@@ -400,8 +400,10 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .pill-btn:active{transform:translateY(2px);box-shadow:0 1px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.3);}
 .pill-btn.green{background:linear-gradient(180deg, color-mix(in srgb, var(--good) 100%, white 15%), var(--good));flex:1.5;}
 .pill-btn.red{background:linear-gradient(180deg, color-mix(in srgb, var(--critical) 100%, white 15%), var(--critical));flex:1;}
-.pill-btn.blue{background:linear-gradient(180deg, color-mix(in srgb, var(--blue) 100%, white 15%), var(--blue));flex:.7;font-size:12.5px;line-height:1.25;}
 .pill-btn.img-btn{padding:0;background:none;box-shadow:none;height:56px;flex:1;transition:transform .1s ease, filter .1s ease;}
+.text-link-btn{border:none;background:none;padding:0;margin:0;color:var(--blue);font:inherit;font-size:14px;font-weight:600;
+  text-decoration:underline;cursor:pointer;}
+.text-link-btn:active{opacity:.7;}
 .pill-btn.img-btn:active{transform:scale(.94);filter:brightness(.88);box-shadow:none;}
 .pill-btn.img-btn img{width:100%;height:100%;object-fit:cover;display:block;}
 
@@ -4479,7 +4481,6 @@ function screenToday(){
     <div class="pill-row">
       <button class="pill-btn green img-btn" data-quick-nav="log" data-log-focus="nutrition" aria-label="Log Nutrition"><img src="btn-nutrition.png" alt=""></button>
       <button class="pill-btn red img-btn" data-quick-nav="log" data-log-focus="activity" aria-label="Log Activity"><img src="btn-activity.png" alt=""></button>
-      <button class="pill-btn blue" data-quick-nav="convtable" aria-label="Conversion Table">Conv.<br>Table</button>
     </div>
 
     ${todaysFoodsCard()}
@@ -4635,7 +4636,7 @@ function screenLog(){
   const showNutrition = logFocus!=='activity';
   const showActivity = logFocus!=='nutrition';
   return `
-  <div class="topbar"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1>${activeSessionBannerHtml()}${showActivity ? `<button class="iconbtn" id="btn-open-spotify" type="button" title="Open Spotify">🎵</button>` : ''}${showActivity && !state.activeWorkoutSession ? `<button class="workout-banner-btn deepred" id="btn-new-routine-topbar" type="button">New Routine</button><button class="workout-banner-btn" id="btn-quickstart-topbar" type="button" title="Quick Start" style="padding:7px 10px;display:flex;align-items:center;"><svg viewBox="0 0 24 24" width="15" height="15" fill="#fff"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-8z"/></svg></button>` : ''}${installTopbarBtnHtml()}</div>
+  <div class="topbar"><div style="display:flex;align-items:baseline;gap:10px;"><h1>${logFocus==='activity'?'Log Activity':logFocus==='nutrition'?'Log Nutrition':'Log'}</h1>${showNutrition ? `<button class="text-link-btn" data-quick-nav="convtable" type="button">Conv. Table</button>` : ''}</div>${activeSessionBannerHtml()}${showActivity ? `<button class="iconbtn" id="btn-open-spotify" type="button" title="Open Spotify">🎵</button>` : ''}${showActivity && !state.activeWorkoutSession ? `<button class="workout-banner-btn deepred" id="btn-new-routine-topbar" type="button">New Routine</button><button class="workout-banner-btn" id="btn-quickstart-topbar" type="button" title="Quick Start" style="padding:7px 10px;display:flex;align-items:center;"><svg viewBox="0 0 24 24" width="15" height="15" fill="#fff"><path d="M13 2 3 14h7l-1 8 11-14h-7l1-8z"/></svg></button>` : ''}${installTopbarBtnHtml()}</div>
   <div class="screen">
     ${showNutrition ? `<div class="card">
       <h3>Add food</h3>
