@@ -400,6 +400,7 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .pill-btn:active{transform:translateY(2px);box-shadow:0 1px 0 var(--btn-lo), inset 0 1px 0 rgba(255,255,255,.3);}
 .pill-btn.green{background:linear-gradient(180deg, color-mix(in srgb, var(--good) 100%, white 15%), var(--good));flex:1.5;}
 .pill-btn.red{background:linear-gradient(180deg, color-mix(in srgb, var(--critical) 100%, white 15%), var(--critical));flex:1;}
+.pill-btn.blue{background:linear-gradient(180deg, color-mix(in srgb, var(--blue) 100%, white 15%), var(--blue));flex:.7;font-size:12.5px;line-height:1.25;}
 .pill-btn.img-btn{padding:0;background:none;box-shadow:none;height:56px;flex:1;transition:transform .1s ease, filter .1s ease;}
 .pill-btn.img-btn:active{transform:scale(.94);filter:brightness(.88);box-shadow:none;}
 .pill-btn.img-btn img{width:100%;height:100%;object-fit:cover;display:block;}
@@ -1088,6 +1089,127 @@ const FOOD_DB = [
 {n:"Honey, 1 tbsp",per:1,u:"tbsp",k:64,p:0.1,c:17,f:0,ir:0.1,ca:1,vitc:0.2,vitd:0,b12:0,potassium:11,fiber:0}
 ];
 function allFoods(){ return FOOD_DB.concat(state.myFoods); }
+
+/* =========================================================
+   UNIT CONVERSION TABLE — lets any food (static FOOD_DB/myFoods entry or a
+   USDA FoodData Central match) be logged in ANY unit the Log screen's Unit
+   selector offers, not just the unit that food happens to be stored in.
+   Example this exists for: FDC's "Cheese, goat" comes back per-100g, but a
+   user logging it wants "1 cup" — foodConversionRatio() below resolves that
+   to a real gram-equivalent (via FOOD_DENSITY_TABLE) and scales calories
+   from there, instead of the old behavior of refusing to compute at all
+   whenever Unit didn't literally match the food's stored unit.
+   ========================================================= */
+// Canonical-base factors: every weight unit expressed in grams, every volume
+// unit in milliliters. Same-dimension conversions (e.g. tbsp -> cup, oz -> g)
+// go through these and are always exact, regardless of what food it is.
+const WEIGHT_TO_G = { g:1, kg:1000, oz:28.3495, lb:453.592 };
+// The fraction set offered for tsp/tbsp/cup (¼ cup, ⅓ tbsp, ...) -- shared
+// between VOLUME_TO_ML's generated keys below and FOOD_UNIT_OPTIONS' dropdown
+// entries, so the two can never fall out of sync with each other.
+const COOKING_FRACTIONS = [[1,8],[1,4],[1,3],[1,2],[2,3],[3,4]];
+// tsp/tbsp/cup fractions are generated off these same three whole-unit
+// constants rather than hand-keyed, so a fraction's mL value can never drift
+// from the whole unit it's a fraction of. Keys look like "cup_1_4" (quarter
+// cup). Pint/quart/gallon are exact multiples of the US cup (2/4/16 resp.).
+const VOLUME_TO_ML = (()=>{
+  const tsp=4.92892, tbsp=14.7868, cup=236.588;
+  const table = { ml:1, l:1000, tsp, tbsp, floz:29.5735, cup, pint:2*cup, quart:4*cup, gallon:16*cup };
+  [['tsp',tsp], ['tbsp',tbsp], ['cup',cup]].forEach(([key,size])=>{
+    COOKING_FRACTIONS.forEach(([num,den])=>{ table[`${key}_${num}_${den}`] = size*num/den; });
+  });
+  return table;
+})();
+
+// Generic density (grams per milliliter), keyword-matched against a food's
+// name, for bridging weight<->volume when the two units aren't the same
+// dimension (a gram-based food but a cup/tbsp/tsp target, or vice versa).
+// Ordered most-specific first since matching stops at the first hit (e.g.
+// "shredded cheese" should hit the cheese line, not a more generic one).
+// Not exact for every food -- a loosely-packed cup differs from a pressed
+// one -- but far closer than treating every food as water, which is what
+// silently omitting this table would amount to. foodConversionIsEstimated()
+// flags exactly this case so the UI can caveat it rather than presenting an
+// estimate as if it were a measured figure.
+const FOOD_DENSITY_TABLE = [
+  [/honey|syrup|molasses/i, 1.42],
+  [/oil\b/i, 0.92],
+  [/peanut butter|almond butter|nut butter/i, 1.09], // must precede butter|ghee below -- "peanut butter" contains "butter"
+  [/butter|ghee/i, 0.96],
+  [/sugar/i, 0.85],
+  [/flour/i, 0.53],
+  [/oats|oatmeal/i, 0.41],
+  [/rice/i, 0.78],
+  [/pasta/i, 0.60],
+  [/shredded cheese|cheese.*shred/i, 0.40],
+  [/cheese/i, 0.60],
+  [/milk|cream|yogurt/i, 1.03],
+  [/juice|soda|beer|wine|broth|coffee/i, 1.02],
+  [/salad greens|lettuce|spinach/i, 0.10],
+  [/broccoli|carrot|green bean|vegetable/i, 0.55],
+  [/almonds|walnuts|pecans|nuts\b/i, 0.55],
+  [/water\b/i, 1.0]
+];
+const DEFAULT_FOOD_DENSITY = 1.0; // water-like fallback when no keyword matches
+function estimateDensity(name){
+  const hit = FOOD_DENSITY_TABLE.find(([re])=>re.test(name));
+  return { value: hit ? hit[1] : DEFAULT_FOOD_DENSITY, matched: !!hit };
+}
+// What food.per of food.u actually amounts to in grams and/or milliliters --
+// the common basis every conversion below is computed against. Compound unit
+// strings like "tbsp (14g)"/"scoop (30g)"/"can (355ml)" (and the FDC-derived
+// "serving (228g)") carry their own measured weight, which takes precedence
+// over treating "tbsp" as a bare volume unit since it's more precise. Bare
+// volume-named units ("cup", "tbsp", "tsp" with no parenthetical) fall back to
+// the standard volume-unit size. Discrete count units (egg, slice, banana,
+// sandwich, ...) have neither -- {g:null, ml:null} -- since there's no fixed
+// weight/volume to convert them from.
+function parseFoodBasis(food){
+  const u = food.u;
+  const paren = /\(([\d.]+)\s*(g|ml)\)/i.exec(u);
+  if(paren){
+    const val = parseFloat(paren[1]) * food.per;
+    return paren[2].toLowerCase()==='g' ? {g:val, ml:null} : {g:null, ml:val};
+  }
+  if(u==='g') return {g:food.per, ml:null};
+  if(u==='ml') return {g:null, ml:food.per};
+  if(VOLUME_TO_ML[u]!=null) return {g:null, ml:food.per*VOLUME_TO_ML[u]};
+  if(WEIGHT_TO_G[u]!=null) return {g:food.per*WEIGHT_TO_G[u], ml:null};
+  return {g:null, ml:null};
+}
+// The multiplier to scale a food's k/p/c/f/... (defined per food.per of
+// food.u) by, for `amount` of `unit`. Returns null when there's no meaningful
+// way to convert -- e.g. `unit` is a weight/volume but the food is a discrete
+// count item (egg, slice, banana, ...) with no fixed weight, or `unit` is
+// "unit" (pieces) but the food is weight/volume-based. unit:'any' means no
+// explicit target was chosen, so it's just the food's own per/u basis as before.
+function foodConversionRatio(food, unit, amount){
+  if(!food || !(amount>=0)) return null;
+  if(unit==='any') return amount/food.per;
+  const isWeightTarget = WEIGHT_TO_G[unit]!=null;
+  const isVolumeTarget = VOLUME_TO_ML[unit]!=null;
+  if(!isWeightTarget && !isVolumeTarget){
+    return unitCategory(food.u)==='unit' ? amount/food.per : null;
+  }
+  const basis = parseFoodBasis(food);
+  const desiredG = isWeightTarget ? amount*WEIGHT_TO_G[unit] : null;
+  const desiredML = isVolumeTarget ? amount*VOLUME_TO_ML[unit] : null;
+  if(basis.g!=null && desiredG!=null) return desiredG/basis.g;
+  if(basis.ml!=null && desiredML!=null) return desiredML/basis.ml;
+  if(basis.g!=null && desiredML!=null) return (desiredML*estimateDensity(food.n).value)/basis.g;
+  if(basis.ml!=null && desiredG!=null) return (desiredG/estimateDensity(food.n).value)/basis.ml;
+  return null; // discrete count food -- no weight/volume basis to convert from at all
+}
+// True when foodConversionRatio for this food/unit combo had to bridge
+// weight<->volume via the density table rather than an exact same-dimension
+// conversion -- surfaced in the UI so an estimate never reads as a measured figure.
+function foodConversionIsEstimated(food, unit){
+  if(!food || unit==='any') return false;
+  const basis = parseFoodBasis(food);
+  if(WEIGHT_TO_G[unit]!=null && basis.ml!=null && basis.g==null) return true;
+  if(VOLUME_TO_ML[unit]!=null && basis.g!=null && basis.ml==null) return true;
+  return false;
+}
 
 /* =========================================================
    EXERCISE DATABASE — mirrors FOOD_DB's role: a curated baseline
@@ -4312,6 +4434,7 @@ function render(){
   backfillPlankRecordsIfNeeded(); // one-time, no-ops after the first run — see the function's own comment
   if(activeTab==='today') app.innerHTML = screenToday();
   else if(activeTab==='log') app.innerHTML = screenLog();
+  else if(activeTab==='convtable') app.innerHTML = screenConvTable();
   else if(activeTab==='history') app.innerHTML = screenHistory();
   else if(activeTab==='settings') app.innerHTML = screenSettings();
   attachHandlers();
@@ -4356,6 +4479,7 @@ function screenToday(){
     <div class="pill-row">
       <button class="pill-btn green img-btn" data-quick-nav="log" data-log-focus="nutrition" aria-label="Log Nutrition"><img src="btn-nutrition.png" alt=""></button>
       <button class="pill-btn red img-btn" data-quick-nav="log" data-log-focus="activity" aria-label="Log Activity"><img src="btn-activity.png" alt=""></button>
+      <button class="pill-btn blue" data-quick-nav="convtable" aria-label="Conversion Table">Conv.<br>Table</button>
     </div>
 
     ${todaysFoodsCard()}
@@ -4393,19 +4517,57 @@ function unitCategory(u){
   if(u.startsWith('tbsp')) return 'tbsp';
   return 'unit';
 }
-// True when the Unit dropdown is set to something other than this matched food's
-// own unit — e.g. Unit=Cups but the food is only defined per-gram. The Amount
-// field always multiplies against the food's own per/unit regardless of what's
-// picked here (there's no real cup<->gram conversion), so a mismatch means
-// whatever Amount is typed would silently compute against the wrong basis —
-// often rounding to 0 calories.
+// True when the Unit dropdown is set to something this matched food genuinely
+// can't be converted to — a weight/volume unit against a discrete count food
+// (an egg, a slice, a banana — nothing to convert a "cup" of those from), or
+// "Units/pieces" against a weight/volume food. Anything else now has a real
+// answer via foodConversionRatio (exact for same-dimension units, density-
+// estimated when bridging weight<->volume), so this no longer fires for
+// ordinary cases like a gram-based food logged in cups.
 function unitMismatch(food){
-  return !!food && foodUnitFilter!=='any' && unitCategory(food.u)!==foodUnitFilter;
+  return !!food && foodUnitFilter!=='any' && foodConversionRatio(food, foodUnitFilter, 1)===null;
+}
+// Vulgar-fraction glyph for a [numerator,denominator] pair -- unicode has a
+// dedicated character for every fraction in COOKING_FRACTIONS, so labels read
+// as "¼ cup" rather than "1/4 cup".
+const FRACTION_GLYPH = { '1/8':'⅛', '1/4':'¼', '1/3':'⅓', '1/2':'½', '2/3':'⅔', '3/4':'¾' };
+function fractionUnitOptions(key, label){
+  return COOKING_FRACTIONS.map(([num,den])=>({
+    v:`${key}_${num}_${den}`, l:`${FRACTION_GLYPH[`${num}/${den}`]} ${label}`, group:label==='tsp'?'Teaspoons':label==='tbsp'?'Tablespoons':'Cups'
+  }));
 }
 const FOOD_UNIT_OPTIONS = [
-  {v:'any', l:'Any'}, {v:'g', l:'Grams'}, {v:'unit', l:'Units/pieces'},
-  {v:'cup', l:'Cups'}, {v:'tsp', l:'Tsp'}, {v:'tbsp', l:'Tbsp'}, {v:'ml', l:'Ml'}
+  {v:'any', l:'Any', group:null}, {v:'unit', l:'Units/pieces', group:null},
+  {v:'g', l:'Grams', group:'Weight'}, {v:'kg', l:'Kilograms', group:'Weight'},
+  {v:'oz', l:'Ounces', group:'Weight'}, {v:'lb', l:'Pounds', group:'Weight'},
+  ...fractionUnitOptions('tsp','tsp'), {v:'tsp', l:'1 tsp', group:'Teaspoons'},
+  ...fractionUnitOptions('tbsp','tbsp'), {v:'tbsp', l:'1 tbsp', group:'Tablespoons'},
+  ...fractionUnitOptions('cup','cup'), {v:'cup', l:'1 cup', group:'Cups'},
+  {v:'floz', l:'Fl oz', group:'Other volume'}, {v:'ml', l:'Ml', group:'Other volume'},
+  {v:'l', l:'Liters', group:'Other volume'}, {v:'pint', l:'Pint', group:'Other volume'},
+  {v:'quart', l:'Quart', group:'Other volume'}, {v:'gallon', l:'Gallon', group:'Other volume'}
 ];
+// Short unit suffix for a logged entry's qtyLabel ("2 cup", not "2 Cups") --
+// falls back to the food's own native unit string for 'any'/'unit', where the
+// dropdown's choice doesn't map to a fixed suffix of its own.
+const UNIT_SHORT_LABEL = { g:'g', kg:'kg', oz:'oz', lb:'lb', ml:'ml', l:'L', floz:'fl oz', cup:'cup', tsp:'tsp', tbsp:'tbsp', pint:'pt', quart:'qt', gallon:'gal' };
+FOOD_UNIT_OPTIONS.forEach(o=>{ if(o.group && !(o.v in UNIT_SHORT_LABEL)) UNIT_SHORT_LABEL[o.v] = o.l; }); // fraction keys -> their own glyph label ("¼ cup")
+// Renders <option>s grouped into <optgroup>s by FOOD_UNIT_OPTIONS' `group`
+// field (ungrouped entries — Any/Units — render as plain top-level options).
+function renderUnitOptions(selected){
+  let html = '', currentGroup, groupOpen = false;
+  FOOD_UNIT_OPTIONS.forEach(o=>{
+    if(o.group !== currentGroup){
+      if(groupOpen) html += '</optgroup>';
+      currentGroup = o.group;
+      groupOpen = !!o.group;
+      if(groupOpen) html += `<optgroup label="${escapeHtml(o.group)}">`;
+    }
+    html += `<option value="${o.v}" ${selected===o.v?'selected':''}>${o.l}</option>`;
+  });
+  if(groupOpen) html += '</optgroup>';
+  return html;
+}
 let foodUnitFilter = 'any';
 let matchedFood = null; // the FOOD_DB/myFoods entry currently selected from suggestions, or null for a freeform/custom name
 function getFoodResults(){
@@ -4480,7 +4642,7 @@ function screenLog(){
       <div class="field-row">
         <div class="field" style="flex:1;"><label>Amount</label><input type="number" step="any" id="food-amount" placeholder="1" value="${foodAmountValue}"></div>
         <div class="field" style="flex:1.3;"><label>Unit</label>
-          <select id="food-unit">${FOOD_UNIT_OPTIONS.map(o=>`<option value="${o.v}" ${foodUnitFilter===o.v?'selected':''}>${o.l}</option>`).join('')}</select>
+          <select id="food-unit">${renderUnitOptions(foodUnitFilter)}</select>
         </div>
       </div>
       <div class="field">
@@ -4496,7 +4658,8 @@ function screenLog(){
         ${results.map((f,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${f.n}${f.fdc?' <span class="muted" style="font-size:10.5px;">USDA</span>':''}</div><div class="m">${f.k} kcal per ${f.per} ${f.u}</div></div>`).join('')}
       </div>
       ${showWebSearch && !matchedFood ? `<button class="btn-secondary" id="btn-web-search-food" type="button" style="margin-top:2px;">Search the web for "${logFoodQuery}"</button>` : ''}
-      ${matchedFood && unitMismatch(matchedFood) ? `<div class="muted" style="color:var(--critical);margin:4px 0 -2px;">${matchedFood.n} is measured in ${matchedFood.u}, not ${FOOD_UNIT_OPTIONS.find(o=>o.v===foodUnitFilter).l.toLowerCase()} — set Unit to match, or enter your own calorie estimate below.</div>` : ''}
+      ${matchedFood && unitMismatch(matchedFood) ? `<div class="muted" style="color:var(--critical);margin:4px 0 -2px;">${matchedFood.n} is measured in ${matchedFood.u}, which can't convert to ${FOOD_UNIT_OPTIONS.find(o=>o.v===foodUnitFilter).l.toLowerCase()} — set Unit to match, or enter your own calorie estimate below.</div>` : ''}
+      ${matchedFood && !unitMismatch(matchedFood) && foodConversionIsEstimated(matchedFood, foodUnitFilter) ? `<div class="muted" style="margin:4px 0 -2px;">≈ estimated using a typical density for this food type — the actual weight per ${FOOD_UNIT_OPTIONS.find(o=>o.v===foodUnitFilter).l.toLowerCase().replace(/s$/,'')} can vary by brand/prep.</div>` : ''}
       <div class="field" style="margin-top:2px;"><label>Calories</label><input type="number" id="food-kcal" placeholder="0" value="${foodKcalValue}"></div>
       <button class="btn-primary" id="btn-add-food" style="margin-top:4px;">Log item</button>
     </div>
@@ -4561,15 +4724,143 @@ function selectFoodIntoForm(food){
   const remembered = state.foodMemory[food.n];
   const amt = priorAmount>0 ? priorAmount : (remembered ? remembered.qty : food.per);
   foodAmountValue = String(amt);
-  // Don't auto-fill Calories against the wrong basis when Unit doesn't match this
-  // food's own unit — leave it for the user to fill in themselves; the inline
-  // warning in screenLog() explains why.
-  foodKcalValue = unitMismatch(food) ? '' : String(Math.round(food.k*(amt/food.per)));
+  // Converts through foodConversionRatio (exact for same-dimension units, e.g.
+  // oz -> g, density-estimated when bridging weight<->volume) rather than
+  // assuming Amount is already in this food's own unit. Left blank only when
+  // there's truly no basis to convert from (a discrete count food against a
+  // weight/volume unit) — the inline warning in screenLog() explains why.
+  const ratio = foodConversionRatio(food, foodUnitFilter, amt);
+  foodKcalValue = ratio!=null ? String(Math.round(food.k*ratio)) : '';
   render();
   const amountEl = document.getElementById('food-amount');
   amountEl.focus();
   amountEl.select();
 }
+
+/* ---------- CONVERSION TABLE (standalone) ----------
+   A pure calculator, separate from Log Nutrition's own search/amount/unit
+   state so browsing it never disturbs an in-progress food-log entry (they're
+   reachable from the same Today screen, one tap apart). Reuses the same
+   FOOD_DB/FDC search and foodConversionRatio machinery Log Nutrition logs
+   food with, just without ever writing to getDay().foods. */
+let convQuery = '';
+let convMatchedFood = null;
+let convAmount = '1';
+let convFromUnit = 'g';
+let convToUnit = 'cup';
+let convLiveResults = null;
+let convLiveQuery = '';
+let convLiveSource = null;
+let convLiveDebounce = null;
+let convLiveLoading = false;
+function triggerConvLiveSearch(query){
+  clearTimeout(convLiveDebounce);
+  if(query.trim().length<2){ convLiveResults=null; convLiveQuery=query; convLiveLoading=false; return; }
+  convLiveLoading = true;
+  convLiveDebounce = setTimeout(async ()=>{
+    const {results, source} = await liveFoodSearchCascade(query);
+    convLiveLoading = false;
+    if(convQuery!==query) return; // user moved on to a different search meanwhile
+    convLiveResults = results; convLiveSource = source; convLiveQuery = query;
+    render();
+    const el = document.getElementById('conv-search');
+    if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }, 400);
+}
+function getConvFoodResults(){
+  if(convQuery.length===0) return {list:[], heading:null, loading:false};
+  const localList = allFoods().filter(f=>f.n.toLowerCase().includes(convQuery.toLowerCase()));
+  const liveReady = convLiveQuery===convQuery && convLiveResults;
+  if(liveReady && convLiveResults.length){
+    const seenLocal = new Set(localList.map(f=>f.n.toLowerCase()));
+    const extraLive = convLiveResults.filter(f=>!seenLocal.has(f.n.toLowerCase()));
+    return {list:[...localList, ...extraLive].slice(0,10), heading: localList.length?null:'From '+convLiveSource, loading:false};
+  }
+  return {list: localList.slice(0,8), heading:null, loading:convLiveLoading};
+}
+// The core calculator: X of convFromUnit -> the equivalent quantity (and
+// calories) in convToUnit. Composes foodConversionRatio rather than adding a
+// second conversion path — perFrom/perTo are each "ratio for exactly 1 of
+// this unit", so their quotient gives the equivalent quantity directly,
+// regardless of whether either leg needed a density estimate to bridge
+// weight<->volume.
+function convResult(){
+  if(!convMatchedFood) return null;
+  const amount = Number(convAmount);
+  if(!(amount>=0)) return null;
+  const perFrom = foodConversionRatio(convMatchedFood, convFromUnit, 1);
+  const perTo = foodConversionRatio(convMatchedFood, convToUnit, 1);
+  if(perFrom==null || perTo==null || !(perTo>0)) return null;
+  const totalRatio = perFrom*amount;
+  return {
+    toAmount: totalRatio/perTo,
+    kcal: Math.round(convMatchedFood.k*totalRatio),
+    estimated: foodConversionIsEstimated(convMatchedFood, convFromUnit) || foodConversionIsEstimated(convMatchedFood, convToUnit)
+  };
+}
+function selectConvFoodIntoForm(food){
+  convMatchedFood = food;
+  convQuery = food.n;
+  render();
+  const el = document.getElementById('conv-amount');
+  if(el){ el.focus(); el.select(); }
+}
+// Split out from screenConvTable() so the Amount input's listener can patch
+// just this box's innerHTML on every keystroke (see convAmountEl below) —
+// calling full render() there would tear down and rebuild #conv-amount
+// itself mid-keystroke, same focus/cursor-loss issue food-search's own
+// input listener works around elsewhere in this file.
+function convResultBlockHtml(){
+  const result = convResult();
+  // UNIT_SHORT_LABEL, not FOOD_UNIT_OPTIONS' own dropdown label — the whole-
+  // unit options are deliberately labeled "1 cup"/"1 tsp" in the dropdown (to
+  // sit visually above their fraction siblings), which would otherwise render
+  // as "2 1 cup of Cheddar cheese" once prefixed with an arbitrary Amount.
+  const fromLabel = UNIT_SHORT_LABEL[convFromUnit] || convFromUnit;
+  const toLabel = UNIT_SHORT_LABEL[convToUnit] || convToUnit;
+  if(!convMatchedFood) return `<div class="muted" style="margin-top:8px;">Search and pick a food above to see the conversion.</div>`;
+  if(!result) return `<div class="muted" style="color:var(--critical);margin-top:8px;">${escapeHtml(convMatchedFood.n)} is measured in ${convMatchedFood.u} — pick measurements that food can actually convert between (e.g. weight or volume, not both against a discrete item).</div>`;
+  return `<div class="card" style="margin:10px 0 0;">
+    <div class="muted">${escapeHtml(convAmount)} ${fromLabel} of ${escapeHtml(convMatchedFood.n)} is</div>
+    <div style="font-size:22px;font-weight:700;margin:2px 0;">${(Math.round(result.toAmount*100)/100)} ${toLabel}</div>
+    <div class="muted">≈ ${result.kcal.toLocaleString()} kcal</div>
+    ${result.estimated ? `<div class="muted" style="margin-top:6px;">≈ estimated using a typical density for this food type — the actual weight/volume can vary by brand/prep.</div>` : ''}
+  </div>`;
+}
+function screenConvTable(){
+  const {list:results, heading, loading} = getConvFoodResults();
+  return `
+  <div class="topbar"><h1>Conversion Table</h1>${installTopbarBtnHtml()}</div>
+  <div class="screen">
+    <div class="card">
+      <h3>Convert a measurement</h3>
+      <div class="field">
+        <label>Food or liquid</label>
+        <div class="input-clear-wrap">
+          <input type="text" id="conv-search" placeholder="Search a food or liquid" value="${escapeHtml(convQuery)}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+          ${convQuery ? `<button type="button" class="input-clear-btn" id="btn-clear-conv-search" title="Clear">×</button>` : ''}
+        </div>
+      </div>
+      ${heading?`<div class="muted" style="margin:6px 0 -2px;">${heading}</div>`:''}
+      ${loading?`<div class="muted" style="margin:6px 0 -2px;">Searching…</div>`:''}
+      <div class="search-list ${results.length && !convMatchedFood?'':'hidden'}" id="conv-results">
+        ${results.map((f,i)=>`<div class="search-item" data-idx="${i}"><div class="n">${f.n}${f.fdc?' <span class="muted" style="font-size:10.5px;">USDA</span>':''}</div><div class="m">${f.k} kcal per ${f.per} ${f.u}</div></div>`).join('')}
+      </div>
+      <div class="field-row" style="margin-top:6px;">
+        <div class="field" style="flex:1;"><label>Quantity</label><input type="number" step="any" id="conv-amount" placeholder="1" value="${escapeHtml(convAmount)}"></div>
+        <div class="field" style="flex:1.3;"><label>Measurement</label>
+          <select id="conv-from-unit">${renderUnitOptions(convFromUnit)}</select>
+        </div>
+      </div>
+      <div class="field" style="margin-top:2px;">
+        <label>Convert to</label>
+        <select id="conv-to-unit">${renderUnitOptions(convToUnit)}</select>
+      </div>
+      <div id="conv-result-box">${convResultBlockHtml()}</div>
+    </div>
+  </div>`;
+}
+
 /* ---------- HISTORY ---------- */
 let historyMode = 'week';
 function screenHistory(){
@@ -5644,7 +5935,18 @@ function attachHandlers(){
     if(el) el.focus();
   });
   const foodUnitSelect = document.getElementById('food-unit');
-  if(foodUnitSelect) foodUnitSelect.addEventListener('change', e=>{ foodUnitFilter = e.target.value; render(); });
+  if(foodUnitSelect) foodUnitSelect.addEventListener('change', e=>{
+    foodUnitFilter = e.target.value;
+    // Re-convert immediately against the newly picked unit, same as changing
+    // Amount does — otherwise Calories stays stuck at whatever the previous
+    // unit computed until Amount is also touched.
+    if(matchedFood){
+      const amt = Number(foodAmountValue)||0;
+      const ratio = foodConversionRatio(matchedFood, foodUnitFilter, amt);
+      foodKcalValue = ratio!=null ? String(Math.round(matchedFood.k*ratio)) : '';
+    }
+    render();
+  });
   // Manual last-resort: opens a pre-filled Google search in a new tab rather than
   // auto-scraping/auto-filling results, since there's no Google nutrition API and
   // no backend here to route around CORS/ToS restrictions on scraping search results.
@@ -5668,9 +5970,11 @@ function attachHandlers(){
   const amountInputEl = document.getElementById('food-amount');
   if(amountInputEl) amountInputEl.addEventListener('input', ()=>{
     foodAmountValue = amountInputEl.value;
-    if(!matchedFood || unitMismatch(matchedFood)) return;
+    if(!matchedFood) return;
     const amt = Number(amountInputEl.value)||0;
-    foodKcalValue = String(Math.round(matchedFood.k*(amt/matchedFood.per)));
+    const ratio = foodConversionRatio(matchedFood, foodUnitFilter, amt);
+    if(ratio==null) return; // no basis to convert this food into the picked unit
+    foodKcalValue = String(Math.round(matchedFood.k*ratio));
     const kcalEl = document.getElementById('food-kcal');
     if(kcalEl) kcalEl.value = foodKcalValue;
   });
@@ -5694,10 +5998,11 @@ function attachHandlers(){
     const name = rawName || 'Generic food';
     const amount = Number(document.getElementById('food-amount').value) || 1;
     const kcal = Number(document.getElementById('food-kcal').value) || 0;
-    // A "trusted" match is one whose Unit also matches the food's own unit — only
-    // that case gets to skip the "enter calories yourself" requirement, since a
-    // mismatched Unit means Calories was deliberately left blank instead of
-    // auto-filled against the wrong basis (see selectFoodIntoForm/unitMismatch).
+    // A "trusted" match is one the picked Unit can actually be converted into
+    // for this food — only that case gets to skip the "enter calories yourself"
+    // requirement, since a genuine mismatch (e.g. Cups against a discrete "egg")
+    // means Calories was deliberately left blank instead of auto-filled against
+    // no real basis (see selectFoodIntoForm/unitMismatch).
     const trustedMatch = matchedFood && matchedFood.n===name && !unitMismatch(matchedFood);
     if(!trustedMatch && kcal===0){
       alert(matchedFood && matchedFood.n===name
@@ -5711,11 +6016,20 @@ function attachHandlers(){
     const extras = {};
     NUTRIENT_CATALOG.forEach(n=>{ extras[n.key] = 0; });
     if(matchedFood && matchedFood.n===name){
-      const ratio = amount/matchedFood.per;
-      protein = matchedFood.p*ratio; carbs = matchedFood.c*ratio; fat = matchedFood.f*ratio;
-      iron = (matchedFood.ir||0)*ratio; calcium = (matchedFood.ca||0)*ratio;
-      NUTRIENT_CATALOG.forEach(n=>{ extras[n.key] = (matchedFood[n.key]||0)*ratio; });
-      qtyLabel = `${amount} ${matchedFood.u}`;
+      // foodUnitFilter may not be this food's own native unit (that's the whole
+      // point — see the goat-cheese-per-100g-logged-as-1-cup case in the UNIT
+      // CONVERSION TABLE comment above), so convert rather than assuming amount
+      // is already denominated in matchedFood.u. Left at 0 only when there's
+      // truly no basis (ratio null) — kcal itself is still whatever was
+      // entered/auto-filled, just the macros can't be scaled without a basis.
+      const ratio = foodConversionRatio(matchedFood, foodUnitFilter, amount);
+      if(ratio!=null){
+        protein = matchedFood.p*ratio; carbs = matchedFood.c*ratio; fat = matchedFood.f*ratio;
+        iron = (matchedFood.ir||0)*ratio; calcium = (matchedFood.ca||0)*ratio;
+        NUTRIENT_CATALOG.forEach(n=>{ extras[n.key] = (matchedFood[n.key]||0)*ratio; });
+      }
+      const unitSuffix = UNIT_SHORT_LABEL[foodUnitFilter] || matchedFood.u;
+      qtyLabel = `${amount} ${unitSuffix}`;
     }else{
       // Freeform name — nutrition is always estimated (search match or FDC), so an
       // unmatched name just gets the entered calories with macros/micros at 0.
@@ -5734,6 +6048,63 @@ function attachHandlers(){
   });
   const sortBtn = document.getElementById('btn-sort-foods');
   if(sortBtn) sortBtn.addEventListener('click', ()=>{ foodSortMode = foodSortMode==='kcal'?'logged':'kcal'; render(); });
+
+  // CONVERSION TABLE tab — same search/select/result wiring shape as Log
+  // Nutrition above, kept as its own block since it targets conv-* ids and
+  // its own state (convQuery/convMatchedFood/...), not food-*/matchedFood.
+  const convSearch = document.getElementById('conv-search');
+  if(convSearch){
+    convSearch.addEventListener('input', e=>{
+      convQuery = e.target.value;
+      convMatchedFood = null;
+      triggerConvLiveSearch(convQuery);
+      render();
+      const el = document.getElementById('conv-search');
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+    convSearch.addEventListener('keydown', e=>{
+      if(e.key!=='Enter') return;
+      e.preventDefault();
+      const exact = allFoods().find(f=>f.n.toLowerCase()===convQuery.trim().toLowerCase());
+      if(exact) selectConvFoodIntoForm(exact);
+    });
+  }
+  const clearConvSearchBtn = document.getElementById('btn-clear-conv-search');
+  if(clearConvSearchBtn) clearConvSearchBtn.addEventListener('click', ()=>{
+    convQuery=''; convMatchedFood=null; convLiveResults=null; convLiveQuery='';
+    render();
+    const el = document.getElementById('conv-search');
+    if(el) el.focus();
+  });
+  const convResultsEl = document.getElementById('conv-results');
+  if(convResultsEl){
+    const {list:results} = getConvFoodResults();
+    convResultsEl.querySelectorAll('.search-item').forEach(el=>{
+      el.addEventListener('click', ()=>selectConvFoodIntoForm(results[Number(el.dataset.idx)]));
+    });
+  }
+  // Patch #conv-result-box directly rather than calling render() — a full
+  // render() on every keystroke would replace #conv-amount itself mid-type
+  // and drop focus/cursor position.
+  const convAmountEl = document.getElementById('conv-amount');
+  if(convAmountEl) convAmountEl.addEventListener('input', ()=>{
+    convAmount = convAmountEl.value;
+    const box = document.getElementById('conv-result-box');
+    if(box) box.innerHTML = convResultBlockHtml();
+  });
+  const convFromUnitEl = document.getElementById('conv-from-unit');
+  if(convFromUnitEl) convFromUnitEl.addEventListener('change', e=>{
+    convFromUnit = e.target.value;
+    const box = document.getElementById('conv-result-box');
+    if(box) box.innerHTML = convResultBlockHtml();
+  });
+  const convToUnitEl = document.getElementById('conv-to-unit');
+  if(convToUnitEl) convToUnitEl.addEventListener('change', e=>{
+    convToUnit = e.target.value;
+    const box = document.getElementById('conv-result-box');
+    if(box) box.innerHTML = convResultBlockHtml();
+  });
   document.querySelectorAll('[data-food]').forEach(el=>{
     el.addEventListener('click', ()=>{
       const id = Number(el.dataset.food);
