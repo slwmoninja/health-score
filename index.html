@@ -4831,7 +4831,7 @@ function convResultBlockHtml(){
 function screenConvTable(){
   const {list:results, heading, loading} = getConvFoodResults();
   return `
-  <div class="topbar"><h1>Conversion Table</h1>${installTopbarBtnHtml()}</div>
+  <div class="topbar"><h1>Conversion Table</h1><div style="display:flex;align-items:center;gap:12px;"><button class="text-link-btn" id="btn-clear-conv-table" type="button">Clear</button>${installTopbarBtnHtml()}</div></div>
   <div class="screen">
     <div class="card">
       <h3>Convert a measurement</h3>
@@ -6105,6 +6105,12 @@ function attachHandlers(){
     convToUnit = e.target.value;
     const box = document.getElementById('conv-result-box');
     if(box) box.innerHTML = convResultBlockHtml();
+  });
+  const clearConvTableBtn = document.getElementById('btn-clear-conv-table');
+  if(clearConvTableBtn) clearConvTableBtn.addEventListener('click', ()=>{
+    convQuery=''; convMatchedFood=null; convAmount='1'; convFromUnit='g'; convToUnit='cup';
+    convLiveResults=null; convLiveQuery='';
+    render();
   });
   document.querySelectorAll('[data-food]').forEach(el=>{
     el.addEventListener('click', ()=>{
