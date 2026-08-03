@@ -54,6 +54,9 @@ input,select{font-family:inherit;}
    overridden — clicking it silently does nothing with zero visual explanation why. */
 .iconbtn:disabled{opacity:.35;cursor:not-allowed;box-shadow:none;}
 .iconbtn:disabled:active{transform:none;}
+/* Weekly weigh-in alert (see weighInIconHtml) — red so it reads as a pending
+   nag, distinct from every other neutral .iconbtn on the same topbar. */
+#weighin-alert-btn{color:var(--critical);}
 /* The mic toggle (session voice control + Timer) — bigger tap target and a
    bigger glyph than a plain .iconbtn's inherited text size, since a tiny
    mic emoji is easy to miss/misidentify on a small phone screen. */
@@ -3777,7 +3780,7 @@ function renderOnboardingFitbitStep(){
 // explicit "Later"/disable, or the reminder date rolling past, stops it; simply
 // reloading/backgrounding the app does not. "Later" reprompts the very next day
 // (via weighInRemindAt) regardless of day-of-week, rather than waiting a full
-// week for the next Sunday — see renderWeighInModal.
+// week for the next Sunday — see promptWeighIn.
 function shouldPromptWeighIn(){
   if(!state.profile || !state.settings.weightTrackingEnabled) return false;
   const t = today();
@@ -3788,42 +3791,71 @@ function shouldPromptWeighIn(){
   if(d.weighInDismissed) return false;
   return true;
 }
-function renderWeighInModal(){
-  const wrap = document.createElement('div');
-  wrap.innerHTML = `
-  <div class="modal-backdrop center">
-    <div class="modal">
-      <h2>Sunday weigh-in</h2>
-      <div class="sub">Log today's weight to close out the week.</div>
-      <div class="field"><label>Weight (lb)</label><input type="number" step="0.1" id="wi-weight" placeholder="${state.profile.weightLb}"></div>
-      <button class="btn-primary" id="wi-save">Enter / Save</button>
-      <div style="height:8px"></div>
-      <button class="btn-secondary" id="wi-later">Later (remind me tomorrow)</button>
-      <div style="height:8px"></div>
-      <button class="btn-secondary" id="wi-disable" style="color:var(--critical)">Disable weight tracking</button>
-    </div>
-  </div>`;
-  document.body.appendChild(wrap);
-  wrap.querySelector('#wi-save').addEventListener('click', ()=>{
-    const w = Number(wrap.querySelector('#wi-weight').value);
-    if(!w){ alert('Enter a weight.'); return; }
-    getDay(today()).weightLb = w;
-    state.profile.weightLb = w;
-    state.weighInRemindAt = null; // clear any pending "Later" — today's entry satisfies it
-    const hitGoal = checkWeightGoalReached(w);
-    saveState(); wrap.remove(); render();
-    if(hitGoal) renderWeightGoalModal();
+// Whether the "weight scale" alert icon (see weighInIconHtml) should show —
+// true once a weigh-in has been deferred (weighInRemindAt gets set by
+// promptWeighIn's resolve()) and this week (Mon-Sun) still has no weight
+// logged yet. Re-derived from actual day data rather than a separate flag, so
+// logging a weight through any path (this table, a history-table edit,
+// Settings) clears it immediately without extra bookkeeping.
+function weekWeighInPending(){
+  if(!state.profile || !state.settings.weightTrackingEnabled) return false;
+  if(!state.weighInRemindAt) return false;
+  const {start,end} = weekRange(today());
+  return !latestWeightIn(datesBetween(start,end));
+}
+function weighInIconHtml(){
+  if(!weekWeighInPending()) return '';
+  return `<button class="iconbtn" id="weighin-alert-btn" type="button" aria-label="Weekly weigh-in still pending" title="Weekly weigh-in still pending — tap to log it">`+
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l2-2.3"/></svg>`+
+  `</button>`;
+}
+// Takes the user straight to Trends > Monthly's chart table (the same one a
+// tap on the trend chart opens) instead of a separate bespoke "enter your
+// weight" modal — one table to log this week's weight in, whether arriving
+// via the Sunday reminder or the weight-scale alert icon (see
+// weekWeighInPending/weighInIconHtml). Closing it (X or tapping outside)
+// without having entered a weight counts as "Later": same behavior the old
+// modal's explicit Later button had, reprompting tomorrow.
+// Guards the goToTab() call below from re-entering shouldPromptWeighIn()'s
+// check inside render() — goToTab renders before the modal (appended after
+// it returns here) exists, so without this a still-unlogged weigh-in would
+// call promptWeighIn() again from inside that nested render(), forever.
+let weighInPromptOpening = false;
+function promptWeighIn(){
+  weighInPromptOpening = true;
+  historyMode = 'month';
+  goToTab('history');
+  weighInPromptOpening = false;
+  const wrap = openMonthlyWeightTable(today());
+  if(!wrap) return;
+  const textEl = wrap.querySelector('.text2');
+  if(textEl) textEl.insertAdjacentHTML('afterbegin', `<div class="sub" style="margin-bottom:8px;">Sunday weigh-in — tap this month's Weight cell to log today's weight and close out the week.</div>`);
+  const resolve = ()=>{
+    if(getDay(today()).weightLb){
+      state.weighInRemindAt = null; // today's entry satisfies it
+    }else{
+      getDay(today()).weighInDismissed = true;
+      state.weighInRemindAt = addDays(today(), 1);
+    }
+    saveState();
+  };
+  wrap.querySelector('#info-close').addEventListener('click', resolve);
+  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) resolve(); });
+}
+// The weight-scale alert icon's own tap target (see weighInIconHtml) — same
+// destination table as promptWeighIn, but an on-demand check-in rather than a
+// prompt, so closing without entering a weight doesn't reschedule anything;
+// the icon just stays lit (weekWeighInPending() re-checks live data next render).
+function openWeighInFromIcon(){
+  historyMode = 'month';
+  goToTab('history');
+  const wrap = openMonthlyWeightTable(today());
+  if(!wrap) return;
+  wrap.querySelector('#info-close').addEventListener('click', ()=>{
+    if(getDay(today()).weightLb){ state.weighInRemindAt = null; saveState(); }
   });
-  wrap.querySelector('#wi-later').addEventListener('click', ()=>{
-    getDay(today()).weighInDismissed = true;
-    state.weighInRemindAt = addDays(today(), 1);
-    saveState(); wrap.remove();
-  });
-  wrap.querySelector('#wi-disable').addEventListener('click', ()=>{
-    state.settings.weightTrackingEnabled = false;
-    state.weighInRemindAt = null;
-    saveState(); wrap.remove(); render();
-    showToast('Weight tracking disabled.', 'good');
+  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{
+    if(e.target===e.currentTarget && getDay(today()).weightLb){ state.weighInRemindAt = null; saveState(); }
   });
 }
 
@@ -3994,6 +4026,36 @@ function openChartTableModal(title, columns, rows, colColors, editableCols){
       showToast('Updated.', 'good');
     });
   });
+  return wrap;
+}
+// Builds the Monthly Trends chart-table (Month/Total Score/Weight, current
+// bucket's Weight cell editable) and opens it — shared by a tap on the
+// Monthly trend chart and the Sunday weigh-in flow, which jumps straight to
+// this same table instead of a separate bespoke prompt. Returns the modal
+// wrap element so callers (see promptWeighIn) can layer extra behavior onto
+// its close.
+function openMonthlyWeightTable(t){
+  t = t || today();
+  const buckets = trailingMonthBuckets(12, t);
+  const bucketDates = buckets.map(b=>trackedDatesBetween(b.start,b.end));
+  const scorePoints = buckets.map((b,i)=>periodOverallScore(bucketDates[i]));
+  const weightDates = bucketDates.map((ds,i)=> latestWeightDateIn(ds) || ds[ds.length-1] || buckets[i].end);
+  const weightPoints = bucketDates.map(ds=>latestWeightIn(ds));
+  const tooltipLabels = buckets.map(b=>new Date(b.year,b.monthIdx,1).toLocaleDateString(undefined,{month:'long',year:'numeric'}));
+  // Reversed to most-recent-first for the table — the chart itself stays
+  // chronological (oldest-to-newest, left-to-right) since that's how a trend line reads.
+  // weightDates/weightPoints are reversed in lockstep so a table row's edit
+  // always lands on the right day regardless of display order.
+  const rows = buckets.map((b,i)=>[tooltipLabels[i], scorePoints[i]===null?'--':scorePoints[i], weightPoints[i]===null?'--':weightPoints[i].toFixed(1)+' lb']).reverse();
+  const datesRev = weightDates.slice().reverse();
+  const valuesRev = weightPoints.slice().reverse();
+  return openChartTableModal('Monthly Trends', ['Month','Total Score','Weight'], rows,
+    [null,'var(--blue)','var(--orange)'],
+    [{ colIndex:2, values: valuesRev, unit:' lb', onSave:(ri, newVal)=>{
+      getDay(datesRev[ri]).weightLb = newVal;
+      if(newVal!=null && checkWeightGoalReached(newVal)) renderWeightGoalModal();
+    } }]
+  );
 }
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
 // Shown top-right on every screen's topbar, same row as the heading, so the
@@ -4403,7 +4465,7 @@ function render(){
   wireWorkoutTimer();
   wireTimerInterval();
 
-  if(shouldPromptWeighIn() && !document.querySelector('.modal-backdrop')) renderWeighInModal();
+  if(shouldPromptWeighIn() && !weighInPromptOpening && !document.querySelector('.modal-backdrop')) promptWeighIn();
   else if(shouldPromptCalorieGap() && !document.querySelector('.modal-backdrop')) renderCalorieGapModal(pendingCalorieGapDates());
 }
 
@@ -4424,6 +4486,7 @@ function screenToday(){
   <div class="topbar"><img class="topbar-logo" src="HealthScore.png" alt="Health Score">
     <div style="display:flex;align-items:center;gap:10px;">
       ${profileIconChipHtml(28)}
+      ${weighInIconHtml()}
       ${activeSessionBannerHtml()}
       ${installTopbarBtnHtml()}
     </div>
@@ -5736,22 +5799,7 @@ function mountCharts(){
       {name:'Total Score', color:'var(--blue)', points: scorePoints},
       {name:'Weight', color:'var(--orange)', points: weightPoints}
     ], labels, {independentScale:true, tooltipLabels}));
-    trendEl.addEventListener('click', ()=>{
-      // Reversed to most-recent-first for the table — the chart itself stays
-      // chronological (oldest-to-newest, left-to-right) since that's how a trend line reads.
-      // weightDates/weightPoints are reversed in lockstep so a table row's edit
-      // always lands on the right day regardless of display order.
-      const rows = buckets.map((b,i)=>[tooltipLabels[i], scorePoints[i]===null?'--':scorePoints[i], weightPoints[i]===null?'--':weightPoints[i].toFixed(1)+' lb']).reverse();
-      const datesRev = weightDates.slice().reverse();
-      const valuesRev = weightPoints.slice().reverse();
-      openChartTableModal('Monthly Trends', ['Month','Total Score','Weight'], rows,
-        [null,'var(--blue)','var(--orange)'],
-        [{ colIndex:2, values: valuesRev, unit:' lb', onSave:(ri, newVal)=>{
-          getDay(datesRev[ri]).weightLb = newVal;
-          if(newVal!=null && checkWeightGoalReached(newVal)) renderWeightGoalModal();
-        } }]
-      );
-    });
+    trendEl.addEventListener('click', ()=>openMonthlyWeightTable(t));
   }else{
     const dates = []; for(let i=6;i>=0;i--) dates.push(addDays(t,-i));
     const labels = dates.map(d=>dateFromIso(d).toLocaleDateString(undefined,{weekday:'short'}).slice(0,2));
@@ -5803,6 +5851,8 @@ function attachHandlers(){
   // duplicated in the live DOM.
   const profileIconChip = document.getElementById('profile-icon-chip');
   if(profileIconChip) profileIconChip.addEventListener('click', renderProfileIconPickerModal);
+  const weighInAlertBtn = document.getElementById('weighin-alert-btn');
+  if(weighInAlertBtn) weighInAlertBtn.addEventListener('click', openWeighInFromIcon);
   document.querySelectorAll('.navbtn[data-tab]').forEach(b=>b.addEventListener('click', ()=>goToTab(b.dataset.tab)));
   const navBackupBtn = document.getElementById('nav-backup');
   // Quick, no-confirmation backup straight from the bottom nav — same
