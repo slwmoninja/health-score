@@ -3829,7 +3829,7 @@ function promptWeighIn(){
   const wrap = openMonthlyWeightTable(today());
   if(!wrap) return;
   const textEl = wrap.querySelector('.text2');
-  if(textEl) textEl.insertAdjacentHTML('afterbegin', `<div class="sub" style="margin-bottom:8px;">Sunday weigh-in — tap this month's Weight cell to log today's weight and close out the week.</div>`);
+  if(textEl) textEl.insertAdjacentHTML('afterbegin', `<div class="sub" style="margin-bottom:8px;">Sunday weigh-in — tap this week's Weight cell to log today's weight and close out the week.</div>`);
   const resolve = ()=>{
     if(getDay(today()).weightLb){
       state.weighInRemindAt = null; // today's entry satisfies it
@@ -4028,13 +4028,25 @@ function openChartTableModal(title, columns, rows, colColors, editableCols){
   });
   return wrap;
 }
-// Builds the Monthly Trends chart-table (Month/Total Score/Weight, current
-// bucket's Weight cell editable) and opens it — shared by a tap on the
-// Monthly trend chart and the Sunday weigh-in flow, which jumps straight to
-// this same table instead of a separate bespoke prompt. Returns the modal
-// wrap element so callers (see promptWeighIn) can layer extra behavior onto
-// its close.
-function openMonthlyWeightTable(t){
+// Monday..Sunday week buckets spanning a calendar month, clipped to that
+// month's own start/end — reuses monthEndCapped so an in-progress month's
+// last bucket stops at today rather than assuming a full week already happened.
+function monthWeekBuckets(year, monthIdx){
+  const monthStart = isoDate(new Date(year, monthIdx, 1));
+  const monthEnd = monthEndCapped(year, monthIdx);
+  const buckets = [];
+  let cur = monthStart;
+  while(cur <= monthEnd){
+    const wr = weekRange(cur);
+    buckets.push({start: wr.start < monthStart ? monthStart : wr.start, end: wr.end > monthEnd ? monthEnd : wr.end});
+    cur = addDays(wr.end, 1);
+  }
+  return buckets;
+}
+// Builds the full 12-month rolling Monthly Trends chart-table (Month/Total
+// Score/Weight, every row's Weight cell editable) — the "12 month view" a
+// user drills into from openMonthlyWeightTable's default week-by-week screen.
+function openTwelveMonthWeightTable(t){
   t = t || today();
   const buckets = trailingMonthBuckets(12, t);
   const bucketDates = buckets.map(b=>trackedDatesBetween(b.start,b.end));
@@ -4049,13 +4061,59 @@ function openMonthlyWeightTable(t){
   const rows = buckets.map((b,i)=>[tooltipLabels[i], scorePoints[i]===null?'--':scorePoints[i], weightPoints[i]===null?'--':weightPoints[i].toFixed(1)+' lb']).reverse();
   const datesRev = weightDates.slice().reverse();
   const valuesRev = weightPoints.slice().reverse();
-  return openChartTableModal('Monthly Trends', ['Month','Total Score','Weight'], rows,
+  return openChartTableModal('Monthly Trends (12 months)', ['Month','Total Score','Weight'], rows,
     [null,'var(--blue)','var(--orange)'],
     [{ colIndex:2, values: valuesRev, unit:' lb', onSave:(ri, newVal)=>{
       getDay(datesRev[ri]).weightLb = newVal;
       if(newVal!=null && checkWeightGoalReached(newVal)) renderWeightGoalModal();
     } }]
   );
+}
+// Default entry screen for weight — this month's weigh-ins broken out week by
+// week (Mon-Sun), plus last month's final value for a one-month-back reference,
+// rather than dropping the user straight into the full 12-month rolling table.
+// Shared by a tap on the Monthly trend chart and the Sunday weigh-in flow.
+// Returns the modal wrap element so callers (see promptWeighIn) can layer
+// extra behavior onto its close, same as before this was split in two.
+function openMonthlyWeightTable(t){
+  t = t || today();
+  const cur = dateFromIso(t);
+  const weekBuckets = monthWeekBuckets(cur.getFullYear(), cur.getMonth());
+  const weekDates = weekBuckets.map(b=>trackedDatesBetween(b.start,b.end));
+  const weekScores = weekDates.map(ds=>periodOverallScore(ds));
+  const weekWeightDates = weekDates.map((ds,i)=> latestWeightDateIn(ds) || ds[ds.length-1] || weekBuckets[i].end);
+  const weekWeights = weekDates.map(ds=>latestWeightIn(ds));
+  const weekLabels = weekBuckets.map(b=>`${dateFromIso(b.start).toLocaleDateString(undefined,{month:'short',day:'numeric'})}–${dateFromIso(b.end).toLocaleDateString(undefined,{day:'numeric'})}`);
+
+  const lastMonthBucket = trailingMonthBuckets(2, t)[0];
+  const lastMonthDates = trackedDatesBetween(lastMonthBucket.start, lastMonthBucket.end);
+  const lastMonthScore = periodOverallScore(lastMonthDates);
+  const lastMonthWeightDate = latestWeightDateIn(lastMonthDates) || lastMonthDates[lastMonthDates.length-1] || lastMonthBucket.end;
+  const lastMonthWeight = latestWeightIn(lastMonthDates);
+  const lastMonthLabel = 'Last Month (' + new Date(lastMonthBucket.year, lastMonthBucket.monthIdx, 1).toLocaleDateString(undefined,{month:'long',year:'numeric'}) + ')';
+
+  // Most-recent-first, same convention as the 12-month table: this week on top,
+  // down through this month's earlier weeks, with last month's single value last.
+  const rows = weekBuckets.map((b,i)=>[weekLabels[i], weekScores[i]===null?'--':weekScores[i], weekWeights[i]===null?'--':weekWeights[i].toFixed(1)+' lb'])
+    .reverse()
+    .concat([[lastMonthLabel, lastMonthScore===null?'--':lastMonthScore, lastMonthWeight===null?'--':lastMonthWeight.toFixed(1)+' lb']]);
+  const datesRev = weekWeightDates.slice().reverse().concat([lastMonthWeightDate]);
+  const valuesRev = weekWeights.slice().reverse().concat([lastMonthWeight]);
+
+  const wrap = openChartTableModal('This Month’s Weigh-Ins', ['Week','Total Score','Weight'], rows,
+    [null,'var(--blue)','var(--orange)'],
+    [{ colIndex:2, values: valuesRev, unit:' lb', onSave:(ri, newVal)=>{
+      getDay(datesRev[ri]).weightLb = newVal;
+      if(newVal!=null && checkWeightGoalReached(newVal)) renderWeightGoalModal();
+    } }]
+  );
+  const viewBtn = document.createElement('button');
+  viewBtn.className = 'btn-secondary';
+  viewBtn.style.marginTop = '14px';
+  viewBtn.textContent = '12 month view';
+  viewBtn.addEventListener('click', ()=>{ wrap.remove(); openTwelveMonthWeightTable(t); });
+  wrap.querySelector('.modal').appendChild(viewBtn);
+  return wrap;
 }
 function infoBtnHtml(id){ return `<button class="info-btn" data-info="${id}">i</button>`; }
 // Shown top-right on every screen's topbar, same row as the heading, so the
@@ -5795,10 +5853,14 @@ function mountCharts(){
     const tooltipLabels = buckets.map(b=>new Date(b.year,b.monthIdx,1).toLocaleDateString(undefined,{month:'long',year:'numeric'}));
     // Total Score and Weight are unrelated units (0-100 vs lb), so this chart
     // needs independent per-series scaling — see trendLineChart's opts.
+    // dashLastSegment: this month is still in progress (monthEndCapped stops its
+    // bucket at today), so its point is a running "most recent weigh-in", not a
+    // settled final value the way every earlier month's point is — the dashed
+    // segment into it signals that, same as the 7-day chart dashing into today.
     trendEl.appendChild(trendLineChart([
       {name:'Total Score', color:'var(--blue)', points: scorePoints},
       {name:'Weight', color:'var(--orange)', points: weightPoints}
-    ], labels, {independentScale:true, tooltipLabels}));
+    ], labels, {independentScale:true, tooltipLabels, dashLastSegment:true}));
     trendEl.addEventListener('click', ()=>openMonthlyWeightTable(t));
   }else{
     const dates = []; for(let i=6;i>=0;i--) dates.push(addDays(t,-i));
