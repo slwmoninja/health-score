@@ -651,10 +651,38 @@ async function getWritableBackupHandle(){
     return null; // user cancelled the picker, or any other failure — caller falls back
   }
 }
+// Excluded from the dedup fingerprint below: pure bookkeeping that churns on
+// its own and was never what "back up my data" was protecting. googleHealth
+// in particular ticks state.googleHealth.lastSyncAt on every successful
+// background poll (every ~8s the app is open and connected — see
+// autoSyncGoogleHealthIfDue) — leaving it in would make backupFingerprint()
+// change almost continuously and defeat the dedup entirely. errorLog and
+// lastAzmBackfillAttemptAt are diagnostic/throttle bookkeeping, same story.
+// Real data pulled FROM Google Health (steps, weight, etc.) lands in
+// state.days and stays in the fingerprint like any other logged data.
+function backupFingerprint(){
+  const {googleHealth, errorLog, lastAzmBackfillAttemptAt, ...rest} = state;
+  return JSON.stringify(rest);
+}
+const BACKUP_LAST_FINGERPRINT_KEY = 'hs_last_backup_fingerprint';
+
 // Manual/on-demand only — see the big comment above for why this isn't
 // called automatically from saveState() or on backgrounding anymore.
+//
+// Skips writing/downloading anything when nothing has actually changed
+// since the last backup (see backupFingerprint) — without this, repeat taps
+// of "Back up now" (or the bottom-nav quick backup) each produced a brand
+// new timestamped file on any browser without the File System Access API
+// (iOS Safari, this app's actual Android Chrome target — there's no web API
+// on those platforms that can silently overwrite an existing file, so a
+// fresh file per tap was the only option before this check), piling up
+// dozens of near-identical backups over weeks of normal use. Returns
+// whether it actually wrote a backup, so callers can tell "saved" from
+// "already up to date" instead of always claiming success.
 async function runAutoBackupDownload(){
-  if(!state.profile) return;
+  if(!state.profile) return false;
+  const fp = backupFingerprint();
+  if(fp === localStorage.getItem(BACKUP_LAST_FINGERPRINT_KEY)) return false;
   const json = JSON.stringify(state);
 
   const handle = await getWritableBackupHandle();
@@ -663,7 +691,8 @@ async function runAutoBackupDownload(){
       const writable = await handle.createWritable();
       await writable.write(json);
       await writable.close();
-      return;
+      localStorage.setItem(BACKUP_LAST_FINGERPRINT_KEY, fp);
+      return true;
     }catch(e){ /* fall through to the timestamped-download fallback below */ }
   }
   try{
@@ -677,7 +706,9 @@ async function runAutoBackupDownload(){
     const stamp = new Date().toISOString().replace(/[:.]/g,'-');
     a.download = `health-score-data-${stamp}.json`;
     a.click();
-  }catch(e){ /* best-effort */ }
+    localStorage.setItem(BACKUP_LAST_FINGERPRINT_KEY, fp);
+    return true;
+  }catch(e){ return false; }
 }
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -2912,7 +2943,7 @@ async function importHevyCsv(file){
     // new was actually added (a re-import of the same file) since there'd be
     // nothing different to capture.
     let backedUp = false;
-    if(added>0){ await runAutoBackupDownload(); backedUp = true; }
+    if(added>0){ backedUp = await runAutoBackupDownload(); }
     showToast(`Imported ${added} workout${added===1?'':'s'}${routinesCreated?`, ${routinesCreated} routine${routinesCreated===1?'':'s'}`:''}${skipped?` (${skipped} workout${skipped===1?'':'s'} already imported)`:''}${backedUp?' — backup saved.':'.'}`, 'good');
   }catch(e){
     showToast('Could not import that file: '+e.message, 'critical');
@@ -5921,8 +5952,8 @@ function attachHandlers(){
   // fire-and-forget download as Settings > Backup & Reset > "Back up now",
   // just reachable without a trip into Settings.
   if(navBackupBtn) navBackupBtn.addEventListener('click', async ()=>{
-    await runAutoBackupDownload();
-    showToast('Backup saved.', 'good');
+    const wrote = await runAutoBackupDownload();
+    showToast(wrote ? 'Backup saved.' : 'Already up to date — no changes since last backup.', 'good');
   });
   document.querySelectorAll('[data-quick-nav]').forEach(b=>b.addEventListener('click', e=>{
     e.stopPropagation(); goToTab(b.dataset.quickNav, b.dataset.logFocus||null);
@@ -6449,8 +6480,8 @@ function attachHandlers(){
   // responded to. This is the ONLY thing that triggers a Downloads-folder
   // export now — see the big comment above runAutoBackupDownload().
   if(backupNowBtn) backupNowBtn.addEventListener('click', async ()=>{
-    await runAutoBackupDownload();
-    showToast('Backup saved.', 'good');
+    const wrote = await runAutoBackupDownload();
+    showToast(wrote ? 'Backup saved.' : 'Already up to date — no changes since last backup.', 'good');
   });
   const resetBtn = document.getElementById('s-reset');
   if(resetBtn) resetBtn.addEventListener('click', ()=>{
