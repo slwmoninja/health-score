@@ -5516,12 +5516,26 @@ async function handleGoogleHealthRedirect(){
   sessionStorage.removeItem(GH_SILENT_FLAG_KEY);
   history.replaceState({tab:'today', focus:null}, '', ghRedirectUri()); // strip ?code=/?error=, keep the tab-history convention consistent
   if(authError){
-    // Expected outcome of a silent (prompt=none) attempt whenever the browser has
-    // no active session for that Google account, or access was revoked — not a bug,
-    // just means the automatic path can't help this time. The "Connection expired"
-    // banner (connectFitbitStepsHtml) stays up as the one-tap manual fallback either
-    // way, so nothing is lost by trying silently first.
     logError((wasSilent ? 'Silent reconnect' : 'Connect') + ' failed: ' + authError);
+    // A failed SILENT attempt just confirmed — not guessed — that this specific
+    // grant genuinely needs real interaction to renew (almost always Testing
+    // mode's 7-day refresh-token cap; see the big comment above
+    // ensureGoogleHealthToken). Rather than leaving that to the pulsing alert
+    // icon alone — which still needs someone to notice it, tap it, then tap
+    // through a modal before ever reaching Google — immediately chain into
+    // the real, visible reconnect. That cuts the app's own part of this down
+    // to zero taps, leaving only the one screen Google itself requires (see
+    // the prompt param in startGoogleHealthAuth, already trimmed to a single
+    // consent screen for the common case). No extra rate-limit needed here:
+    // this whole silent-then-visible chain only starts once/hour, gated one
+    // level up in maybeAttemptSilentReconnect. isUserTyping() is still worth
+    // checking — a focus state can carry oddly across the redirect — so an
+    // active edit never gets yanked away without warning; the alert
+    // icon/modal remain as the manual path for that case and any other gap.
+    if(wasSilent && !isUserTyping()){
+      startGoogleHealthAuth(false);
+      return;
+    }
     if(!wasSilent) alert('Google Health connection failed: '+authError+'\n\nTry Reconnect again, or check with the app owner if it keeps happening.');
     return;
   }
