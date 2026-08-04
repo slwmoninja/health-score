@@ -6581,7 +6581,17 @@ checkForUpdate();
 // manual-only now (Back up now) rather than something that fires on its own.
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='hidden'){ autoSyncGoogleHealthIfDue(); }
-  if(document.visibilityState==='visible') checkForUpdate();
+  // Coming back to an already-open PWA (switching back from another app,
+  // waking the phone) does NOT reload the page — render()'s own
+  // autoSyncGoogleHealthIfDue() call (see render()) only re-runs on the
+  // *next* incidental UI interaction, which may not happen for a while if
+  // someone just glances at Today without tapping anything. That left the
+  // self-heal silent-reconnect path (maybeAttemptSilentReconnect, gated at
+  // one attempt/hour) depending on whichever came first: some unrelated tap,
+  // or a full page reload — instead of firing right when the app is actually
+  // back in front of someone, which is both the most natural moment and the
+  // one most likely to have an active Google browser session behind it.
+  if(document.visibilityState==='visible'){ checkForUpdate(); autoSyncGoogleHealthIfDue(); }
 });
 // Registering a service worker (see sw.js — precaches the shell and serves it
 // stale-while-revalidate for fast/offline-capable loads) is also what lets
