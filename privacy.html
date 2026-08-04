@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy Policy — Health Score</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;max-width:680px;margin:0 auto;padding:32px 20px 64px;line-height:1.6;color:#1a1a1a;background:#fff;}
+  h1{font-size:26px;margin-bottom:4px;}
+  .updated{color:#666;font-size:13px;margin-bottom:32px;}
+  h2{font-size:18px;margin-top:32px;margin-bottom:8px;}
+  p, li{font-size:15px;}
+  ul{padding-left:22px;}
+  .note{background:#f2f6fc;border:1px solid #d7e3f4;border-radius:8px;padding:12px 16px;font-size:14px;margin:16px 0;}
+  code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:13px;}
+  a{color:#2a78d6;}
+</style>
+</head>
+<body>
+
+<h1>Privacy Policy — Health Score</h1>
+<p class="updated">Last updated: [FILL IN DATE]</p>
+
+<p>Health Score ("the app") is a personal health, fitness, and nutrition tracker. This page explains what data the app accesses, how it's used, and who it's shared with.</p>
+
+<div class="note">
+<strong>The short version:</strong> Health Score has no server. It runs entirely in your browser and stores your data only on your own device. The developer never receives, sees, or stores your data anywhere.
+</div>
+
+<h2>What data the app accesses</h2>
+<p>Depending on which features you use, Health Score accesses:</p>
+<ul>
+  <li><strong>Data you enter directly</strong> — profile details (sex, activity goals), body weight, food logged, workouts, and related notes.</li>
+  <li><strong>Google Health data (optional)</strong> — if you connect your Google/Fitbit account, the app reads your daily step count, active minutes, calories burned, distance, and body weight from the Google Health API, using the scopes you explicitly grant during Google's own sign-in and consent screens.</li>
+  <li><strong>USDA FoodData Central data (optional)</strong> — if you add your own free FoodData Central API key in Settings, the app sends your food search text directly to the USDA's public FoodData Central API to look up nutrition information. No account or personal identifier is sent — only the search text and your API key.</li>
+</ul>
+
+<h2>How your data is used and stored</h2>
+<p>Everything the app knows about you — profile, logged data, and anything synced from Google Health — is stored only in your browser's local storage on your own device (and, for larger attachments, your browser's local IndexedDB). None of it is transmitted to, or stored on, any server operated by the developer, because <strong>the app doesn't have a server</strong> — it's a single static page with no backend.</p>
+<p>The only network requests the app makes are:</p>
+<ul>
+  <li>Directly from your browser to Google's own OAuth and Google Health API endpoints, to sync your Fitbit/Google Health data — using your own connected account and credentials.</li>
+  <li>Directly from your browser to the USDA's public FoodData Central API, if you've added your own API key, to search for food nutrition data.</li>
+</ul>
+<p>In both cases, your browser talks directly to Google or the USDA — the developer's infrastructure is never in that path, and never receives a copy of the request or response.</p>
+
+<h2>Who your data is shared with</h2>
+<p>No one. The app does not sell, rent, transmit, or share your data with any third party, advertiser, or analytics service, because it never leaves your device in the first place (aside from the direct Google/USDA API calls described above, which are made on your behalf using your own credentials).</p>
+<p>The app contains no advertising and no third-party analytics or tracking scripts.</p>
+
+<h2>Backups you create</h2>
+<p>Health Score offers an optional, manual "Back up now" export that saves a copy of your data as a JSON file to a location you choose on your own device (e.g. your Downloads folder). This file is created and stored entirely on your device — the developer never receives a copy of it. You are responsible for the security of any backup file you create.</p>
+
+<h2>Your controls</h2>
+<ul>
+  <li><strong>Delete everything:</strong> Settings → Erase All Data removes all app data from your device immediately.</li>
+  <li><strong>Revoke Google access:</strong> disconnect the app at any time from <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>. This immediately stops the app from being able to sync any further data.</li>
+  <li><strong>Remove your USDA API key:</strong> clear the key field in Settings at any time to stop food-search requests from being sent.</li>
+</ul>
+
+<h2>Children's privacy</h2>
+<p>Health Score is not directed at children and is not intended for use by anyone under 13.</p>
+
+<h2>Changes to this policy</h2>
+<p>If this policy changes, the "Last updated" date above will be revised. Continued use of the app after a change constitutes acceptance of the updated policy.</p>
+
+<h2>Contact</h2>
+<p>Questions about this policy or the app's data practices can be sent to: <strong>[FILL IN CONTACT EMAIL]</strong></p>
+
+</body>
+</html>
