@@ -142,6 +142,12 @@ summary.subcard-summary .chevron{color:var(--muted);font-size:12px;flex:none;mar
 .badge{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;padding:4px 9px;border-radius:99px;}
 .badge.good{color:var(--good);background:rgba(12,163,12,.10);}
 .badge.focus{color:var(--serious);background:rgba(236,131,90,.14);}
+/* Fitbit/Google Health connection-rejected alert (see googleHealthAlertIconHtml)
+   — red like the weigh-in alert, but pulsing since this needs prompter
+   attention: unlike a missed weigh-in, sync silently stops updating with no
+   other on-screen sign anything's wrong until this catches your eye. */
+#gh-reconnect-alert-btn{color:var(--critical);animation:gh-alert-pulse 1.6s ease-in-out infinite;}
+@keyframes gh-alert-pulse{0%,100%{opacity:1;}50%{opacity:.32;}}
 .feedback-item{display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--grid);}
 .feedback-item:first-child{border-top:none;}
 .feedback-item .dot{width:8px;height:8px;border-radius:50%;flex:none;margin-top:5px;}
@@ -4233,7 +4239,7 @@ function readDayCheckboxes(root, prefix){
 }
 const INFO_CONTENT = {
   trend: ['Trend', `Under "This Week", your actual Calories Burned (activity) and Calories In for the last 7 days — real numbers rather than the 0-100 Activity/Nutrition scores, since a score flattens to 100 the moment a goal's met and hides how far under your calorie limit you actually ran, or how much you outpaced your activity goals by. A day with nothing logged is a gap in the line, not a literal zero. Under "Monthly", your Total Score and Weight for each of the last 12 months (labeled by month letter — a January point also shows its year so a 12-month span crossing a new year stays unambiguous) — shown on independent scales since they're different units, so look at each line's own shape/direction rather than comparing their heights directly. Tap a point for its value, or tap elsewhere on the chart for the full data table.`],
-  fitsync: ['Connect your Fitbit', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Head to Settings to connect it: finding your Fitbit's Google account, getting approved, and connecting. After you connect once, it re-syncs automatically in the background — no further action needed unless you reconnect a different account.<br><br><strong>Why do I have to wait for approval before I can connect?</strong> Everyone connects through one shared Google project the app owner controls, and Google caps how many outside accounts can use it before requiring a full verification review. Adding each person by hand keeps it under that limit — it's a one-time, ~30-second step on the app owner's end.<br><br><strong>My Fitbit's Google account isn't a Gmail address — is that right?</strong> Yes, that's normal. A Google account can be created with any email as its login, including Outlook, Hotmail, or Yahoo addresses. Use whatever email Fitbit's app shows you, even if it doesn't end in @gmail.com.<br><br><strong>I connected the wrong account.</strong> In Settings, tap "Reconnect & sync now" — Google always shows the account-chooser screen again, so just pick the correct email that time.<br><br><strong>App owner only:</strong> to approve a new person, go to <strong>console.cloud.google.com</strong> → your project → <strong>APIs & Services → OAuth consent screen → Audience</strong> → <strong>Add users</strong> under Test users, paste in the email they sent you, save. Then send them the project's <strong>Client ID</strong> and <strong>Client Secret</strong> from <strong>APIs & Services → Credentials</strong> (whatever channel you like — text, email) so they can paste them into Settings on their own device. If you haven't created the project yet, use the same Credentials/OAuth-consent-screen path to set one up, with redirect URI <strong>${location.origin}${location.pathname}</strong> and the Google Health API enabled.`],
+  fitsync: ['Connect your Fitbit', `Your Fitbit data now lives on Google's platform (Google renamed/merged the Fitbit cloud service into "Google Health" in 2026; the old Fitbit developer API is being shut off Sept 30, 2026, so this app talks to the new one directly). Head to Settings to connect it: finding your Fitbit's Google account, getting approved, and connecting. After you connect once, it re-syncs automatically in the background — no further action needed unless you reconnect a different account.<br><br><strong>Why do I have to wait for approval before I can connect?</strong> Everyone connects through one shared Google project the app owner controls, and Google caps how many outside accounts can use it before requiring a full verification review. Adding each person by hand keeps it under that limit — it's a one-time, ~30-second step on the app owner's end.<br><br><strong>My Fitbit's Google account isn't a Gmail address — is that right?</strong> Yes, that's normal. A Google account can be created with any email as its login, including Outlook, Hotmail, or Yahoo addresses. Use whatever email Fitbit's app shows you, even if it doesn't end in @gmail.com.<br><br><strong>I connected the wrong account.</strong> Sign that account out in your browser first, then in Settings tap "Reconnect & sync now" — with only the correct account signed in, Google goes straight to it.<br><br><strong>App owner only:</strong> to approve a new person, go to <strong>console.cloud.google.com</strong> → your project → <strong>APIs & Services → OAuth consent screen → Audience</strong> → <strong>Add users</strong> under Test users, paste in the email they sent you, save. Then send them the project's <strong>Client ID</strong> and <strong>Client Secret</strong> from <strong>APIs & Services → Credentials</strong> (whatever channel you like — text, email) so they can paste them into Settings on their own device. If you haven't created the project yet, use the same Credentials/OAuth-consent-screen path to set one up, with redirect URI <strong>${location.origin}${location.pathname}</strong> and the Google Health API enabled.`],
   backupfile: ['Back up now', `Your data is already safely auto-saved as you go — one continuously-updated save, same idea as any other app, never a pile of files. This button makes a separate exportable copy for the one thing that auto-save can't survive: deliberately clearing your browser's history/site data.<br><br>On browsers that let a page choose a save location, the very first tap asks where to save once, then every tap after that overwrites that same file — a real single save file, no extra notification each time. Elsewhere, each tap creates a new dated file and triggers your browser's own "Download complete" notification, which no page can silence — that's the browser, not Health Score.`]
 };
 function wireInfoButtons(root){
@@ -4576,6 +4582,7 @@ function screenToday(){
     <div style="display:flex;align-items:center;gap:10px;">
       ${profileIconChipHtml(28)}
       ${weighInIconHtml()}
+      ${googleHealthAlertIconHtml()}
       ${activeSessionBannerHtml()}
       ${installTopbarBtnHtml()}
     </div>
@@ -5476,14 +5483,20 @@ async function startGoogleHealthAuth(silent){
   if(!clientId){ if(!silent) alert('Add your Google Client ID first (see Step 2 below the button).'); return; }
   const params = new URLSearchParams({
     client_id: clientId, response_type:'code', redirect_uri: ghRedirectUri(),
-    // select_account forces Google's account-chooser screen every single time,
-    // even if the browser already has an active Google session — without it,
-    // "Reconnect" can silently reuse whatever account is currently signed in
-    // instead of letting the person pick the one their Fitbit actually uses.
-    // Silent attempts skip this (and skip 'consent') since any UI at all
-    // defeats the point — see prompt:'none' below.
+    // Deliberately NOT forcing select_account here. Testing-mode's 7-day
+    // refresh-token cap (see the big comment above ensureGoogleHealthToken)
+    // means this routine reconnect already can't be made fully silent — real
+    // interaction is unavoidable — so the goal is cutting that down to the
+    // fewest possible taps rather than adding a second one. With just one
+    // Google account signed into the browser (the common case on someone's
+    // own phone), Google skips the account-chooser entirely and goes
+    // straight to the single consent/Allow screen; it only shows the
+    // chooser on its own when the browser actually has more than one active
+    // session to disambiguate. Reconnecting to a genuinely different account
+    // than last time still works — sign out of the wrong one in the browser
+    // first, then reconnect.
     scope: GH_SCOPES, access_type:'offline',
-    prompt: silent ? 'none' : 'consent select_account',
+    prompt: silent ? 'none' : 'consent',
     include_granted_scopes:'true'
   });
   sessionStorage.setItem(GH_SILENT_FLAG_KEY, silent ? '1' : '0');
@@ -5839,6 +5852,50 @@ async function backfillMissedActiveMinutesIfDue(){
 // Label for the "Fitbit sync" readout in the Today card's top-right corner — Fitbit's
 // own data lives on Google Health now (see the block above), so this reads the same
 // connection/timestamp state the auto-sync uses.
+// A prominent, pulsing nudge on the Today screen's topbar — the screen
+// people actually live in day to day. Without this, "Connection expired"
+// was only visible as tiny 11px text under the Settings header
+// (fitbitSyncLabel below) or inside a collapsed Settings card
+// (connectFitbitStepsHtml) — someone would have to already suspect
+// something was wrong and go looking in Settings to ever see it, and sync
+// could silently sit dead for days. Same alert-icon pattern as the weigh-in
+// reminder (weighInIconHtml) — pulsing (see #gh-reconnect-alert-btn's
+// animation) since, unlike a missed weigh-in, there's no other on-screen
+// sign anything's wrong until this catches your eye.
+function googleHealthAlertIconHtml(){
+  const gh = state.googleHealth;
+  if(!gh.refreshToken || !gh.lastRefreshError) return '';
+  return `<button class="iconbtn" id="gh-reconnect-alert-btn" type="button" aria-label="Fitbit connection needs reconnecting" title="Fitbit connection needs reconnecting — tap to fix">`+
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`+
+  `</button>`;
+}
+// "Steps a user through reconnecting" rather than jumping straight into
+// Google's account/consent screen with zero warning — one tap here, then
+// Reconnect, then Allow on Google's own screen is the fewest steps Google
+// allows once its 7-day Testing-mode refresh token cap is hit (see the big
+// comment above ensureGoogleHealthToken): real interaction is unavoidable,
+// so startGoogleHealthAuth(false) itself is already trimmed down to a
+// single Google screen for the common case (see the prompt param there) —
+// this modal is just the "why am I seeing this" context before it.
+function openGoogleHealthReconnectModal(){
+  const gh = state.googleHealth;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `
+  <div class="modal-backdrop center">
+    <div class="modal">
+      <div class="row" style="margin-bottom:10px;"><h2 style="margin:0;">Reconnect Fitbit</h2>
+        <button class="iconbtn" id="gh-reconnect-close">✕</button></div>
+      <div class="text2" style="font-size:13.5px;line-height:1.5;margin-bottom:14px;">Google periodically needs you to confirm access again${gh.email ? ' for <strong>'+escapeHtml(gh.email)+'</strong>' : ''} — this is expected, not an error. Tap Reconnect, then Allow on Google's screen, and syncing picks right back up.</div>
+      <button class="btn-primary" id="gh-reconnect-go" style="width:100%;">Reconnect</button>
+    </div>
+  </div>`;
+  document.body.appendChild(wrap);
+  const close = ()=>wrap.remove();
+  wrap.querySelector('#gh-reconnect-close').addEventListener('click', close);
+  wrap.querySelector('.modal-backdrop').addEventListener('click', e=>{ if(e.target===e.currentTarget) close(); });
+  wrap.querySelector('#gh-reconnect-go').addEventListener('click', ()=>startGoogleHealthAuth(false));
+  return wrap;
+}
 function fitbitSyncLabel(){
   const gh = state.googleHealth;
   if(!gh.refreshToken) return 'Fitbit not connected';
@@ -5946,6 +6003,8 @@ function attachHandlers(){
   if(profileIconChip) profileIconChip.addEventListener('click', renderProfileIconPickerModal);
   const weighInAlertBtn = document.getElementById('weighin-alert-btn');
   if(weighInAlertBtn) weighInAlertBtn.addEventListener('click', openWeighInFromIcon);
+  const ghReconnectAlertBtn = document.getElementById('gh-reconnect-alert-btn');
+  if(ghReconnectAlertBtn) ghReconnectAlertBtn.addEventListener('click', openGoogleHealthReconnectModal);
   document.querySelectorAll('.navbtn[data-tab]').forEach(b=>b.addEventListener('click', ()=>goToTab(b.dataset.tab)));
   const navBackupBtn = document.getElementById('nav-backup');
   // Quick, no-confirmation backup straight from the bottom nav — same
