@@ -447,7 +447,7 @@ const STORE_KEY = 'healthscore_v1';
 // change from here on so a reload can be visually confirmed against what was
 // actually deployed (distinct from STORE_KEY, which is the data schema key
 // and unrelated to app code version).
-const APP_VERSION = '2.5.1';
+const APP_VERSION = '2.5.2';
 
 function defaultState(){
   return {
@@ -6019,15 +6019,6 @@ function attachHandlers(){
   if(weighInAlertBtn) weighInAlertBtn.addEventListener('click', openWeighInFromIcon);
   const ghReconnectAlertBtn = document.getElementById('gh-reconnect-alert-btn');
   if(ghReconnectAlertBtn) ghReconnectAlertBtn.addEventListener('click', openGoogleHealthReconnectModal);
-  document.querySelectorAll('.navbtn[data-tab]').forEach(b=>b.addEventListener('click', ()=>goToTab(b.dataset.tab)));
-  const navBackupBtn = document.getElementById('nav-backup');
-  // Quick, no-confirmation backup straight from the bottom nav — same
-  // fire-and-forget download as Settings > Backup & Reset > "Back up now",
-  // just reachable without a trip into Settings.
-  if(navBackupBtn) navBackupBtn.addEventListener('click', async ()=>{
-    const wrote = await runAutoBackupDownload();
-    showToast(wrote ? 'Backup saved.' : 'Already up to date — no changes since last backup.', 'good');
-  });
   document.querySelectorAll('[data-quick-nav]').forEach(b=>b.addEventListener('click', e=>{
     e.stopPropagation(); goToTab(b.dataset.quickNav, b.dataset.logFocus||null);
   }));
@@ -6573,6 +6564,25 @@ function attachHandlers(){
     });
   });
 }
+
+// #bottomnav lives outside #app, so unlike everything attachHandlers() wires
+// up, render() never tears it down and rebuilds it — it's the same DOM nodes
+// for the life of the page. Binding its buttons from attachHandlers() (called
+// on every render(), i.e. after nearly every action) stacked a fresh listener
+// onto those same persistent nodes each time, so by the time you'd used the
+// app for a while, a single tap on Backup fired runAutoBackupDownload() once
+// per render() that had happened since load — that's what produced a couple
+// dozen simultaneous backup files from one tap. Wiring it once, here, outside
+// the render loop, is the actual fix.
+function attachBottomNavHandlers(){
+  document.querySelectorAll('.navbtn[data-tab]').forEach(b=>b.addEventListener('click', ()=>goToTab(b.dataset.tab)));
+  const navBackupBtn = document.getElementById('nav-backup');
+  if(navBackupBtn) navBackupBtn.addEventListener('click', async ()=>{
+    const wrote = await runAutoBackupDownload();
+    showToast(wrote ? 'Backup saved.' : 'Already up to date — no changes since last backup.', 'good');
+  });
+}
+attachBottomNavHandlers();
 
 history.replaceState({tab:'today', focus:null}, ''); // baseline entry so later tab switches have something to push atop
 render();
